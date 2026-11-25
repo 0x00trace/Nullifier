@@ -256,7 +256,7 @@ fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
     #[cfg(feature = "diagnostics")]
     let started = std::time::Instant::now();
     // SAFETY: the answer buffer holds `count` entries.
-    let failed = unsafe {
+    let mut failed = unsafe {
         GetWriteWatch(
             WRITE_WATCH_FLAG_RESET,
             (first * PAGE) as *const _,
@@ -266,6 +266,13 @@ fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
             &mut granularity,
         )
     } != 0;
+    // Diagnostic (docs/ROADMAP.md P0): if Wine's GetWriteWatch reports the
+    // whole range as written or never resets, every texture looks dirty every
+    // frame. VICTORY_NO_WRITEWATCH=1 forces the guard path to measure that.
+    static NO_WW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *NO_WW.get_or_init(|| std::env::var_os("VICTORY_NO_WRITEWATCH").is_some()) {
+        failed = true;
+    }
     if failed {
         return false;
     }
@@ -325,7 +332,7 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
     #[cfg(feature = "diagnostics")]
     let started = std::time::Instant::now();
     // SAFETY: the answer buffer holds `count` entries.
-    let failed = unsafe {
+    let mut failed = unsafe {
         GetWriteWatch(
             WRITE_WATCH_FLAG_RESET,
             (first * PAGE) as *const _,
@@ -335,6 +342,13 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
             &mut granularity,
         )
     } != 0;
+    // Diagnostic (docs/ROADMAP.md P0): if Wine's GetWriteWatch reports the
+    // whole range as written or never resets, every texture looks dirty every
+    // frame. VICTORY_NO_WRITEWATCH=1 forces the guard path to measure that.
+    static NO_WW: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if *NO_WW.get_or_init(|| std::env::var_os("VICTORY_NO_WRITEWATCH").is_some()) {
+        failed = true;
+    }
     let guarded = if failed {
         count = 0;
         if !guarded {

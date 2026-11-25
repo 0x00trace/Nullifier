@@ -25,8 +25,24 @@ Options, roughly in order of payoff:
    already owns the title's mappings in `xmem`).
 3. Batch all of a frame's ranges into one query where the ranges are adjacent.
 
-**Done when:** median improves and `texture refreshes … asking the write watch`
-in the frame log drops by an order of magnitude.
+**Measured (2026-11-25, RX 9070 XT, this tree):**
+
+| Setting | Ask time / frame | Frame | Median | Stable |
+|---|---|---|---|---|
+| default (`ASK_EVERY=1`) | **1075 ms** of 1134 ms of refreshes | 1.2–3.9 s | 0.7–0.9 | yes |
+| `VICTORY_TEXTURE_ASK_EVERY=4` | **145 ms** | ~1.0 s | 0.7 (n=11) | no — `0x80000001` guard page |
+| `ASK_EVERY=2`, `LATE_WAIT=1` | — | — | 2.30 (n=4) | no — 2 device removals |
+| `ASK_EVERY=2`, `--safe` | 203 ms | 2.4 s | 0.40 | yes |
+
+So the ask is ~1 s of every frame and the throttle removes it. What is left is
+correctness: delaying the ask also delays the *guard reset*, and the process
+then dies with a guard-page violation. Next step is to throttle only the kernel
+watch (`GetWriteWatch`), or reset the guards every frame while copying less
+often. `VICTORY_NO_WRITEWATCH=1` (diagnostic) forces the guard path so the two
+can be measured apart.
+
+**Done when:** ask time is down an order of magnitude *and* a 5-minute run has
+no guard-page exception and no device removal.
 
 ## P1 — Copy / fence coordination
 

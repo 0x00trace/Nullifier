@@ -74,6 +74,9 @@ struct Last {
     /// ([`Staging::unseen_write`]): it is hashed at every check until this
     /// frame.
     unguarded: u64,
+    /// The frame whose check last asked the kernel/guard for this texture
+    /// (`VICTORY_TEXTURE_ASK_EVERY`).
+    asked_frame: u64,
 }
 
 // SAFETY: the staging mapping is written only at submission, under
@@ -648,6 +651,26 @@ impl Staging {
         let start = self.memory as usize;
         let mut last = waited(0, || self.last.lock().unwrap_or_else(|e| e.into_inner()));
         let last = &mut *last;
+        // Asking costs ~0.1 ms per texture under Wine and the world holds about
+        // ten thousand of them, so the world spent ~1 s a frame asking
+        // (docs/ROADMAP.md P0). Ask each texture every Nth frame instead: the
+        // kernel and the guards accumulate writes meanwhile, so a texture lags
+        // at most N-1 frames and nothing is lost.
+        static ASK_EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        let every = *ASK_EVERY.get_or_init(|| {
+            std::env::var("VICTORY_TEXTURE_ASK_EVERY")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .filter(|&n| n >= 1)
+                .unwrap_or(1)
+        });
+        if every > 1 {
+            let frame = crate::frame::current();
+            if last.asked_frame != 0 && frame.wrapping_sub(last.asked_frame) < every {
+                return 0;
+            }
+            last.asked_frame = frame;
+        }
         if let Some((now, written)) = waited(1, || crate::watch::writes(start, start + size, false)) {
             if last.asked != 0 && written.iter().all(|&(_, w)| w <= last.asked) {
                 return 0;
