@@ -444,6 +444,35 @@ faster, steadier frame. Shipped in the `linux-amd` profiles.
 This is the answer to "we run out of VRAM": 16,295 of 16,304 MB was in use, and
 the budget is what bounds it.
 
+## 3.20 The real profile: 44 % of the CPU is wineserver, mapping views
+
+First working `perf record -g` profile (kernel.perf_event_paranoid=1, game run
+under perf, 220 s, 7.9 MB of samples):
+
+| share | where | symbol |
+|---|---|---|
+| **27.99 %** | **wineserver** | **`is_valid_view_addr`** |
+| **15.32 %** | **wineserver** | **`req_unmap_view`** |
+| 9.74 % | ntdll.so | `__wine_syscall_dispatcher` |
+| 7.49 % | ucrtbase.dll | — |
+| 1.78 % | ntdll.so | `NtProtectVirtualMemory` |
+| 1.62 % | d3d12core.dll | — |
+
+**Nearly half the process's CPU time is wineserver validating and unmapping
+memory views** — `is_valid_view_addr` alone is 28 %, and it is a linear scan of
+the server's view list, called from `req_unmap_view`. That is the "unaccounted"
+stall, and it explains why nothing in victory's own switches moved the frame:
+the time is not in our code, it is in Wine's server process handling the title's
+memory windows.
+
+The title memory is mapped as *views* (`MapViewOfFile3`, `crates/victory-hle/
+src/modules/xmem.rs`); every map/unmap pays this scan. The fix direction is to
+**stop mapping and unmapping views per frame** — keep windows mapped, or use
+plain committed memory with a copy where a view is only an addressing trick.
+
+This also matches `docs/LAUNCHER.md`'s note from victory-fork #340 about a
+"wineserver view-tree patch": someone already identified this.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
