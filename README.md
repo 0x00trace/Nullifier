@@ -142,6 +142,7 @@ branches. One `main`, contributions as PRs, one idea each.
 | [`AGENTS.md`](AGENTS.md) | the rules, the merge protocol, every landmine |
 | [`docs/MIGRATION.md`](docs/MIGRATION.md) | moving your own fork's work here, PR format |
 | [`docs/AI-PROMPT.md`](docs/AI-PROMPT.md) | paste-ready prompt for your AI assistant |
+| [`docs/FINDINGS.md`](docs/FINDINGS.md) | every established cause, with the evidence behind it |
 | [`docs/FORK.md`](docs/FORK.md) | measured results and the platform table |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | what to work on, in order |
 | [`docs/LAUNCHER.md`](docs/LAUNCHER.md) | detection, profiles, troubleshooting |

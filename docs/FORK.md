@@ -70,6 +70,16 @@ Experimental's vkd3d-proton), Series X profile, 2560×1440, 30 GB RAM
 Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 `RELAY=2` (0.40).
 
+### The texture ask (P0 probe, 2026-11-25)
+
+~10,000 textures are asked whether they changed, every frame, at ~0.1 ms each:
+**1075 ms of a 1134 ms refresh budget**. Throttling the ask to every 4th frame
+(`VICTORY_TEXTURE_ASK_EVERY=4`, off by default) drops it to 145 ms and the frame
+from 1.2–3.9 s to ~1.0 s, but currently ends in a guard-page fault
+(`0x80000001`); see `docs/FINDINGS.md` §3 and `docs/ROADMAP.md` P0.
+
+Every cause and its evidence lives in [`docs/FINDINGS.md`](FINDINGS.md).
+
 ### What each fix was worth
 
 | Fix | Before | After |

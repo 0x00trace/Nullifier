@@ -11,6 +11,19 @@ which path you took, what you changed, and the bench row.
 
 ---
 
+## Step 0 — sync first, every session
+
+```bash
+./tools/sync-check.sh            # how far behind, what changed
+./tools/sync-check.sh --pull     # fast-forward if your tree is clean
+```
+
+If `main` moved: rebase, rebuild, and re-run `tools/bench.sh` before trusting
+any earlier number. If `launcher/profiles.json` changed, re-run `--detect`.
+If the rules (`AGENTS.md`, `docs/AI-PROMPT.md`, this file) changed, re-read them.
+
+---
+
 ## Triage — which one are you?
 
 An agent should answer these three questions before touching anything:

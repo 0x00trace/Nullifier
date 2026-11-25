@@ -24,6 +24,17 @@ BEFORE ANYTHING ELSE - TRIAGE (docs/ONBOARD.md)
   If you cannot tell which one it is, ask the user. Do not guess, do not start
   editing, and do not touch a tree that is not this clone.
 
+STAY IN SYNC (every session, before you do any work)
+  ./tools/sync-check.sh
+    behind > 0                  -> rebase on origin/main, then re-run
+                                   ./tools/bench.sh: an upstream fix changes what
+                                   your change is worth, old numbers expire
+    launcher/profiles.json changed -> re-run ./launcher/victory-launch.sh --detect
+    AGENTS.md / docs/AI-PROMPT.md / docs/ONBOARD.md changed -> re-read them,
+                                   the rules may have changed
+  Never keep working on a stale clone for days, and never open a PR from one:
+  state the commit you benched.
+
 READ FIRST, COMPLETELY, BEFORE RUNNING ANY COMMAND
   0. docs/ONBOARD.md        - triage, and the path for your situation
   1. AGENTS.md              - rules, build, measurement, merge protocol, landmines

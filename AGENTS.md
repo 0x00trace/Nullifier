@@ -7,7 +7,9 @@ This file is the operating manual for AI agents (and humans) contributing to
 this fork.
 
 Read all of it. Most of the traps below cost hours to find, and several of them
-produce symptoms that look like *unrelated* bugs.
+produce symptoms that look like *unrelated* bugs. The evidence behind each one
+is in [`docs/FINDINGS.md`](docs/FINDINGS.md); read that before re-deriving
+anything.
 
 New here, or moving work over from another fork? Do
 [`docs/ONBOARD.md`](docs/ONBOARD.md) first — it triages which situation you are
@@ -31,6 +33,24 @@ in before you touch anything.
 4. **Measurement or it did not happen.** Every performance claim needs
    `tools/bench.sh` output (median of world frames), not a peak, not a
    screenshot, and not "feels faster". See §4.
+
+---
+
+## 0.5 Every session starts with a sync
+
+```bash
+./tools/sync-check.sh            # behind/ahead, new commits, what changed
+./tools/sync-check.sh --pull     # fast-forward when your tree is clean
+```
+
+* **`main` moved → rebase your branch and re-run `tools/bench.sh`.** An upstream
+  fix changes what your change is worth; your old numbers stop applying.
+* **`launcher/profiles.json` changed →** re-run `--detect`; your machine may now
+  get different settings.
+* **`AGENTS.md`, `docs/AI-PROMPT.md`, `docs/ONBOARD.md` changed →** re-read them
+  before continuing. The rules may have changed.
+* Never work for days on a stale clone, and never open a PR from one: state the
+  commit you benched.
 
 ---
 
