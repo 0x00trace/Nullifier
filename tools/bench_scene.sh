@@ -25,6 +25,12 @@ LOG="${VICTORY_BENCH_LOG:-/tmp/opencode/scene-$(date +%H%M%S).log}"
 export VICTORY_KEYS="${VICTORY_KEYS:-15:Enter,22:Enter,30:Enter,38:Enter,46:Enter,55:Enter,65:Enter,75:Enter,90:Enter,110:Enter,130:Enter}"
 
 mkdir -p "$(dirname "$LOG")"
+# A number without a picture is how a black screen got shipped once
+# (docs/FINDINGS.md 3.14). Capture one world frame and check its size: a real
+# frame is megabytes, a black one is ~1.5 KB.
+CAPDIR=$(mktemp -d /tmp/opencode/cap-XXXXXX)
+export VICTORY_CAPTURE="Z:$(echo "$CAPDIR" | tr '/' '\\')"
+export VICTORY_CAPTURE_FRAMES="${VICTORY_CAPTURE_FRAMES:-1024,1536}"
 echo "bench_scene: $LABEL"
 echo "  window ${WINDOW}s (+${WARMUP}s warm-up), log $LOG"
 
@@ -71,4 +77,10 @@ printf '\n  %-30s median %5s fps   p10 %5s   mean %5s   n=%s   removals=%s crash
   "$LABEL" "$1" "$2" "$4" "$3" "$REM" "$CR" "$CL"
 echo "  phases:"
 ./tools/frames.py "$LOG" 2>/dev/null | sed -n '/phase/,/^$/p' | sed 's/^/    /'
+BIGGEST=$(ls -S "$CAPDIR"/*.png 2>/dev/null | head -1)
+if [ -z "$BIGGEST" ]; then
+  echo "  PICTURE: no frame captured (window too short, or capture failed) - NUMBER IS UNVERIFIED"
+elif [ "$(stat -c%s "$BIGGEST")" -lt 50000 ]; then
+  echo "  PICTURE: $(basename "$BIGGEST") is $(stat -c%s "$BIGGEST") bytes - BLACK. This result is not a renderer win."
+fi
 echo "  log: $LOG"
