@@ -367,6 +367,29 @@ of #33 (64 threads per piece, lane fold, dispatch widened) rather than half of
 it - the parallelism has to come from the group, not from unrolling inside one
 thread that is already the only thing walking the piece.
 
+## 3.17 The #33 port: 64 threads per piece (branch `hash64`, not merged)
+
+Port of VItoriaBr #33: the card compare now runs **one group per 64 KiB piece,
+64 threads on it**, lane `t` taking the 16-byte steps `t, t+64, t+128...` and
+lane 0 folding the 64 lane hashes in lane order. Dispatch widened from
+`pieces.div_ceil(64)` to `pieces` groups.
+
+| run | settings | median | n | frame | heap pass | removals | picture |
+|---|---|---|---|---|---|---|---|
+| before | default | 0.50-0.70 | 15-35 | 1,464-1,976 | 250-470 ms | 0 | ok |
+| **hash64** | default | **1.10** | 16 | **926 ms** | **120-263 ms** | 0 | **4.2 MB** |
+| hash64 | default | 1.65 | 4 | 967 ms | - | **2** | ok |
+| hash64 | `LATE_WAIT=0` | 0.60 | 9 | 1,578 ms | - | 0 | ok |
+
+The shader compiles under Wine (0 "compare could not be made"), the picture is
+real (4.2 MB capture) and the pass it targets is **halved at worst**. The
+1.10 fps run is the best median recorded on this machine.
+
+Not merged: one of three runs lost the device twice, and the third was neutral.
+Needs three clean runs on the default profile before it goes to `main`; if the
+removals persist, the widened dispatch is suspect (out-of-range group index)
+rather than the fold.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
