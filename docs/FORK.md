@@ -79,6 +79,7 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 |---|---|---|---|---|---|
 | `main` @ `3c34f8f` | profile | 0.60 / 1.00 / 0.95 | 9 / 12 / 8 | 0 | none taken: every run ended 17–20 s into the world |
 | + raw reads made again when refused (`a0d014d`) | profile | 1.30 / 0.95 / 1.35 | 39 / 38 / 12 | 0 | world renders (captures of 2.0 and 1.5 MB); some faces black, some frames black |
+| + guard pages left unread by copies (`c7e6f5f`) | profile | 0.90 / 1.20 / 0.70 | 40 / 41 / 40 | 0 | world renders (eight captures of 1.0–2.3 MB, one black); one sampled frame looks right, the others have a black face or a low-detail figure |
 
 * **Before:** each run ended on a breakpoint of the title's own
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
@@ -92,7 +93,17 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   `victory_try_copy_op` (`copy_mapped` under `Shadow::update`, the submit
   path): the guarded copy's handler takes access violations and in-page
   errors, not guard-page violations. No read had been refused in that run.
-  Open.
+  Cause and fix: the third row.
+* **The third row (`c7e6f5f`):** the title describes buffer views at
+  near-null addresses (`0x1` to `0x9`), and the copy of one reads from
+  address 0 up. They are at most 456 bytes in every logged run but one (ten
+  runs); in the run that stopped, one of 131072 bytes at `0x5` was logged
+  half a second before. Its copy reached `0x11000`, the guard page of the
+  first thread's stack in a Wine process. Copies now leave a guard page
+  unread, and put back one they touch. Three runs lasted the 300 s window
+  with no stop, and 12 more refused reads all landed on the second try, but
+  no near-null view in them was long enough to reach the page: the fix is
+  shown by its test, not yet in the title.
 * Every run logs `no host pipeline library: pipelines are not kept`: the
   host refuses even an empty library here, so each run makes its pipelines
   again and drops hundreds to thousands of draws a frame meanwhile.
