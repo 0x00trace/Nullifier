@@ -64,6 +64,9 @@ The throttle works (ask up to 7× cheaper). Two things were learned refining it:
    removes the crash and still cuts the ask 1075 → 330 ms, because only the
    successful `GetWriteWatch` calls walk page tables; guarded ones fail fast.
 
+Defaulting the throttle on under Wine was tried (every=2): ask 1075 → 861 ms,
+median 0.55 (n=4), two device removals — no gain, so it stays opt-in.
+
 What is left is not the ask but stability of the fast path: with `LATE_WAIT=1`
 the runs still end in device removals, and `--safe` (no send-ahead) is stable
 but pays it back in copy time. The next target is therefore the copy/fence

@@ -663,11 +663,17 @@ impl Staging {
         // dies with 0x80000001). So throttle write-watched textures only.
         static ASK_EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
         let every = *ASK_EVERY.get_or_init(|| {
-            std::env::var("VICTORY_TEXTURE_ASK_EVERY")
+            if let Some(n) = std::env::var("VICTORY_TEXTURE_ASK_EVERY")
                 .ok()
                 .and_then(|v| v.trim().parse::<u64>().ok())
                 .filter(|&n| n >= 1)
-                .unwrap_or(1)
+            {
+                return n;
+            }
+            // Off by default: measured 2026-11-25, every=2 cut the ask but did
+            // not move the median, and the fast configuration ends in device
+            // removals either way. See docs/FINDINGS.md 3.
+            1
         });
         let frame = crate::frame::current();
         if every > 1 && last.watched == Some(true) && last.asked_frame != 0
