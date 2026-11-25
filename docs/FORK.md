@@ -1,7 +1,9 @@
 # This fork
 
-A consolidation of the VIctory fork work as of **2026-11-25**, kept honest: what
-runs, what was measured, what is deliberately not merged.
+A **universal** fork of the VIctory work as of **2026-11-25**: one `main` that
+runs on AMD and NVIDIA, Linux and Windows. Platform differences are chosen at
+launch by `launcher/profiles.json`, not by branch. Kept honest: what runs, what
+was measured, what is deliberately not merged.
 
 Read [`AGENTS.md`](../AGENTS.md) before changing anything.
 
@@ -23,13 +25,26 @@ No game files are here. You need your own copy.
 
 | Branch | Base | State |
 |---|---|---|
-| `main` | `myokex/victory-amd` @ `070df42` + PRs #127, #270, #154 | **the Linux/AMD stack that runs today** |
-| `upstream-2026-11-25` | `fxceless/victory-fork` @ `a26859f` + PR #127 | newer, faster textures, slower in the world on AMD |
+| `main` | `myokex/victory-amd` @ `070df42` + PRs #127, #270, #154 | **the universal fork; what users run** |
+| `reference/upstream-2026-11-25` | `fxceless/victory-fork` @ `a26859f` + PR #127 | read-only reference: newer, faster textures, slower in the world on AMD |
 | `pr127` … `pr270` | individual PR heads | for rebasing |
 
-Upstream and the AMD tree **cannot be merged mechanically**: 14 files conflict
-because both sides independently implemented view guards, page marking and
-texture refresh. Two tested branches beat one untested merge.
+We do not merge `reference/*`. Where a commit there is worth having, it is
+ported as one PR with a bench row (`docs/MIGRATION.md`). Merging it wholesale
+conflicts in 14 files because both sides independently implemented view guards,
+page marking and texture refresh.
+
+## Platform support
+
+| Platform | State | Evidence |
+|---|---|---|
+| Linux + AMD | works, 0.7–0.9 fps | measured here (RX 9070 XT, Mesa 26.3.1) |
+| Linux + NVIDIA | works, 1.85–1.97 fps | issue #6 (RTX 5070 Ti); profile is `reported` |
+| Windows + AMD | works, ~1 fps | issue #3 (RX 9070 XT, needs skips) |
+| Windows + NVIDIA | works, 2–4 fps | upstream README, issue #417 |
+| Linux + Intel | untested | profile `untested` |
+| macOS / Apple silicon | not supported | needs a Metal path; see roadmap |
+
 
 ---
 
@@ -97,6 +112,14 @@ The open problem is the wall-clock cost of victory's memory tracking and
 copy/fence coordination under Wine, not bandwidth and not the GPU.
 
 ---
+
+## Launcher
+
+`launcher/victory-launch.sh` / `.ps1` detect OS, GPU vendor and VRAM, pick a
+profile from `launcher/profiles.json`, create the Proton prefix if needed,
+install a vkd3d-proton new enough for RADV, warn about VRAM hogs, and start the
+title. `--detect` prints the chosen profile, every variable, the confidence and
+the reason. See `docs/LAUNCHER.md`.
 
 ## Roadmap
 

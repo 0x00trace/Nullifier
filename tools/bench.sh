@@ -28,7 +28,7 @@ echo "bench: $LABEL"
 echo "  log $LOG"
 
 VICTORY_BIN="$BIN" VICTORY_GAME_DIR="$GAME" VICTORY_KEYS="$KEYS" \
-  timeout "$SECONDS_TO_RUN" "$HERE/scripts/victory-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" \
+  timeout "$SECONDS_TO_RUN" "$HERE/launcher/victory-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" \
   >"$LOG" 2>&1
 CODE=$?
 

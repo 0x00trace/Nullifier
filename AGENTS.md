@@ -32,9 +32,11 @@ produce symptoms that look like *unrelated* bugs.
 
 ## 1. What this fork is
 
-`main` is the **Linux/AMD stack**: `myokex/victory-amd` (AMD-specific fixes on
-top of `fxceless/victory-fork`) plus three PRs that are not merged upstream and
-are required under Wine:
+`main` is the **universal stack**: it boots on AMD and NVIDIA, Linux and
+Windows. The per-platform differences are chosen at launch from
+`launcher/profiles.json` — not by keeping a branch per vendor. The tree is
+`myokex/victory-amd` (AMD fixes on top of `fxceless/victory-fork`) plus three
+PRs required under Wine, and it is the fastest configuration measured on AMD:
 
 | Applied | Why it is required |
 |---|---|
@@ -42,24 +44,31 @@ are required under Wine:
 | PR #270 | Texture refresh waited on the title-memory remap lock: ~688 ms/frame. Now ~24 ms. |
 | PR #154 | Title-memory copies went through `ReadProcessMemory` (~360 MB/s). Now an in-process `memcpy` with a VEH fallback (~1.1 GB/s). |
 
-`upstream-2026-11-25` is a second, separate branch: `fxceless/victory-fork` at
-`a26859f` + PR #127, no AMD fork. It is **newer** (faster texture path: 548 MB
-in 169 ms) but **slower overall on AMD** (0.4–0.55 fps vs 0.7–0.9). Keep it for
-reference and for NVIDIA testers; do not assume newer is faster.
-
-Branches:
+`reference/upstream-2026-11-25` is read-only reference: `fxceless/victory-fork`
+at `a26859f` + PR #127, no AMD fork. It is newer (texture path: 548 MB in
+169 ms) but slower overall on AMD (0.4–0.55 vs 0.7–0.9 fps). **We do not merge
+it.** If a commit there is worth having, port that one idea as a PR
+(`docs/MIGRATION.md`) and prove it with a bench row.
 
 ```
-main                     Linux/AMD, the configuration that runs today
-upstream-2026-11-25      upstream + #127 only, no AMD fork
-pr127 pr154 pr270 ...    the individual PRs, for rebasing
+main                            the universal fork (this is what users run)
+reference/upstream-2026-11-25   read-only; cherry-pick ideas, never merge
+pr127 pr154 pr270 ...           the individual PRs, for rebasing
 ```
 
-**There is deliberately no merged "everything" branch.** Merging upstream into
-the AMD tree conflicts in 14 files (`texture.rs`, `watch.rs`, `host.rs`,
-`resource.rs`, `xmem.rs`, `lower.rs`, ...) because both sides independently
-implemented view guards, page marking and texture refresh. Do not attempt it
-unless you can test both rendering and stability afterwards.
+Why not one merged branch: merging upstream into this tree conflicts in 14
+files (`texture.rs`, `watch.rs`, `host.rs`, `resource.rs`, `xmem.rs`,
+`lower.rs`, …) because both sides independently implemented view guards, page
+marking and texture refresh. A mechanical merge compiles and then renders
+wrong. Port concepts, not branches.
+
+### Launcher and profiles
+
+Settings live in exactly one place: `launcher/profiles.json`. Both
+`launcher/victory-launch.sh` (Linux/macOS) and `launcher/victory-launch.ps1`
+(Windows) read it. Never hard-code a switch in code to work around a platform;
+add a profile entry with an honest `confidence` instead. See
+`docs/LAUNCHER.md`.
 
 ---
 
@@ -88,8 +97,14 @@ On Windows, `cargo build --release -p victory` with MSVC.
 ## 3. Run
 
 ```bash
-./scripts/victory-launch.sh --detect          # what hardware, what settings
-./scripts/victory-launch.sh --game <dir>      # play
+./launcher/victory-launch.sh --detect          # hardware, profile, and why
+./launcher/victory-launch.sh --game <dir>      # play
+./launcher/victory-launch.sh --game <dir> --safe   # if the device is removed
+```
+
+```powershell
+.\launcher\victory-launch.ps1 -Detect
+.\launcher\victory-launch.ps1 -Game "D:\games\title"
 ```
 
 The launcher detects GPU vendor and VRAM, picks settings, checks that

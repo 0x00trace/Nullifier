@@ -1,0 +1,130 @@
+{
+  "version": 1,
+  "_comment": [
+    "One profile matrix for every platform. The launchers (bash on Linux/macOS,",
+    "PowerShell on Windows) both read this file; nobody hard-codes switches.",
+    "Selection: the first profile whose match.os and match.vendor apply, with",
+    "optional vram_min_mb / vram_max_mb bounds. Later profiles are fallbacks.",
+    "Every number here was measured or taken from a test report; see docs/FORK.md,",
+    "and do not add a value that has not been measured on that platform."
+  ],
+
+  "defaults": {
+    "VICTORY_LOG": "info"
+  },
+
+  "profiles": [
+    {
+      "name": "linux-amd-16gb",
+      "match": { "os": "linux", "vendor": "amd", "vram_min_mb": 13000 },
+      "confidence": "measured",
+      "sets": {
+        "VICTORY_TEXTURE_NO_WAIT": "1",
+        "VICTORY_LATE_WAIT": "1",
+        "VICTORY_WIDE_BACK": "1",
+        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+        "VICTORY_CARD_BUFFERS_MB": "1024"
+      },
+      "note": "RX 9070 XT, Mesa 26.3.1, 0.70-0.90 fps median. Do not raise LATE_WAIT: 3 removed the device."
+    },
+    {
+      "name": "linux-amd-8gb",
+      "match": { "os": "linux", "vendor": "amd" },
+      "confidence": "extrapolated",
+      "sets": {
+        "VICTORY_TEXTURE_NO_WAIT": "1",
+        "VICTORY_LATE_WAIT": "1",
+        "VICTORY_WIDE_BACK": "1",
+        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+        "VICTORY_CARD_BUFFERS_MB": "512"
+      },
+      "note": "8-10 GB cards: 1024 MB card buffers plus their before-copies overflow the card on 12 GB (issue #417)."
+    },
+    {
+      "name": "linux-nvidia",
+      "match": { "os": "linux", "vendor": "nvidia" },
+      "confidence": "reported",
+      "sets": {
+        "VICTORY_TEXTURE_NO_WAIT": "1",
+        "VICTORY_LATE_WAIT": "1",
+        "VICTORY_WIDE_BACK": "1",
+        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+        "VICTORY_CARD_BUFFERS_MB": "1024",
+        "VKD3D_DISABLE_EXTENSIONS": "VK_NV_raw_access_chains"
+      },
+      "note": "Issue #6 (RTX 5070 Ti, 1.85-1.97 fps): raw access chains must be off under vkd3d-proton."
+    },
+    {
+      "name": "linux-other",
+      "match": { "os": "linux", "vendor": "*" },
+      "confidence": "untested",
+      "sets": {
+        "VICTORY_TEXTURE_NO_WAIT": "1",
+        "VICTORY_LATE_WAIT": "1",
+        "VICTORY_WIDE_BACK": "1",
+        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+        "VICTORY_CARD_BUFFERS_MB": "512"
+      },
+      "note": "Intel/other Vulkan drivers: mesh shaders and SM 6.6 required. Report results, then promote to a measured profile."
+    },
+    {
+      "name": "windows-amd",
+      "match": { "os": "windows", "vendor": "amd" },
+      "confidence": "reported",
+      "sets": {
+        "VICTORY_LATE_WAIT": "3",
+        "VICTORY_WIDE_BACK": "1",
+        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+        "VICTORY_CARD_BUFFERS_MB": "1024"
+      },
+      "note": "README combo. If the Adrenalin DXIL compiler crashes (amdxc64.dll), add VICTORY_SHADER_OPT=59 (issue #422) and the RDNA4 skips from issue #3."
+    },
+    {
+      "name": "windows-nvidia",
+      "match": { "os": "windows", "vendor": "nvidia" },
+      "confidence": "reported",
+      "sets": {
+        "VICTORY_RELAY": "2",
+        "VICTORY_LATE_WAIT": "3",
+        "VICTORY_WIDE_BACK": "1",
+        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+        "VICTORY_CARD_BUFFERS_MB": "1024"
+      },
+      "note": "Fork README: RELAY=2 or the late-wait combo. Issue #417 (RTX 5070 Ti) reports 3.9-4.2 fps."
+    },
+    {
+      "name": "windows-other",
+      "match": { "os": "windows", "vendor": "*" },
+      "confidence": "untested",
+      "sets": {
+        "VICTORY_LATE_WAIT": "3",
+        "VICTORY_WIDE_BACK": "1",
+        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+        "VICTORY_CARD_BUFFERS_MB": "512"
+      },
+      "note": "Requires a D3D12 GPU with SM 6.6 and mesh shaders."
+    }
+  ],
+
+  "overrides": [
+    {
+      "name": "safe",
+      "cli": "--safe",
+      "sets": {
+        "VICTORY_LATE_WAIT": "0",
+        "VICTORY_WIDE_BACK": "0",
+        "VICTORY_RELAY": "0",
+        "VICTORY_JOIN_COPIES": "0"
+      },
+      "note": "No submissions ahead of the fence. Slowest, most stable. Use it when a run dies with 'device removed'."
+    },
+    {
+      "name": "diagnostics",
+      "cli": "--diagnostics",
+      "sets": {
+        "VICTORY_LOG": "victory_gpu=debug,info"
+      },
+      "note": "Verbose GPU logging for bug reports."
+    }
+  ]
+}
