@@ -21,6 +21,7 @@ FORCE_PROFILE=""
 EXTRA_PROFILE=()
 MODE="play"
 PASSTHRU=()
+CONSOLE="${VICTORY_CONSOLE:-}"
 
 # vkd3d-proton builds older than this segfault RADV on the first world mesh
 # pipeline (exit 3). Proton Experimental ships 5742+.
@@ -34,6 +35,7 @@ while [ $# -gt 0 ]; do
     --bin) BIN="${2:-}"; shift 2 ;;
     --profile) FORCE_PROFILE="${2:-}"; shift 2 ;;
     --safe) EXTRA_PROFILE+=(safe); shift ;;
+    --series-s) CONSOLE="series-s"; shift ;;
     --diagnostics) EXTRA_PROFILE+=(diagnostics); shift ;;
     --) shift; PASSTHRU=("$@"); break ;;
     -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
@@ -215,4 +217,6 @@ pgrep -x llama-server >/dev/null 2>&1 && echo "warning: llama-server is running 
 
 WIN_GAME="Z:${GAME//\//\\}"
 WIN_BIN="Z:${BIN//\//\\}"
-exec "$PROTON/files/bin/wine" "$WIN_BIN" run "$WIN_GAME\\$TITLE_EXE" --execute "${PASSTHRU[@]}"
+CONSOLE_ARGS=()
+[ -n "$CONSOLE" ] && CONSOLE_ARGS=(--console "$CONSOLE")
+exec "$PROTON/files/bin/wine" "$WIN_BIN" run "$WIN_GAME\\$TITLE_EXE" --execute "${CONSOLE_ARGS[@]}" "${PASSTHRU[@]}"

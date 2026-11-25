@@ -306,6 +306,27 @@ symptom of how many objects are touched, not the price of each.
 This also means the next change must reduce the **number of calls or their
 per-call cost**, not the fault mechanism.
 
+## 3.14 Series S mode is the biggest real win so far (2026-11-25)
+
+`--console series-s` (the title's own lower-resolution profile) measured with
+`bench_scene.sh`, same window and warm-up, two runs:
+
+| config | median | p10 | frame | copies | textures | copy-back | GPU |
+|---|---|---|---|---|---|---|---|
+| Series X A | 0.50 | 0.20 | 1,976 ms | 533 | 371 | 93 | 69 |
+| Series X B | 0.70 | 0.10 | 1,464 ms | 239 | 351 | 91 | 53 |
+| **Series S A** | **0.90** | 0.20 | **1,157 ms** | 236 | **174** | **29** | 97 |
+| **Series S B** | **0.80** | **0.50** | **1,204 ms** | 276 | **162** | **31** | 109 |
+
+Consistent across both runs and outside the +/-40 % noise floor: frame time
+~1,180 ms vs ~1,720, **textures roughly halved** (162-174 vs 351-371) and
+**copy-back cut to a third** (29-31 vs 91-93) because the title renders fewer,
+smaller targets. GPU rises slightly (97-109 vs 53-69) and stops mattering.
+
+Trade-off: lower internal resolution and geometry — a quality setting, not a
+free win. Shipped as `--series-s` (or `VICTORY_CONSOLE=series-s`), **not** as a
+default.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
