@@ -106,13 +106,16 @@ esac
 PROTON=$(find_proton)
 NEWEST=$(newest_vkd3d_proton)
 CUR=$(vkd3d_build "${PROTON:-/nonexistent}")
+VKFILE="${VICTORY_PREFIX:-$HOME/.local/share/victory/prefix}/.vkd3d-build"
+INSTALLED=$(cat "$VKFILE" 2>/dev/null || echo 0)
 
 if [ "$MODE" = "detect" ]; then
   say "OS"                 "$(uname -s) $(uname -r)"
   say "GPU vendor"         "$VENDOR"
   say "VRAM"               "${VRAM} MB"
   say "Proton"             "${PROTON:-not found}"
-  say "vkd3d-proton build" "$CUR (need >= $MIN_VKD3D)"
+  say "proton's vkd3d"     "$CUR (need >= $MIN_VKD3D)"
+  say "prefix vkd3d"        "$INSTALLED (what actually runs)"
   say "newest available"   "${NEWEST:-none} ($(vkd3d_build "${NEWEST:-/nonexistent}"))"
   echo
   say "TEXTURE_NO_WAIT"    "$VICTORY_TEXTURE_NO_WAIT"
@@ -145,7 +148,7 @@ if [ ! -d "$WINEPREFIX" ]; then
   PROTONFIXES_DISABLE=1 \
     "$PROTON/proton" run 'C:\windows\system32\cmd.exe' /c exit >/dev/null 2>&1 || true
 fi
-if [ "$CUR" -lt "$MIN_VKD3D" ] && [ -n "$NEWEST" ] && [ "$(vkd3d_build "$NEWEST")" -ge "$MIN_VKD3D" ]; then
+if [ "$INSTALLED" -lt "$MIN_VKD3D" ] && [ "$CUR" -lt "$MIN_VKD3D" ] && [ -n "$NEWEST" ] && [ "$(vkd3d_build "$NEWEST")" -ge "$MIN_VKD3D" ]; then
   SYS32="$WINEPREFIX/drive_c/windows/system32"
   if [ -d "$SYS32" ]; then
     echo "vkd3d-proton $CUR is older than $MIN_VKD3D; taking $(vkd3d_build "$NEWEST") from $(basename "$NEWEST")" >&2
@@ -153,6 +156,7 @@ if [ "$CUR" -lt "$MIN_VKD3D" ] && [ -n "$NEWEST" ] && [ "$(vkd3d_build "$NEWEST"
       [ -f "$SYS32/$f.bak" ] || cp -n "$SYS32/$f" "$SYS32/$f.bak" 2>/dev/null
       cp "$NEWEST/files/lib/wine/vkd3d-proton/x86_64-windows/$f" "$SYS32/$f"
     done
+    vkd3d_build "$NEWEST" > "$VKFILE"
   else
     echo "prefix not created yet: run once, then launch again to swap vkd3d-proton" >&2
   fi
