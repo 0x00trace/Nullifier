@@ -44,6 +44,9 @@ const E_OUTOFMEMORY: HRESULT = 0x8007_000E_u32 as i32;
 const END_OF_FILE: HRESULT = 0x8007_0026_u32 as i32;
 /// `HRESULT_FROM_WIN32(ERROR_INVALID_DATA)`: a bad compressed stream.
 const INVALID_DATA: HRESULT = 0x8007_000D_u32 as i32;
+/// `HRESULT_FROM_WIN32(ERROR_NOACCESS)`: the kernel could not write the
+/// destination of a read.
+const NO_ACCESS: HRESULT = 0x8007_03E6_u32 as i32;
 
 type Out = *mut *mut c_void;
 
@@ -814,6 +817,9 @@ fn execute(request: &Request) -> Result<(), HRESULT> {
             return Err(fail(E_INVALIDARG, "source larger than destination"));
         }
         let size = request.source_size as usize;
+        if options & (PAGE_DESTINATION | MEMORY_SOURCE) == 0 {
+            return read_raw(request, size).map_err(|hr| fail(hr, "copying"));
+        }
         return into_destination(request, size, |out| read_into(request, out).map(|()| size))
             .map_err(|hr| fail(hr, "copying"));
     }
@@ -936,6 +942,25 @@ fn read_into(request: &Request, out: &mut [u8]) -> Result<(), HRESULT> {
     };
     READING.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
     result
+}
+
+/// A raw read from a file into an address: the kernel itself writes the
+/// title's destination, which does not fault into the GPU side's guard on
+/// title buffers, so the guard is opened first, and again if a copy set it
+/// meanwhile (`victory_gpu::kernel_write`). The title stops at a breakpoint
+/// of its own when such a request fails: three runs of three ended that way
+/// 17 to 20 s into the world (RTX 5080 under Proton, 2026-11-25), each on
+/// one read refused with `ERROR_NOACCESS`.
+fn read_raw(request: &Request, len: usize) -> Result<(), HRESULT> {
+    // SAFETY: the title's destination holds `destination_size` bytes, at
+    // least `len`, and nothing else writes it until completion.
+    let out = unsafe { std::slice::from_raw_parts_mut(request.destination.cast::<u8>(), len) };
+    victory_gpu::kernel_write(
+        request.destination as usize,
+        len,
+        || read_into(request, out),
+        |result| *result == Err(NO_ACCESS),
+    )
 }
 
 /// Runs `fill` on the destination's first `len` bytes; `fill` returns how
@@ -1226,6 +1251,37 @@ mod tests {
         assert_eq!(raw, plain[5000..6000]);
         assert_eq!(inflated, plain);
         void(queue, 0x40);
+    }
+
+    /// A raw read into memory the kernel cannot write completes with
+    /// ERROR_NOACCESS. Here the page is read-only by the test's hand, not by
+    /// a guard of ours, so reading again has nothing to open and the request
+    /// still fails (`victory_gpu::kernel_write` gives up; its own test has
+    /// the guard that is opened).
+    #[test]
+    fn a_raw_read_the_kernel_cannot_land_fails_with_no_access() {
+        use windows_sys::Win32::System::Memory::{
+            MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READONLY, PAGE_READWRITE, VirtualAlloc,
+            VirtualFree, VirtualProtect,
+        };
+        let plain = pattern(8192);
+        let (_dir, file) = file_with(&plain);
+        let (queue, array) = (new_queue(0), status_array(1));
+        // SAFETY: a fresh allocation, freed at the end.
+        let at = unsafe {
+            VirtualAlloc(std::ptr::null(), 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE)
+        };
+        assert!(!at.is_null());
+        let mut old = 0;
+        // SAFETY: our own page; only its protection changes.
+        assert_ne!(unsafe { VirtualProtect(at, 4096, PAGE_READONLY, &mut old) }, 0);
+        enqueue(queue, &request(0, at, 1000, file, 0, 1000));
+        enqueue_status(queue, array, 0);
+        void(queue, 0x30);
+        assert_eq!(wait(array, 0), NO_ACCESS);
+        void(queue, 0x40);
+        // SAFETY: allocated above.
+        unsafe { VirtualFree(at, 0, MEM_RELEASE) };
     }
 
     #[test]

@@ -700,6 +700,46 @@ pub fn writing(at: usize, len: usize) {
     crate::descriptor::host::remapped(at, len);
 }
 
+/// How many times [`kernel_write`] makes a system call that is refused.
+const KERNEL_WRITE_TRIES: u32 = 8;
+
+/// Runs `write`, a system call that writes title memory `[at, at + len)`,
+/// with the range's guarded blocks open ([`writing`]); `refused` says of
+/// its result whether the kernel could not write there (`ERROR_NOACCESS`).
+///
+/// The kernel does not fault into our handler, and nothing holds the blocks
+/// open between the opening and the call: a copy on another thread can take
+/// one meanwhile and leave it read-only again, at its own view or at
+/// another view of the same pages. The call is then refused. It is made
+/// again after another opening, [`KERNEL_WRITE_TRIES`] times at most; what
+/// is still refused then is not ours to open, and that result is returned.
+pub fn kernel_write<T>(at: usize, len: usize, mut write: impl FnMut() -> T, refused: impl Fn(&T) -> bool) -> T {
+    static AGAIN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    writing(at, len);
+    let mut result = write();
+    let mut tries = 1;
+    while refused(&result) && tries < KERNEL_WRITE_TRIES {
+        // The guards alone: `writing` has told the descriptors already.
+        open(&mut guards(), at, at.saturating_add(len));
+        result = write();
+        tries += 1;
+    }
+    if tries > 1 {
+        let calls = AGAIN.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if calls <= 8 || calls.is_power_of_two() {
+            tracing::warn!(
+                at = format_args!("{at:#x}"),
+                len,
+                tries,
+                landed = !refused(&result),
+                calls,
+                "a system call's write into title memory was refused (a block guarded again meanwhile); made again"
+            );
+        }
+    }
+    result
+}
+
 /// The runtime mapped a view of the physical bytes `[offset, offset + len)`
 /// of `section` (`crate::inplace::title_memory_view`): the view is
 /// writable, so the same bytes guarded at another view must be checked
@@ -947,6 +987,67 @@ mod tests {
             guard(view, view + 2 * BLOCK),
             Some((view / PAGE..view / PAGE + 1).collect())
         );
+        // SAFETY: our view.
+        unsafe {
+            UnmapViewOfFile(
+                windows_sys::Win32::System::Memory::MEMORY_MAPPED_VIEW_ADDRESS {
+                    Value: view as *mut _,
+                },
+            )
+        };
+        title_memory_remapped(view, 2 * BLOCK);
+    }
+
+    /// A copy guards a block again between the opening and the system call
+    /// (three runs of three ended on that, 2026-11-25: a DirectStorage read
+    /// refused with `ERROR_NOACCESS`, then a breakpoint of the title's): the
+    /// call is refused once, and is made again with the block open.
+    #[test]
+    fn a_kernel_write_survives_a_guard_set_meanwhile() {
+        use std::io::{Read, Seek, Write};
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, FILE_MAP_WRITE, MapViewOfFile, UnmapViewOfFile,
+        };
+        const ERROR_NOACCESS: i32 = 998;
+        // SAFETY: a pagefile section of two blocks, mapped read-write.
+        let view = unsafe {
+            let section = CreateFileMappingW(
+                -1isize as _,
+                std::ptr::null(),
+                PAGE_READWRITE,
+                0,
+                (2 * BLOCK) as u32,
+                std::ptr::null(),
+            );
+            assert!(!section.is_null());
+            MapViewOfFile(section, FILE_MAP_WRITE, 0, 0, 2 * BLOCK).Value as usize
+        };
+        assert_ne!(view, 0);
+        let mut file = tempfile::tempfile().unwrap();
+        file.write_all(b"from the disk").unwrap();
+        let mut calls = 0;
+        let result = kernel_write(
+            view + 100,
+            13,
+            || {
+                calls += 1;
+                if calls == 1 {
+                    // The copy that takes the block after the opening.
+                    assert!(guard(view, view + 2 * BLOCK).is_some());
+                }
+                file.rewind().unwrap();
+                // SAFETY: 13 bytes of our view, nothing else refers to them.
+                let into = unsafe { std::slice::from_raw_parts_mut((view + 100) as *mut u8, 13) };
+                // `ReadFile` inside: the kernel writes the view.
+                file.read(into)
+            },
+            |result| matches!(result, Err(e) if e.raw_os_error() == Some(ERROR_NOACCESS)),
+        );
+        assert_eq!(result.ok(), Some(13), "refused once, then made again");
+        assert_eq!(calls, 2);
+        // SAFETY: the bytes just read.
+        let landed = unsafe { std::slice::from_raw_parts((view + 100) as *const u8, 13) };
+        assert_eq!(landed, b"from the disk");
         // SAFETY: our view.
         unsafe {
             UnmapViewOfFile(
