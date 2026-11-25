@@ -682,6 +682,47 @@ mod tests {
         }
     }
 
+    /// A guard page in the source of a copy. On 2026-11-25 a copy whose
+    /// source began at address 0 reached the guard page a Wine process has
+    /// at 0x11000, and the run ended on an unhandled 0x80000001. The page
+    /// reads as a hole, whether the copy meets it itself or asks about the
+    /// regions first, and it is still a guard page afterwards: the first
+    /// access to one uses it up, and a stack grows by its guard page.
+    #[test]
+    fn a_guard_page_in_the_source_reads_as_a_hole_and_stays_a_guard() {
+        use windows_sys::Win32::System::Memory::*;
+        const PAGE: usize = 4096;
+        // Over 64 KiB, so that `copy_mapped` asks about the regions.
+        const N: usize = 3 << 16;
+        // SAFETY: a private allocation, freed before returning; its guard
+        // page is only ever reached through the copies under test.
+        unsafe {
+            let base = VirtualAlloc(std::ptr::null(), N, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE).cast::<u8>();
+            assert!(!base.is_null());
+            base.write_bytes(0x6b, N);
+            let guard = base.add(1 << 16);
+            let mut old = 0;
+            assert_ne!(VirtualProtect(guard.cast(), PAGE, PAGE_READWRITE | PAGE_GUARD, &mut old), 0);
+            let guarded = || {
+                let mut info: MEMORY_BASIC_INFORMATION = std::mem::zeroed();
+                assert_ne!(VirtualQuery(guard.cast(), &mut info, size_of_val(&info)), 0);
+                info.Protect & PAGE_GUARD != 0
+            };
+            // The copy meets the page itself: it fails there.
+            assert!(!super::read_into(base, &mut vec![0u8; N]));
+            assert!(guarded(), "the copy used the guard up");
+            // The whole path: the bulk copy fails, then the regions are asked
+            // about and the guard page is not read.
+            let mut expected = vec![0x6b; N];
+            expected[1 << 16..(1 << 16) + PAGE].fill(0);
+            let mut out = vec![0xee; N];
+            super::copy_mapped(out.as_mut_ptr(), base, N, false);
+            assert!(out == expected, "what is around the guard page is copied, the page itself reads as zeros");
+            assert!(guarded(), "the copy used the guard up");
+            assert_ne!(VirtualFree(base.cast(), 0, MEM_RELEASE), 0);
+        }
+    }
+
     #[test]
     fn write_mapped_skips_unmapped_and_readonly_pages_and_marks_write_watch() {
         use windows_sys::Win32::System::Memory::*;
@@ -5581,7 +5622,7 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
 /// cache the query across copies: the title may remap the same address.
 fn read_sparse(src: *const u8, dst: *mut u8, len: usize) {
     use windows_sys::Win32::System::Memory::{
-        MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, VirtualQuery,
+        MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_GUARD, PAGE_NOACCESS, VirtualQuery,
     };
     let mut offset = 0;
     while offset < len {
@@ -5597,7 +5638,28 @@ fn read_sparse(src: *const u8, dst: *mut u8, len: usize) {
             read_pieces(at, to, remaining);
             break;
         }
-        if info.State != MEM_COMMIT || info.Protect == PAGE_NOACCESS {
+        // A guard page is a hole too, and is not read: its first access
+        // raises an exception and uses the guard up, and a stack grows by
+        // its guard page. A Wine process has its first thread's stack at
+        // 0x10000 with the guard page at 0x11000, which a copy whose source
+        // begins at address 0 reaches (2026-11-25: 0x80000001, unhandled,
+        // 134 s into a run).
+        let guard = info.State == MEM_COMMIT && info.Protect & PAGE_GUARD != 0;
+        if guard {
+            static MET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let met = MET.fetch_add(1, Ordering::Relaxed) + 1;
+            if met <= 8 || met.is_power_of_two() {
+                tracing::warn!(
+                    at = format_args!("{:#x}", at as usize),
+                    bytes = n,
+                    source = format_args!("{:#x}", src as usize),
+                    len,
+                    met,
+                    "a guard page in a copy's source: read as a hole"
+                );
+            }
+        }
+        if info.State != MEM_COMMIT || info.Protect == PAGE_NOACCESS || guard {
             #[cfg(feature = "diagnostics")]
             crate::copystat::add(crate::copystat::C::Unmapped, n as u64);
             // SAFETY: this path is only used with a writable host destination.
@@ -5650,7 +5712,7 @@ mod direct_copy {
     use std::sync::Once;
 
     use windows_sys::Win32::Foundation::{
-        EXCEPTION_ACCESS_VIOLATION, EXCEPTION_IN_PAGE_ERROR, NTSTATUS,
+        EXCEPTION_ACCESS_VIOLATION, EXCEPTION_GUARD_PAGE, EXCEPTION_IN_PAGE_ERROR, NTSTATUS,
     };
     use windows_sys::Win32::System::Diagnostics::Debug::{
         AddVectoredExceptionHandler, EXCEPTION_CONTINUE_EXECUTION, EXCEPTION_CONTINUE_SEARCH,
@@ -5700,6 +5762,7 @@ mod direct_copy {
         let code = record.ExceptionCode;
         if code != EXCEPTION_ACCESS_VIOLATION as NTSTATUS
             && code != EXCEPTION_IN_PAGE_ERROR as NTSTATUS
+            && code != EXCEPTION_GUARD_PAGE as NTSTATUS
         {
             return EXCEPTION_CONTINUE_SEARCH;
         }
@@ -5710,6 +5773,16 @@ mod direct_copy {
         let end = (&raw const victory_try_copy_end) as usize;
         if rip < start || rip >= end {
             return EXCEPTION_CONTINUE_SEARCH;
+        }
+        // The copy ran into a guard page. The system took the guard off to
+        // raise this, and it is not ours to use up (a stack grows by its
+        // guard page): it is put back, and the copy fails there.
+        if code == EXCEPTION_GUARD_PAGE as NTSTATUS {
+            if record.NumberParameters >= 2 {
+                guard_again(record.ExceptionInformation[1]);
+            }
+            ctx.Rip = (&raw const victory_try_copy_fault) as u64;
+            return EXCEPTION_CONTINUE_EXECUTION;
         }
         // A write fault may race with `watch` re-protecting a block; let
         // `watch` open writable blocks before reporting failure.
@@ -5723,6 +5796,27 @@ mod direct_copy {
         }
         ctx.Rip = (&raw const victory_try_copy_fault) as u64;
         EXCEPTION_CONTINUE_EXECUTION
+    }
+
+    /// Makes the page of `at` a guard page again, with the protection it
+    /// has now.
+    fn guard_again(at: usize) {
+        use windows_sys::Win32::System::Memory::{
+            MEM_COMMIT, MEMORY_BASIC_INFORMATION, PAGE_GUARD, VirtualProtect, VirtualQuery,
+        };
+        const KERNEL_PAGE: usize = 4096;
+        let page = at & !(KERNEL_PAGE - 1);
+        // SAFETY: plain data filled in by the query.
+        let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        // SAFETY: a valid out pointer of the right size.
+        let answered = unsafe { VirtualQuery(page as *const _, &mut info, size_of_val(&info)) } != 0;
+        if !answered || info.State != MEM_COMMIT || info.Protect & PAGE_GUARD != 0 {
+            return;
+        }
+        let mut old = 0;
+        // SAFETY: only the page's protection changes, back to what it was
+        // before the copy touched it.
+        unsafe { VirtualProtect(page as *const _, KERNEL_PAGE, info.Protect | PAGE_GUARD, &mut old) };
     }
 
     fn install() {
