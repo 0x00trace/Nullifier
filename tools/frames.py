@@ -65,6 +65,7 @@ def main():
                 report(a.log, a.world)
             except SystemExit:
                 print("waiting for frame lines…")
+            sys.stdout.flush()
             time.sleep(a.watch)
 
     report(a.log, a.world, a.html, a.csv)
