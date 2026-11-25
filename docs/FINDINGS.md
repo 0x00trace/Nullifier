@@ -234,6 +234,25 @@ transfer here.
 tree. The work is parked as a local branch (`mix-belobug`, commits `a16a1a5`,
 `2bfa15c`) for whoever wants to take it to Windows or NVIDIA.
 
+## 3.11 The Wine build itself (2026-11-25)
+
+We had always used GE-Proton11-10's wine and only swapped its vkd3d-proton.
+Tested Proton Experimental's wine (a full `wineserver -k` first, or it fails
+with `version mismatch 938/931`):
+
+| Wine | Median | n | Frame (median) | copies | textures | GPU | copy-back | unacc |
+|---|---|---|---|---|---|---|---|---|
+| GE-Proton11-10 | 0.50–0.70 | 74 | 1,965 ms | 695 | 328 | 62 | 141 | 44 |
+| **Proton Experimental** | 0.70 | 34 | **1,493 ms** | 468 | 270 | 109 | 63 | 33 |
+
+Both stable, no removals. The newer wine is **~25 % cheaper per frame** and
+shifts nothing else, but the median did not move because the scene mix differs
+between runs. Worth a second run before changing the launcher's default; if it
+holds, `VICTORY_PROTON` should prefer Proton Experimental.
+
+Also ruled out: memory pressure (`si/so` 0/0, zram flat) and THP (already
+`always`).
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
