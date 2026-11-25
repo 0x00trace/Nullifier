@@ -306,7 +306,16 @@ symptom of how many objects are touched, not the price of each.
 This also means the next change must reduce the **number of calls or their
 per-call cost**, not the fault mechanism.
 
-## 3.14 Series S mode is the biggest real win so far (2026-11-25)
+## 3.14 Series S mode: measured faster, then found BLACK (retracted)
+
+**Correction.** The 0.80-0.90 fps rows below were taken without a picture check.
+Capturing frames with `VICTORY_CAPTURE` under `--series-s` produced **1,586-byte
+PNGs** — a solid colour — against 1.7-4.2 MB for a real frame. So Series S
+renders black on this build and the "win" was less work, not a faster renderer.
+**Do not use `--series-s`.** Series X remains the only profile with a correct
+picture. The numbers below are kept to show how the trap looked.
+
+### The retracted measurement
 
 `--console series-s` (the title's own lower-resolution profile) measured with
 `bench_scene.sh`, same window and warm-up, two runs:

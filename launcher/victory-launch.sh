@@ -35,7 +35,7 @@ while [ $# -gt 0 ]; do
     --bin) BIN="${2:-}"; shift 2 ;;
     --profile) FORCE_PROFILE="${2:-}"; shift 2 ;;
     --safe) EXTRA_PROFILE+=(safe); shift ;;
-    --series-s) CONSOLE="series-s"; shift ;;
+    --series-s) echo "warning: Series S renders BLACK on this build (docs/FINDINGS.md 3.14); continuing anyway" >&2; CONSOLE="series-s"; shift ;;
     --diagnostics) EXTRA_PROFILE+=(diagnostics); shift ;;
     --) shift; PASSTHRU=("$@"); break ;;
     -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
