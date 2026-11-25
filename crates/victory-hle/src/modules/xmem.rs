@@ -746,7 +746,31 @@ pub fn map_alias(to: u64, from: u64, len: u64) -> bool {
 
 /// Maps `slice` and the slices after it over `[base, base + len)`, which
 /// must lie in one placeholder.
+/// Maps seen, and those whose `(section, index, len)` had been mapped before:
+/// the measure that decides whether a view cache is worth writing
+/// (`docs/FINDINGS.md` 3.21).
+pub(crate) static VIEW_MAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub(crate) static VIEW_REMAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SEEN_RANGES: std::sync::Mutex<Option<std::collections::HashSet<(usize, usize, usize)>>> =
+    std::sync::Mutex::new(None);
+
+fn note_range(slice: &Slice, len: usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let key = (slice.section.0 as usize, slice.index, len);
+    let mut seen = SEEN_RANGES.lock().unwrap_or_else(|e| e.into_inner());
+    let first = seen.get_or_insert_with(Default::default).insert(key);
+    if !first {
+        VIEW_REMAPS.fetch_add(1, Relaxed);
+    }
+    let n = VIEW_MAPS.fetch_add(1, Relaxed) + 1;
+    if n % 4000 == 0 {
+        let again = VIEW_REMAPS.load(Relaxed);
+        tracing::info!(maps = n, remaps = again, "xmem: ranges mapped, of them seen before");
+    }
+}
+
 fn map(physical: &mut Physical, base: usize, len: usize, slice: Slice) -> bool {
+    note_range(&slice, len);
     // SAFETY: splits the placeholder around the range (failing harmlessly
     // when the range is the whole placeholder), then maps the section
     // there; both act only on placeholders.

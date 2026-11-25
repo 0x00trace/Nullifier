@@ -491,6 +491,23 @@ Fixes, in order of effort:
 3. **Patch Wine** with the view-tree lookup from victory-fork #340, which turns
    the scan into a tree walk. Helps every title, not just this one.
 
+## 3.22 The churn is `Slice::view()`, not the placeholder map
+
+Instrumented `map()` (the placeholder remap): only **14-15 calls** in a whole run.
+So the 350-400 unmaps a second do not come from there. By elimination they come
+from `Slice::view()` (`xmem.rs:488`), the only other place that builds a `View`:
+
+```rust
+let at = MapViewOfFile(section, FILE_MAP_WRITE, ..., len);
+let view = View { at, len };
+commit(at.Value as usize, len).then_some(view)
+```
+
+Every call maps a view and, when the returned `View` drops, unmaps it - one
+wineserver list scan each way. **That is the hot path to cache**: keep the
+`View` on the `Slice`/`Physical` and hand it out again while the section lives,
+instead of map/unmap per use.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
