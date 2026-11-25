@@ -406,6 +406,25 @@ driven through vkd3d-proton at hundreds of groups a frame, not the index range
 but replace the barrier fold with a cross-lane shuffle (`WaveReadLaneAt`), which
 needs no group barrier and no groupshared memory.
 
+## 3.18 Texture budget and VRAM (2026-11-25)
+
+The card runs at 16,295 of 16,304 MB during play, so texture copies were the
+suspect for the hash64 device losses. `VICTORY_TEXTURE_BUDGET_MB` exists in this
+tree (`resource.rs:1371`) and does what it says:
+
+| config | median | n | frame | textures | removals |
+|---|---|---|---|---|---|
+| hash64 | 1.10 / 0.80 | 14-16 | 905-1,244 ms | 144-191 ms | 0 / **2** |
+| hash64 + `TEXTURE_BUDGET_MB=4096` | **1.00** | 17 | 1,051 ms | **64 ms** | 0 |
+| hash64 + `TEXTURE_BUDGET_MB=4096` | 0.10 | 3 | 10,246 ms | 84 ms | **2** |
+| hash64 + `CARD_BUFFERS_MB=256` | 0.40 | 5 | 2,506 ms | - | **2** |
+
+The budget **halves-to-thirds the texture phase** (64 ms vs 144-191) and is
+worth keeping as a setting, but it does not stop the device losses: they happen
+with 256 MB card buffers, with a 4 GB texture budget, and without either. That
+leaves the group barrier in hash64 as the remaining suspect - next is the
+lane-shuffle fold.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
