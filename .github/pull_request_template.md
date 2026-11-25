@@ -3,6 +3,10 @@
 One paragraph: what was wrong, what this changes, and which platform it was
 written for.
 
+Rebased on `main` at: `<sha>`  (run `./tools/sync-check.sh` — a PR from a stale
+clone will be asked to rebase and re-bench, because upstream fixes change what a
+change is worth)
+
 ## Evidence
 
 | commit | GPU | OS + driver | profile | median fps | n | removals | picture |
