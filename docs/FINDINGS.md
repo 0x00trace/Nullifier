@@ -385,10 +385,26 @@ The shader compiles under Wine (0 "compare could not be made"), the picture is
 real (4.2 MB capture) and the pass it targets is **halved at worst**. The
 1.10 fps run is the best median recorded on this machine.
 
-Not merged: one of three runs lost the device twice, and the third was neutral.
-Needs three clean runs on the default profile before it goes to `main`; if the
-removals persist, the widened dispatch is suspect (out-of-range group index)
-rather than the fold.
+Full run set (five runs, branch `hash64`):
+
+| run | median | n | frame | removals |
+|---|---|---|---|---|
+| 1 | **1.10** | 16 | 926 ms | 0 |
+| 2 | 1.65 | 4 | 967 ms | **2** |
+| 3 | 0.60 (`LATE_WAIT=0`) | 9 | 1,578 ms | 0 |
+| 4 | **1.10** | 14 | 905 ms | 0 |
+| 5 | 0.80 | 5 | 1,244 ms | **2** |
+
+**Not merged.** Two of five runs lose the device, which is a correlation, not
+noise: the same build without this change ran many times with no removal. The
+shader halves the pass it targets and gives the best median recorded here
+(1.10, twice), but a change that resets the card in 40 % of runs is not shippable.
+
+The prime suspect is `GroupMemoryBarrierWithGroupSync` in a groupshared fold
+driven through vkd3d-proton at hundreds of groups a frame, not the index range
+(`which = id.x / 64` cannot reach `pieces`). Next test: keep 64 threads per piece
+but replace the barrier fold with a cross-lane shuffle (`WaveReadLaneAt`), which
+needs no group barrier and no groupshared memory.
 
 ## 4. Switch matrix (same build, same scene class)
 
