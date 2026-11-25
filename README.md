@@ -1,4 +1,9 @@
-# victory-universal
+# Nullifier
+
+> Formerly `victory-universal`. A rebrand, not a rewrite: the platform layer is
+> VIctory's (GPL-3.0-or-later), and the upstream history and credits below are
+> kept intact because the licence requires it and because they are the record.
+
 
 **Runs an Xbox Series title natively on your PC — AMD or NVIDIA, Linux or Windows.**
 
@@ -61,8 +66,8 @@ handles that.
 ### Linux
 
 ```bash
-git clone git@github.com:iNiKKo/victory-universal.git
-cd victory-universal
+git clone git@github.com:iNiKKo/Nullifier.git
+cd Nullifier
 
 ./tools/setup.sh --game /path/to/game   # toolchain, build, detect, run
 ```
@@ -81,8 +86,8 @@ cargo xwin build --profile diag -p victory --features diagnostics \
 ### Windows
 
 ```powershell
-git clone https://github.com/iNiKKo/victory-universal.git
-cd victory-universal
+git clone https://github.com/iNiKKo/Nullifier.git
+cd Nullifier
 cargo build --release -p victory
 
 .\launcher\victory-launch.ps1 -Detect

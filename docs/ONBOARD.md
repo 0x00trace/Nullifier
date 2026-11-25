@@ -35,7 +35,7 @@ for d in ~/victory/victory-amd ~/victory/victory-fork ~/victory; do
 done
 
 # 2. Does this clone have your work already?
-cd <victory-universal> && git log --oneline -1
+cd <Nullifier> && git log --oneline -1
 
 # 3. Do you have findings but no code?
 ls docs/ notes/ 2>/dev/null
@@ -57,8 +57,8 @@ until the ported PR is merged and your numbers reproduce here.
 One command, no sudo, idempotent:
 
 ```bash
-git clone git@github.com:iNiKKo/victory-universal.git
-cd victory-universal
+git clone git@github.com:iNiKKo/Nullifier.git
+cd Nullifier
 ./tools/setup.sh                 # toolchain into ~/.local, build, detect
 ./tools/setup.sh --game <dir>    # ... and start it once
 ```
@@ -100,7 +100,7 @@ git remote -v
 Then compare against this fork without touching anything:
 
 ```bash
-git remote add universal git@github.com:iNiKKo/victory-universal.git
+git remote add universal git@github.com:iNiKKo/Nullifier.git
 git fetch universal
 git log --oneline universal/main..HEAD      # your commits not in the fork
 git diff --stat universal/main..HEAD
@@ -129,7 +129,7 @@ interesting one — the AMD view-guard work fixed rendering on NVIDIA too.
 In the **universal clone**, not your old tree:
 
 ```bash
-cd <victory-universal>
+cd <Nullifier>
 git checkout main && git pull
 git checkout -b port/<short-name>
 
