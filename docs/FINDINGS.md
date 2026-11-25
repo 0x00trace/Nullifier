@@ -557,6 +557,22 @@ request**: when a single slice is asked for, map the 16 slices (64 KiB) that
 contain it, provided the section holds them, and hand out the page inside. The
 view count drops 16x, the list stays short, and every scan gets cheaper.
 
+## 3.25 Mapping 64 KiB for a one-page request - built, unverified
+
+Branch `wideviews`: `View::map` maps 16 slices when one is asked for, while
+`View.len` stays the requested page so nothing can reach past it (that separation
+was the correctness fix; without it a caller walking `bytes()` would touch
+neighbouring pages).
+
+First run: median 0.85, n=14, frame 1,169 ms, textures 34 ms, copies 555 ms,
+**no removals, no crash**. Comparable to the shipped profile (0.80-1.00).
+
+**Not verified**: the instrumentation now disagrees with itself - 44,000 maps
+logged against 5 unmaps in the same window, which cannot both be right. Until
+that is explained (either the counter is misplaced or the views are being kept
+somewhere), the run cannot be trusted as evidence that the view count fell, and
+the change stays on its branch.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
