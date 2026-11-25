@@ -151,19 +151,25 @@ the right Proton. Everything it sets can be overridden by exporting it first.
 ## 4. Measure
 
 ```bash
-./tools/bench.sh "label"                  # uses the env you exported
-VICTORY_LATE_WAIT=1 ./tools/bench.sh "late-wait 1"
+./tools/bench_scene.sh "label"            # fixed 60 s world window + picture gate
+VICTORY_LATE_WAIT=1 ./tools/bench_scene.sh "late-wait 1"
+./tools/bench.sh "label"                  # whole-run, for a rough look
 ```
 
 Protocol, because the frame rate is scene-dependent and deceiving:
 
 * Report the **median of world frames** (`fps < 10`), with n. Menus are 30 fps
   and loading dips to 5–20 fps; including them flatters or wrecks a run.
-* A run needs **n ≥ 20** world frames to mean anything.
+* A 60 s window needs **n ≥ 12** world frames; the whole-run `bench.sh` wants
+  n ≥ 20. Below that the run did not reach the world.
 * Peaks (5–8 fps) are camera cuts, not settings. Never quote them alone.
+* Three runs per configuration, and a picture over 50 KB (`bench_scene.sh`
+  refuses a black one). A change must hold in all three; one lucky run is not
+  a result.
 * Always report `device removed` count. A fast run that removes the device is
   not a result.
-* Two runs of the same build differ by ±30 % median. Do not chase 10 %.
+* Two runs of the same build differ by ±40 % median (noise floor, 3.12). Do
+  not chase 10 %.
 
 ---
 
@@ -173,9 +179,11 @@ Before merging anything into `main`:
 
 1. Build it (§2).
 2. Run `tools/bench.sh` twice: once default, once with the platform's settings.
-3. Confirm **all** of: no `device removed`, no `unhandled exception`, no
-   `no argument clamp`, world renders (characters, buildings, HUD), and the
-   median is not worse than the previous `main`.
+3. Confirm **all** of: no `device removed`, no `unhandled exception` *during*
+   the run (the benchmark's kill at the end of its window logs one - check it
+   against the last capture), no `no argument clamp`, world renders
+   (characters, buildings, HUD), and the median is not worse than the previous
+   `main`.
 4. If it touches shaders or the GPU crate, also run the crate's tests
    (`cargo test -p victory-shader -p victory-gpu` — GPU tests need a card).
 5. Record the number and the config in `docs/FORK.md`'s results table.
@@ -217,23 +225,28 @@ into GTT, which costs ~10× frame time. Stop it before benchmarking.
 
 ## 7. Where the time goes today (do not re-derive this)
 
-At ~0.7 fps on an RX 9070 XT / Mesa 26.3.1:
+At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
 
-* GPU busy **4–6 %**, ~0.7 of one core of 12 used, 103 threads with **one**
-  busy. The title is *not* CPU-bound or GPU-bound; it is serialisation-bound.
-* The submitting thread spends ~2 s per frame between submissions running only
-  ~20 ms of user CPU — it is blocked in memory tracking / copies / fences.
-* Copies: fast in throughput (1961 MB in 7.2 ms) but slow in wall time
-  (hundreds of ms), i.e. coordination, not bandwidth.
-* `GetWriteWatch` under Wine is the reason texture refresh was the top cost
-  (now mitigated by #270, still visible).
+* **copies 122–306 ms**, **copy-back ~69 ms**, **textures 34–51 ms**,
+  **unaccounted ~38 ms**, **GPU ~55 ms (7 %)**. The title plus Wine's server
+  hold the rest.
+* GPU busy ~7 %, one busy thread of ~103: still serialisation-bound under Wine,
+  not compute-bound.
+* `TEXTURE_BUDGET_MB=4096` took the texture phase 350 → 40–48 ms (3.19).
+* One whole-section view under Wine (`VICTORY_SECTION_VIEW`, on by default)
+  took view unmaps 44,000 → 0 and the frame 1,203–1,448 → 750–952 ms (3.27).
+* The `perf` profile still shows `is_valid_view_addr` ~19 % and
+  `req_unmap_view` ~10 %: those are the **title's own** page remaps
+  (`CopyPageMappingsBatchX`), which fxceless tried twice to join and reverted
+  (black/red faces). Do not repeat it.
 * Linux ceiling observed across reports: 0.16 fps (3090), 1.85–1.97 (5070 Ti),
-  0.5–1.4 here. Windows on the same build: 2–4 fps. The gap is Wine, not the
+  1.1–1.3 here. Windows on the same build: 2–4 fps. The gap is Wine, not the
   hardware.
 
-The next real win is replacing the per-frame `GetWriteWatch` with cheaper dirty
-tracking, or amortising it. That is in `victory-gpu/src/watch.rs` and the
-texture lane.
+The next wins are on the copy lane (copy-back through the layer's own view,
+joined submission parts) and the draw lane (indirect records clamped once per
+list) - all measured in fxceless/victory-fork and not yet ported here. See
+`docs/FINDINGS.md` and `docs/ROADMAP.md`.
 
 ---
 

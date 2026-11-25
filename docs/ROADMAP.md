@@ -4,13 +4,17 @@ Ordered by "what actually changes the frame rate". Everything here is a
 candidate for a PR; read [`AGENTS.md`](../AGENTS.md) first, and bring a bench
 row.
 
-Current baseline: **0.70–0.90 fps** median in the world on an RX 9070 XT
-(Linux, Mesa 26.3.1, Wine 11), stable, picture correct. GPU 4–6 % busy, ~0.7 of
-one core used, one busy thread of 103.
+Current baseline: **1.1–1.3 fps** median in the world on an RX 9070 XT (Linux,
+Mesa 26.3.1, Wine 11), frame 750–950 ms, stable, picture correct, no device
+removals. GPU ~55 ms a frame (7 %), one busy thread.
+
+Where a frame's time goes now (`tools/frames.py`): **copies 122–306 ms**,
+**copy-back ~69 ms**, **textures 34–51 ms**, **unaccounted ~38 ms**, GPU ~55 ms;
+the rest is the title plus Wine's server. The order below follows that.
 
 ---
 
-## P0 — Dirty tracking (the biggest known win)
+## P1 — Dirty tracking (was the top cost; now 34–51 ms)
 
 `victory-gpu/src/watch.rs` and the texture lane ask `GetWriteWatch` per texture
 range per frame to find out which title pages changed. On Windows this is cheap;
@@ -72,27 +76,50 @@ current code copies wholesale — which is why it is rated safer than any
 throttling scheme. **Done when:** a frame's refreshed MB drops by an order of
 magnitude at the same picture, and the median improves.
 
-## P1 — Copy / fence coordination
+## P0 — Copies and copy-back (the biggest named phases)
+
+Copies are 122–306 ms and copy-back ~69 ms of a 750–950 ms frame, and the memcpy
+inside them is fast (1961 MB in 7.2 ms): the wall time is coordination, views and
+fences. `VICTORY_TEXTURE_BUDGET_MB=4096` and the whole-section view
+(`docs/FINDINGS.md` 3.19, 3.27) already took two large pieces out of this lane.
+
+Measured leads from `fxceless/victory-fork` that are **not in this tree yet**:
+
+1. `VICTORY_BACK_OWN_VIEW=1` - what shaders wrote goes back to title memory
+   through a view of the layer's own, so the copy that wrote it is not read in
+   again: ~9 % (submit thread 93 → 81 ms).
+2. `VICTORY_JOIN_PARTS=1` - the title's lists, cut by waits into ~29 parts a
+   frame, are submitted as ~9 where they follow one another: ~6 %.
+3. Copies in place for reads under 256 bytes, with a faulted source left alone
+   for two seconds (their `VICTORY_COPY_PLAIN`) - one-byte asks caused 1,000 to
+   1,300 faults a frame before that.
+
+## P2 — Copy / fence coordination
 
 The submitting thread spends ~2 s per frame *between* submissions running only
 ~20 ms of user CPU: it is blocked, not computing. Copies report 1961 MB moved in
 7.2 ms of memcpy yet hundreds of ms of wall time in the frame budget — the cost
 is coordination.
 
-Needs a real profile (`perf` requires `kernel.perf_event_paranoid <= 1`) to name
-what it waits on: submission lock, fence, or a memory-tracking path.
+A real profile is now available (`kernel.perf_event_paranoid=1`, `perf -g`,
+`docs/FINDINGS.md` 3.20): what remains in it is `is_valid_view_addr` ~19 % and
+`req_unmap_view` ~10 %, and those are the **title's own page remaps**
+(`CopyPageMappingsBatchX`), not our views. fxceless tried twice to join them and
+reverted both times (black/red faces in 3 launches of 3). Do not repeat that;
+our section views are safe only because they alias a section's own slices and
+never change what the title sees.
 
 **Careful:** `LATE_WAIT >= 2`, `JOIN_COPIES=1` and `RELAY` remove the device
 (`0x887A0005`) on Linux. Fix the coordination; do not paper over it by sending
 more work ahead.
 
-## P2 — Use more than one thread
+## P3 — Use more than one thread
 
 103 threads exist, one does the work. Texture refresh, descriptor building and
 copy recording are candidates for parallel work (`VICTORY_WIDE_REFRESH` exists
 but did not move the number). Measure before and after; do not assume.
 
-## P3 — Port the newer upstream texture work
+## P4 — Port the newer upstream texture work
 
 `reference/upstream-2026-11-25` contains four commits worth having: texture path
 at 548 MB in 169 ms, packed textures kept in the upload queue, page writes
@@ -100,7 +127,7 @@ counted, and card room reserved for the first world frame. They conflict with
 the AMD work in 14 files, so port them **one idea at a time** as PRs with bench
 rows — never merge the branch.
 
-## P4 — Platform coverage
+## P5 — Platform coverage
 
 | Target | State | Next step |
 |---|---|---|
@@ -110,7 +137,7 @@ rows — never merge the branch.
 | Linux + Intel | untested | needs mesh shaders + SM 6.6; measure, then add a profile |
 | macOS / Apple silicon | unsupported | needs a Metal (or MoltenVK) D3D12 path; a project of its own, not a profile |
 
-## P5 — Ray-traced light
+## P6 — Ray-traced light
 
 The title's bounce light and RT sun/lamp shadows do not run, so everything not
 in direct sun is black. Upstream is working on it (`docs/fork-ray-tracing.md`).

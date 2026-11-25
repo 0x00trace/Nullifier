@@ -15,19 +15,21 @@ The world renders correctly and is stable — it is **not yet playable**.
 | | |
 |---|---|
 | Menus, cutscene, prologue | work: characters, buildings, HUD, audio, input, saves |
-| Frame rate (world) | **0.5–0.7 fps** on RX 9070 XT / Linux; 3–5 fps reported on Windows |
+| Frame rate (world) | **1.1–1.3 fps** on RX 9070 XT / Linux (median of 3 runs); 3–5 fps reported on Windows |
 | Light in shadow | missing — the title's ray-traced light does not run, so shadowed areas are black |
 | Stability | minutes-long runs, no crashes, no device loss |
 
 The GPU is idle 93–97 % of the time: the frame is bound by per-call overhead in
-the emulation layer, not by the card. Measurements, including what has been
-ruled out, are in [`docs/FINDINGS.md`](docs/FINDINGS.md).
+the emulation layer, not by the card. Two changes carry most of the current
+speed, both on by default: a 4 GB texture budget (`VICTORY_TEXTURE_BUDGET_MB`)
+and one whole-section view under Wine instead of a map/unmap per page. What is
+still slow, with evidence, is in [`docs/FINDINGS.md`](docs/FINDINGS.md).
 
 ## Get started
 
 ```bash
-git clone git@github.com:iNiKKo/Nullifier.git
-cd Nullifier
+git clone git@github.com:iNiKKo/victory-universal.git
+cd victory-universal          # the repo keeps its old name; the project is Nullifier
 ./tools/setup.sh --game /path/to/game
 ```
 
@@ -49,6 +51,8 @@ Hardware support is a profile, not a fork: add one object to
 ## Contributing
 
 One idea per PR, with a benchmark row — medians of world frames, never peaks.
+Three runs per configuration, and a captured frame over 50 KB: a number without
+that picture is unverified.
 
 | Read | For |
 |---|---|

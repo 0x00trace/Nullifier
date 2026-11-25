@@ -7,7 +7,7 @@ fork of their own and wants to bring their work here.
 ---
 
 ```
-You are contributing to a UNIVERSAL fork of VIctory: a compatibility layer that
+You are contributing to Nullifier, a UNIVERSAL fork of VIctory: a compatibility layer that
 runs an Xbox Series title natively on a PC. It is not an emulator - the title's
 x86-64 code runs in our process and we implement the console platform beneath
 it. "Universal" means one main branch that runs on AMD and NVIDIA, on Linux and
@@ -70,10 +70,14 @@ RUN
   ./launcher/victory-launch.sh --game <dir> --safe   # if "device removed"
 
 MEASURE
-  ./tools/bench.sh "<label>"
-  Report: median of WORLD frames (fps < 10), n, min/max, device removals,
-  whether the picture was correct. Need n >= 20 or the run did not reach the
-  world. Two runs of the same build differ by up to 30%; do not chase 10%.
+  ./tools/bench_scene.sh "<label>"          # fixed 60 s window + picture gate
+  Report: median of WORLD frames (fps < 10), p10, n, device removals, whether
+  the picture was correct (a real frame is 1.7-4.2 MB; black is ~1.5 KB).
+  ONE RUN IS NOT A RESULT: three runs per configuration, and the change must
+  hold in all three. Two runs of the same build differ by up to 40% median;
+  do not chase 10%. A `crashes` count from the benchmark is the harness
+  stopping the title at the end of its window unless it happens mid-run -
+  check the timestamp against the last capture.
 
 WHAT TO PUSH, WHERE
   - Push a branch named port/<short-name> or fix/<short-name> to YOUR fork.
@@ -118,13 +122,25 @@ KNOWN LANDMINES (all of these cost hours; do not re-derive)
   - A local LLM on -ngl 99 takes 11+ GB VRAM and costs ~10x frame time.
   - A bare `wineboot` prefix lacks d3dcompiler_47/wined3d; create the prefix
     through Proton (the launcher does).
+  - Do NOT join the title's page remaps (XMemMapPhysicalPages / map_alias) into
+    larger views. fxceless measured remap 140 -> 79 ms with joined pool pages
+    but black or red faces and garbage in 3 launches of 3, and reverted it.
+    Section views (View::map) are a different thing and are safe: they alias a
+    section's own 64 KiB slices by index and never change what the title sees.
 
 CURRENT STATE (do not contradict it without evidence)
-  ~0.7-0.9 fps median on RX 9070 XT / Mesa 26.3.1 / Wine 11, stable, correct
-  picture. GPU 4-6% busy, ~0.7 of one core used, one busy thread of 103: the
-  project is serialisation-bound under Wine, not compute-bound. The biggest
-  known win is replacing the per-frame GetWriteWatch dirty-page query in
-  victory-gpu/src/watch.rs and the copy/fence coordination around it.
+  1.1-1.3 fps median on RX 9070 XT / Mesa 26.3.1 / Wine 11, frame 750-950 ms,
+  stable, correct picture, no device removals. GPU ~55 ms (7%), so the card is
+  not the limit. A frame now costs: copies 122-306 ms, copy-back ~69 ms,
+  textures 34-51 ms, unaccounted ~38 ms, and the rest is the title plus Wine's
+  server. Profile (perf -g, kernel.perf_event_paranoid=1) still shows
+  is_valid_view_addr ~19% and req_unmap_view ~10% of CPU: that is the TITLE's
+  own page remaps (CopyPageMappingsBatchX), not our layer's views, after
+  section views removed ours (docs/FINDINGS.md 3.27).
+  Next candidates, in order of measured value in fxceless/victory-fork:
+  VICTORY_BACK_OWN_VIEW (~9%), VICTORY_JOIN_PARTS (~6%), VICTORY_INDIRECT_GATHER
+  (104 -> 97 ms a frame, the biggest but a real port). None of them exist in
+  this tree yet.
 
 WHEN YOU REPORT
   Post: commit, what changed, the bench row, what you verified by eye, and what
