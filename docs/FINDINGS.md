@@ -264,6 +264,28 @@ holds, `VICTORY_PROTON` should prefer Proton Experimental.
 Also ruled out: memory pressure (`si/so` 0/0, zram flat) and THP (already
 `always`).
 
+## 3.12 The noise floor, measured (2026-11-25)
+
+Two runs of the **same build, same profile, same warm cache**, measured with
+`tools/bench_scene.sh` (world entry at fps<2, 20 s warm-up discarded, then a
+fixed 60 s window):
+
+| Run | Median | p10 | Frame | copies | textures | GPU | copy-back | unacc |
+|---|---|---|---|---|---|---|---|---|
+| A | 0.50 | 0.20 | 1,976 ms | 533 | 371 | 69 | 93 | 35 |
+| B | 0.70 | 0.10 | 1,464 ms | **239** | 351 | 53 | 91 | **199** |
+
+Same run: median differs 40 %, **copies differ 2.2x**, and the unaccounted slice
+moves by 164 ms. So the fixed window helps but does not make a single run
+trustworthy: the camera and the streaming differ run to run, and the phases
+trade time with each other.
+
+**Rule from this:** no change is accepted on fewer than **three runs per
+configuration**, and the phases are only comparable when copies *and* the
+unaccounted slice both move in the same direction. A single-run "win" of less
+than 40 % means nothing. A truly deterministic harness needs a fixed save plus
+an exact input replay, which is the next infrastructure item.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
