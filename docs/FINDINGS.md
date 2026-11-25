@@ -567,11 +567,79 @@ neighbouring pages).
 First run: median 0.85, n=14, frame 1,169 ms, textures 34 ms, copies 555 ms,
 **no removals, no crash**. Comparable to the shipped profile (0.80-1.00).
 
-**Not verified**: the instrumentation now disagrees with itself - 44,000 maps
-logged against 5 unmaps in the same window, which cannot both be right. Until
-that is explained (either the counter is misplaced or the views are being kept
-somewhere), the run cannot be trusted as evidence that the view count fell, and
-the change stays on its branch.
+**Rejected, and the premise was wrong.** The map/unmap counters never
+disagreed: the run logged 44,000 one-page maps, 5,058 two-page maps and
+**52,000 unmaps**, and the earlier reading of "5 unmaps" was my grep cutting
+the line off at 95 characters (`unmaps=52` plus the next digits). Both counters
+agree, and they say the opposite of 3.24: **a view is created per call, so
+widening each view leaves the number of MapViewOfFile/UnmapViewOfFile pairs
+exactly where it was.** 44,000 calls still cost 44,000 round trips. The branch
+is deleted and the next measurement is reuse distance (3.26), which is the only
+thing that says whether calls can be *skipped* rather than made larger.
+
+## 3.26 Reuse distances: 56 % of view maps repeat, but mostly while still live
+
+Instrumented `View::map` with the reuse distance of each `(section, index, n)`
+in map order (45,000 maps in a run):
+
+| repeat within | hits | share of all maps |
+|---|---|---|
+| 16 maps | 18,667 | 41 % |
+| 64 | 2,035 | 4.5 % |
+| 256 | 537 | 1.2 % |
+| 1024 | 359 | 0.8 % |
+| 4096 | 703 | 1.6 % |
+| 16384 | 1,963 | 4.4 % |
+| further | 1,016 | 2.3 % |
+| **any repeat** | **25,280** | **56 %** |
+
+So a pool of recently dropped views should have been worth ~41 % of the calls.
+It was not: a bounded pool (`VICTORY_VIEW_POOL`) only served 6,000-8,000 of
+45,000 maps, because most repeats are of a range that is *still mapped* by
+another window (concurrent users), which a pool of dropped views cannot serve.
+Measured medians, three runs each:
+
+| pool | median fps (3 runs) | unmaps/run | hits/run |
+|---|---|---|---|
+| off | 0.80 / 0.60 / 0.90 | 42-44k | - |
+| 16 | 0.60 | 34k | 4k |
+| 64 | 0.90 / 0.90 / 0.60 | 36-44k | 6-8k |
+| 128 | 0.40 / 0.90 / 0.70 | 30-34k | 6k |
+| 1024 | 0.90 | 36k | 8k |
+| 4096 | 0.70 | 30k | 8k |
+
+Every pool size is inside the +/-40 % noise, and larger pools trend slower -
+consistent with 3.23 (a longer live-view list makes each scan dearer). The pool
+stays in the tree, off by default, for Windows where the section-view fix (3.27)
+does not apply.
+
+## 3.27 One view per section instead of one per page - the 25 % scan is gone
+
+A section is committed whole under Wine (`commit` is a no-op there), so the
+whole section can be mapped once and every page addressed as `base + index *
+64 KiB`. `VICTORY_SECTION_VIEW` does that (default on under Wine, opt out with
+`VICTORY_NO_SECTION_VIEW=1`); a section's view is created on its first use and
+unmapped when the section dies. Windows is untouched (SEC_RESERVE sections are
+not committed whole there).
+
+| config | median fps (3 runs) | frame | copies | textures | unmaps/run | removals |
+|---|---|---|---|---|---|---|
+| before (per-page views) | 0.70 / 0.80 / 0.80 | 1,448 / 1,203 / 1,251 ms | 348-564 | 40-68 | 44,000 | 0 |
+| **section views** | **1.10 / 1.30 / 1.10** | **937 / 750 / 952 ms** | **122-306** | 34-51 | **0** | 0 |
+| section views (first build) | 1.10 / 1.75 / 1.25 | 919 / 585 / 813 ms | 200-294 | 14-44 | 0 | 0 |
+
+Six section-view runs, 53,000-60,000 maps per run served by **one whole-section
+mapping**, zero unmaps, zero device removals, real frames (1.85 MB at 1024,
+3.9 MB at 512). The copies phase drops with it (348-564 -> 122-306 ms) because a
+copy no longer pays a map/unmap around the memcpy. This is the first change that
+removes the cost the profile found rather than working around it, and it is the
+answer to 3.21/3.22: the churn was `Slice::view()` and the fix was to stop
+calling it per page.
+
+Two of the three clean-build runs log `unhandled exception` - that is the
+benchmark killing the title at the end of its window (the timestamp is directly
+after the last capture, and the same marker appears in runs without this change),
+not a gameplay crash; `removals=0` throughout.
 
 ## 4. Switch matrix (same build, same scene class)
 

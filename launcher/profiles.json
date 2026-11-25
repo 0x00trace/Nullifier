@@ -28,7 +28,7 @@
         "VICTORY_CARD_BUFFERS_MB": "512",
         "VICTORY_TEXTURE_BUDGET_MB": "4096"
       },
-      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device. Texture budget 4096 MB: texture phase 350 -> 40-48 ms, frame 1,464-1,976 -> 1,046-1,182 ms, median 0.80-1.00 (two runs, no removals)."
+      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device. Texture budget 4096 MB: texture phase 350 -> 40-48 ms, frame 1,464-1,976 -> 1,046-1,182 ms, median 0.80-1.00 (two runs, no removals). Section views on by default under Wine (code, not a variable): one mapping per section, view unmaps 44,000 -> 0, frame 1,203-1,448 -> 750-952 ms, median 0.80 -> 1.10-1.30 across three runs each."
     },
     {
       "name": "linux-amd-8gb",
@@ -45,7 +45,7 @@
         "VICTORY_CARD_BUFFERS_MB": "512",
         "VICTORY_TEXTURE_BUDGET_MB": "4096"
       },
-      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device. Texture budget 4096 MB: texture phase 350 -> 40-48 ms, frame 1,464-1,976 -> 1,046-1,182 ms, median 0.80-1.00 (two runs, no removals)."
+      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device. Texture budget 4096 MB: texture phase 350 -> 40-48 ms, frame 1,464-1,976 -> 1,046-1,182 ms, median 0.80-1.00 (two runs, no removals). Section views on by default under Wine (code, not a variable): one mapping per section, view unmaps 44,000 -> 0, frame 1,203-1,448 -> 750-952 ms, median 0.80 -> 1.10-1.30 across three runs each."
     },
     {
       "name": "linux-nvidia",

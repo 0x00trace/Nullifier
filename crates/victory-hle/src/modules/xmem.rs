@@ -351,9 +351,54 @@ unsafe impl Sync for Section {}
 
 impl Drop for Section {
     fn drop(&mut self) {
+        if let Some(at) = WHOLE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(self.0 as usize))
+        {
+            unmap_view(at);
+        }
         // SAFETY: our handle; views keep the section alive on their own.
         unsafe { CloseHandle(self.0) };
     }
+}
+
+/// Whole-section mappings, by section handle: on Wine a section is committed
+/// whole (`commit` is a no-op there), so one view of the whole thing serves
+/// every page of it. That replaces one MapViewOfFile/UnmapViewOfFile pair per
+/// page - 45,000 of them in a run, each costing wineserver a walk of its view
+/// list (`docs/FINDINGS.md` 3.20, 3.26). Opt-in until measured.
+static WHOLE: LazyLock<Mutex<HashMap<usize, usize>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// On by default under Wine, where it was measured (`docs/FINDINGS.md` 3.27);
+/// `VICTORY_NO_SECTION_VIEW=1` turns it off, `VICTORY_SECTION_VIEW=1` forces it.
+fn section_views() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        on_wine()
+            && std::env::var_os("VICTORY_NO_SECTION_VIEW").is_none()
+            && std::env::var("VICTORY_SECTION_VIEW").map_or(true, |v| v != "0")
+    })
+}
+
+/// The base of this section's whole mapping, making it if this is its first
+/// use. `None` if the host refuses.
+fn section_base(section: &Arc<Section>) -> Option<usize> {
+    use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
+    let key = section.0 as usize;
+    let mut whole = WHOLE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&at) = whole.get(&key) {
+        return Some(at);
+    }
+    // SAFETY: a section we own; a zero length maps all of it.
+    let at = unsafe { MapViewOfFile(section.0, FILE_MAP_WRITE, 0, 0, 0) };
+    if at.Value.is_null() {
+        return None;
+    }
+    tracing::info!(base = format_args!("{:p}", at.Value), "xmem: whole-section view");
+    whole.insert(key, at.Value as usize);
+    Some(at.Value as usize)
 }
 
 /// Where a page lives, or what a view starts with: a section and a page
@@ -476,17 +521,112 @@ pub extern "system" fn XMemFreePhysicalPages(n: usize, pages: *const usize) -> B
 }
 
 /// A view of our own on consecutive slices of one section, committed and
-/// writable, unmapped when dropped.
+/// writable, unmapped (or pooled) when dropped.
 struct View {
     at: MEMORY_MAPPED_VIEW_ADDRESS,
     len: usize,
+    /// False for a slice of the section's whole view: dropping it must not
+    /// unmap anything (`VICTORY_SECTION_VIEW`).
+    owned: bool,
+    /// What it maps, so a dropped view can be offered back to the pool.
+    section: Arc<Section>,
+    index: usize,
+    n: usize,
 }
+
+/// A mapping kept instead of unmapped, so the next request for the same range
+/// is a lookup rather than a MapViewOfFile/UnmapViewOfFile pair - each of which
+/// makes wineserver walk its view list (`docs/FINDINGS.md` 3.20). Bounded on
+/// purpose: 3.23 showed keeping *every* view alive makes the list longer and the
+/// frame twice as slow, so only the last few are held.
+struct Pooled {
+    /// The mapped address as a number: `MEMORY_MAPPED_VIEW_ADDRESS` is a raw
+    /// pointer and the pool is shared between decode threads.
+    at: usize,
+    len: usize,
+    /// Held, not just pointed at: the section must outlive the mapping, and its
+    /// address is the key, so it must not be recycled.
+    section: Arc<Section>,
+    index: usize,
+    n: usize,
+}
+
+static POOL: LazyLock<Mutex<std::collections::VecDeque<Pooled>>> =
+    LazyLock::new(|| Mutex::new(std::collections::VecDeque::new()));
+
+/// `VICTORY_VIEW_POOL=N`: how many dropped views to keep for reuse. 0 (the
+/// default) unmaps every view as before.
+fn pool_cap() -> usize {
+    static CAP: LazyLock<usize> = LazyLock::new(|| {
+        std::env::var("VICTORY_VIEW_POOL")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0)
+    });
+    *CAP
+}
+
+/// View maps served from the pool instead of the host: the number that decides
+/// whether `VICTORY_VIEW_POOL` is worth keeping.
+pub(crate) static VIEW_POOL_HITS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// View maps served by a section's whole view instead of a fresh MapViewOfFile.
+pub(crate) static SECTION_VIEW_MAPS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
 
 impl View {
     /// Maps `n` slices from `slice` on.
     fn map(slice: &Slice, n: usize) -> Option<View> {
+        // A view dropped moments ago for this exact range: hand the mapping
+        // back instead of paying the host twice. 41 % of requests repeat one
+        // from the last 16 calls (`docs/FINDINGS.md` 3.26).
+        if pool_cap() > 0 {
+            let key = Arc::as_ptr(&slice.section) as usize;
+            let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+            let hit = pool.iter().position(|p| {
+                Arc::as_ptr(&p.section) as usize == key && p.index == slice.index && p.n == n
+            });
+            if let Some(i) = hit {
+                let p = pool.remove(i).expect("just found");
+                drop(pool);
+                let hits = VIEW_POOL_HITS
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1;
+                if hits % 2000 == 0 {
+                    tracing::info!(pool_hits = hits, "xmem: view maps served from the pool");
+                }
+                return Some(View {
+                    at: MEMORY_MAPPED_VIEW_ADDRESS { Value: p.at as *mut c_void },
+                    len: p.len,
+                    owned: true,
+                    section: p.section,
+                    index: p.index,
+                    n: p.n,
+                });
+            }
+        }
+        if section_views() {
+            if let Some(base) = section_base(&slice.section) {
+                let hits = SECTION_VIEW_MAPS
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1;
+                if hits % 2000 == 0 {
+                    tracing::info!(maps = hits, "xmem: view maps served by a section view");
+                }
+                return Some(View {
+                    at: MEMORY_MAPPED_VIEW_ADDRESS {
+                        Value: (base + slice.index * PAGE) as *mut c_void,
+                    },
+                    len: n * PAGE,
+                    owned: false,
+                    section: slice.section.clone(),
+                    index: slice.index,
+                    n,
+                });
+            }
+        }
         use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
-        note_run(n);
         let (offset, len) = ((slice.index * PAGE) as u64, n * PAGE);
         // SAFETY: slices of a section we own; the view is ours until dropped.
         let at = unsafe {
@@ -501,7 +641,14 @@ impl View {
         if at.Value.is_null() {
             return None;
         }
-        let view = View { at, len };
+        let view = View {
+            at,
+            len,
+            owned: true,
+            section: slice.section.clone(),
+            index: slice.index,
+            n,
+        };
         commit(at.Value as usize, len).then_some(view)
     }
 
@@ -513,28 +660,52 @@ impl View {
     }
 }
 
-/// Views unmapped since the start: each one costs wineserver a linear scan
-/// (`is_valid_view_addr`, 28 % of the CPU in the first real profile), so the
-/// rate is the number to watch (`docs/FINDINGS.md` 3.20).
+/// Takes one mapping away, and counts it: each unmap costs wineserver a walk of
+/// its view list (`is_valid_view_addr`, 28 % of the CPU in the first real
+/// profile), so the rate is the number to watch (`docs/FINDINGS.md` 3.20).
+fn unmap_view(at: usize) {
+    use windows_sys::Win32::System::Memory::UnmapViewOfFile;
+    // SAFETY: our view, mapped by `View::map`.
+    unsafe { UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: at as *mut c_void }) };
+    let n = VIEW_UNMAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if n % 2000 == 0 {
+        tracing::info!(unmaps = n, "xmem: view unmaps so far");
+    }
+}
+
+/// Views unmapped since the start.
 pub(crate) static VIEW_UNMAPS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
 impl Drop for View {
     fn drop(&mut self) {
-        use windows_sys::Win32::System::Memory::UnmapViewOfFile;
         // Experiment (`VICTORY_LEAK_VIEWS=1`): keep the mapping instead of
         // paying wineserver's list scan (is_valid_view_addr, 28 % of the CPU).
         // Leaks address space, so it is a measurement, not a fix.
         static LEAK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        let leak = *LEAK.get_or_init(|| std::env::var_os("VICTORY_LEAK_VIEWS").is_some());
-        if !leak {
-            // SAFETY: our view.
-            unsafe { UnmapViewOfFile(self.at) };
+        if *LEAK.get_or_init(|| std::env::var_os("VICTORY_LEAK_VIEWS").is_some()) {
+            return;
         }
-        let n = VIEW_UNMAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        if n % 2000 == 0 {
-            tracing::info!(unmaps = n, "xmem: view unmaps so far");
+        if !self.owned {
+            return;
         }
+        let cap = pool_cap();
+        if cap > 0 {
+            let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
+            while pool.len() >= cap {
+                let old = pool.pop_front().expect("non-empty");
+                unmap_view(old.at);
+            }
+            pool.push_back(Pooled {
+                at: self.at.Value as usize,
+                len: self.len,
+                section: self.section.clone(),
+                index: self.index,
+                n: self.n,
+            });
+            return;
+        }
+        unmap_view(self.at.Value as usize);
     }
 }
 
@@ -754,59 +925,9 @@ pub fn map_alias(to: u64, from: u64, len: u64) -> bool {
 
 /// Maps `slice` and the slices after it over `[base, base + len)`, which
 /// must lie in one placeholder.
-/// The run length of every `View::map` brought: `buckets[k]` counts runs of
-/// `k` slices (the last bucket: 7 or more). Decides whether the views can be
-/// coalesced (`docs/FINDINGS.md` 3.22): if most runs are one page, the join has
-/// to happen in `Physical`, above this call.
-static RUNS: [std::sync::atomic::AtomicU64; 8] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 8];
-
-fn note_run(n: usize) {
-    use std::sync::atomic::Ordering::Relaxed;
-    let k = n.min(7);
-    let seen = RUNS[k].fetch_add(1, Relaxed) + 1;
-    if seen % 500 == 0 {
-        let mut total = 0u64;
-        let mut parts = [0u64; 8];
-        for (i, b) in RUNS.iter().enumerate() {
-            parts[i] = b.load(Relaxed);
-            total += parts[i];
-        }
-        if total > 0 {
-        tracing::info!(
-            one = parts[1], two = parts[2], three = parts[3], four = parts[4],
-            five = parts[5], six = parts[6], seven_plus = parts[7],
-            "xmem: view run lengths (slices per map)"
-        );
-        }
-    }
-}
-
-/// Maps seen, and those whose `(section, index, len)` had been mapped before:
-/// the measure that decides whether a view cache is worth writing
-/// (`docs/FINDINGS.md` 3.21).
-pub(crate) static VIEW_MAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-pub(crate) static VIEW_REMAPS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static SEEN_RANGES: std::sync::Mutex<Option<std::collections::HashSet<(usize, usize, usize)>>> =
-    std::sync::Mutex::new(None);
-
-fn note_range(slice: &Slice, len: usize) {
-    use std::sync::atomic::Ordering::Relaxed;
-    let key = (slice.section.0 as usize, slice.index, len);
-    let mut seen = SEEN_RANGES.lock().unwrap_or_else(|e| e.into_inner());
-    let first = seen.get_or_insert_with(Default::default).insert(key);
-    if !first {
-        VIEW_REMAPS.fetch_add(1, Relaxed);
-    }
-    let n = VIEW_MAPS.fetch_add(1, Relaxed) + 1;
-    if n % 4000 == 0 {
-        let again = VIEW_REMAPS.load(Relaxed);
-        tracing::info!(maps = n, remaps = again, "xmem: ranges mapped, of them seen before");
-    }
-}
-
+/// Maps `slice` and the slices after it over `[base, base + len)`, which
+/// must lie in one placeholder.
 fn map(physical: &mut Physical, base: usize, len: usize, slice: Slice) -> bool {
-    note_range(&slice, len);
     // SAFETY: splits the placeholder around the range (failing harmlessly
     // when the range is the whole placeholder), then maps the section
     // there; both act only on placeholders.
