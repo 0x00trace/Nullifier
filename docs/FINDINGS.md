@@ -194,6 +194,25 @@ losing speed, so `launcher/profiles.json` now ships 512 MB for AMD instead of
 1024. No configuration in the sweep beat the baseline median by more than noise;
 the frame is still bounded by the costs in 2 and 3.
 
+## 3.9 With the shipped profile (512 MB card buffers), where the frame goes
+
+Averaged over every world frame of the two sweep runs for `card512`:
+
+| Phase | Run 1 (1,822 ms) | Run 2 (2,640 ms) |
+|---|---|---|
+| **copies** | **659 ms** | **840 ms** |
+| textures | 360 ms | 660 ms |
+| unexplained (waits/pacing) | 414 ms | 561 ms |
+| copying back | 97 ms | 232 ms |
+| GPU | 106 ms | 112 ms |
+
+So the ordering of targets is now: **copies → textures → the ~0.5 s of
+unexplained stall → copy-back**, with the GPU a rounding error. This is the same
+conclusion the earlier profiling reached from a different direction: bytes move
+fast (1,961 MB in 7 ms of memcpy) but the copy phase costs most of a second,
+which is coordination, not bandwidth. The unexplained block is where the submit
+thread is parked; that is the one that needs a stack sample, not a switch.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
