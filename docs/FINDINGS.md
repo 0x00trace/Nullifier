@@ -213,6 +213,27 @@ fast (1,961 MB in 7 ms of memcpy) but the copy phase costs most of a second,
 which is coordination, not bandwidth. The unexplained block is where the submit
 thread is parked; that is the one that needs a stack sample, not a switch.
 
+## 3.10 The Belobug rebase, tested (2026-11-25)
+
+Ported the DXC fallback (#174) onto Belobug's tree (`01aadd1`) — `dxc.rs`, the
+`Win32_Graphics_Direct3D_Dxc` feature, and both clamp compile sites. It builds
+and the clamp no longer fails under Wine:
+
+| Build | clamp failures | Picture | Median | GPU/frame |
+|---|---|---|---|---|
+| our `main` | 0 | correct | 0.70-0.90 | ~110 ms |
+| Belobug + DXC | **0** | **black** | 0.40 | **1,660 ms** |
+| Belobug + DXC, `AMBIENT=off HOIST_CLAMPS=0` | 0 | black | 0.55 | 821 ms |
+
+So the DXC port did its job — indirect draws are no longer dropped — but the
+tree renders **black on screen** and is **4-15x heavier on the GPU** on
+RADV than on Windows. Their additions help on Windows (3-5 fps, lit) and do not
+transfer here.
+
+**Conclusion: the rebase is a regression on Linux.** `main` stays on the AMD
+tree. The work is parked as a local branch (`mix-belobug`, commits `a16a1a5`,
+`2bfa15c`) for whoever wants to take it to Windows or NVIDIA.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
