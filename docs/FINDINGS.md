@@ -246,8 +246,15 @@ with `version mismatch 938/931`):
 | **Proton Experimental** | 0.70 | 34 | **1,493 ms** | 468 | 270 | 109 | 63 | 33 |
 
 A second run on Proton Experimental reproduced it (frame 1,441 ms, copies 418,
-textures 309), so the launcher now prefers Proton Experimental's wine for the
-wine half and keeps GE-Proton only for a newer vkd3d if one exists.
+textures 309) and a **third did not** (frame 2,072 ms, copies 401, textures 383).
+So the wine difference is **inside the +/-40 % run-to-run noise** and must not be
+quoted as a 25 % win. The launcher still prefers Proton Experimental because a
+newer ntdll is the better default, but the claim is unproven until the same
+build is measured several times each way on one scene.
+
+Current baseline on the shipped configuration (one run, for comparison only):
+frame 2,072 ms, copies 401, textures 383, copy-back 103, GPU 78, unaccounted 43,
+33 world frames, no crash and no device removal.
 
 Both stable, no removals. The newer wine is **~25 % cheaper per frame** and
 shifts nothing else, but the median did not move because the scene mix differs
