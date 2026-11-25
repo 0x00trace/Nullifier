@@ -8,29 +8,18 @@
     "Every number here was measured or taken from a test report; see docs/FORK.md,",
     "and do not add a value that has not been measured on that platform."
   ],
-
   "defaults": {
     "VICTORY_LOG": "info"
   },
-
   "profiles": [
     {
       "name": "linux-amd-16gb",
-      "match": { "os": "linux", "vendor": "amd", "vram_min_mb": 13000 },
-      "confidence": "measured",
-      "sets": {
-        "VICTORY_TEXTURE_NO_WAIT": "1",
-        "VICTORY_LATE_WAIT": "1",
-        "VICTORY_WIDE_BACK": "1",
-        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
-        "VICTORY_CARD_BUFFERS_MB": "1024"
+      "match": {
+        "os": "linux",
+        "vendor": "amd",
+        "vram_min_mb": 13000
       },
-      "note": "RX 9070 XT, Mesa 26.3.1, 0.70-0.90 fps median. Do not raise LATE_WAIT: 3 removed the device."
-    },
-    {
-      "name": "linux-amd-8gb",
-      "match": { "os": "linux", "vendor": "amd" },
-      "confidence": "extrapolated",
+      "confidence": "measured",
       "sets": {
         "VICTORY_TEXTURE_NO_WAIT": "1",
         "VICTORY_LATE_WAIT": "1",
@@ -38,11 +27,30 @@
         "VICTORY_CARD_BUFFERS_MIN_MB": "1",
         "VICTORY_CARD_BUFFERS_MB": "512"
       },
-      "note": "8-10 GB cards: 1024 MB card buffers plus their before-copies overflow the card on 12 GB (issue #417)."
+      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device."
+    },
+    {
+      "name": "linux-amd-8gb",
+      "match": {
+        "os": "linux",
+        "vendor": "amd"
+      },
+      "confidence": "measured",
+      "sets": {
+        "VICTORY_TEXTURE_NO_WAIT": "1",
+        "VICTORY_LATE_WAIT": "1",
+        "VICTORY_WIDE_BACK": "1",
+        "VICTORY_CARD_BUFFERS_MIN_MB": "1",
+        "VICTORY_CARD_BUFFERS_MB": "512"
+      },
+      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device."
     },
     {
       "name": "linux-nvidia",
-      "match": { "os": "linux", "vendor": "nvidia" },
+      "match": {
+        "os": "linux",
+        "vendor": "nvidia"
+      },
       "confidence": "reported",
       "sets": {
         "VICTORY_TEXTURE_NO_WAIT": "1",
@@ -56,7 +64,10 @@
     },
     {
       "name": "linux-other",
-      "match": { "os": "linux", "vendor": "*" },
+      "match": {
+        "os": "linux",
+        "vendor": "*"
+      },
       "confidence": "untested",
       "sets": {
         "VICTORY_TEXTURE_NO_WAIT": "1",
@@ -69,7 +80,10 @@
     },
     {
       "name": "windows-amd",
-      "match": { "os": "windows", "vendor": "amd" },
+      "match": {
+        "os": "windows",
+        "vendor": "amd"
+      },
       "confidence": "reported",
       "sets": {
         "VICTORY_LATE_WAIT": "3",
@@ -81,7 +95,10 @@
     },
     {
       "name": "windows-nvidia",
-      "match": { "os": "windows", "vendor": "nvidia" },
+      "match": {
+        "os": "windows",
+        "vendor": "nvidia"
+      },
       "confidence": "reported",
       "sets": {
         "VICTORY_RELAY": "2",
@@ -94,7 +111,10 @@
     },
     {
       "name": "windows-other",
-      "match": { "os": "windows", "vendor": "*" },
+      "match": {
+        "os": "windows",
+        "vendor": "*"
+      },
       "confidence": "untested",
       "sets": {
         "VICTORY_LATE_WAIT": "3",
@@ -105,7 +125,6 @@
       "note": "Requires a D3D12 GPU with SM 6.6 and mesh shaders."
     }
   ],
-
   "overrides": [
     {
       "name": "safe",

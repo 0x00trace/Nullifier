@@ -167,6 +167,33 @@ Windows and on NVIDIA before revisiting; the DXC fallback (#174) is still worth
 having as a safety net, because it removes a hard dependency on the Wine
 compiler accepting our HLSL.
 
+## 3.8 Overnight sweep: 42 runs, 21 configurations, two passes
+
+`tools/profile.sh`-style runs of 4 minutes each, driven into the world, recording
+median, 10th/90th percentile, n, coefficient of variation, crashes and device
+removals. Configurations that died before 15 world frames are discarded.
+
+Kept only rows with n >= 15 and no crashes/removals, and only configurations
+measured twice:
+
+| Configuration | Median | p10 | CV | Verdict |
+|---|---|---|---|---|
+| `CARD_BUFFERS_MB=512` | 0.60–0.70 | **0.30–0.40** | **0.79–0.92** | **shipped** — same speed, 3-4x better 10th percentile |
+| `JOIN_COPIES=1` | 0.68 | 0.15 | 0.89 | no steadiness gain, no speed gain |
+| `CARD_BUFFERS_MB=2048` | 0.50 | 0.15 | 1.31 | worse |
+| `LATE_WAIT=3` | 0.65 | 0.40 (one pass) | 0.94 | contradicts earlier removals; not trusted |
+| `REHASH_RUNS+WIDE_MERGE+ASK4` | 0.65 | 0.30 | 1.30 | no median gain |
+
+Rejected as invalid (n = 3–6 or 2 removals): `default` (cold cache),
+`rehash`, `rehash+wide`, `wide_merge`, `ask4`, `viewguard0`, `card0`,
+`widerefresh`, `pipewait24`. Their apparent 2.9–4.3 fps "medians" were three
+lucky frames each.
+
+**Conclusion.** Small card copies (512 MB) reduce stutter substantially without
+losing speed, so `launcher/profiles.json` now ships 512 MB for AMD instead of
+1024. No configuration in the sweep beat the baseline median by more than noise;
+the frame is still bounded by the costs in 2 and 3.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
