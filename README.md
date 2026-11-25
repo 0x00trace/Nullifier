@@ -34,7 +34,7 @@ The GPU is **4–6 % busy** and the process uses **~0.7 of one core out of 12**.
 It is not compute-bound: it is serialisation-bound under Wine, where victory's
 memory tracking (per-frame dirty-page queries) and copy/fence coordination cost
 far more wall time than on Windows. Same build, same class of card, Windows:
-2–4 fps. The roadmap in [`docs/FORK.md`](docs/FORK.md) names the fix.
+2–4 fps. The roadmap in [`docs/ROADMAP.md`](docs/ROADMAP.md) names the fix.
 
 ---
 
@@ -47,7 +47,7 @@ far more wall time than on Windows. Same build, same class of card, Windows:
 | **Windows + AMD** | works, ~1 fps | reported (RX 9070 XT; needs the pipeline skips noted in `AGENTS.md`) |
 | **Windows + NVIDIA** | works, 2–4 fps | reported (RTX 4070 / 5070 Ti) |
 | Linux + Intel | untested | profile exists, marked `untested` |
-| macOS / Apple silicon | not supported yet | needs a Metal path; see the roadmap |
+| macOS / Apple silicon | not supported yet | needs a Metal path; see [`docs/ROADMAP.md`](docs/ROADMAP.md) |
 
 Requirements: x86-64 CPU with AVX2, a D3D12 GPU with **shader model 6.6 and mesh
 shaders** (RTX 20 series+, RX 6000 series+), ~24–28 GB RAM in play, and a lot of
@@ -135,7 +135,8 @@ branches. One `main`, contributions as PRs, one idea each.
 | [`AGENTS.md`](AGENTS.md) | the rules, the merge protocol, every landmine |
 | [`docs/MIGRATION.md`](docs/MIGRATION.md) | moving your own fork's work here, PR format |
 | [`docs/AI-PROMPT.md`](docs/AI-PROMPT.md) | paste-ready prompt for your AI assistant |
-| [`docs/FORK.md`](docs/FORK.md) | measured results, platform table, roadmap |
+| [`docs/FORK.md`](docs/FORK.md) | measured results and the platform table |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | what to work on, in order |
 | [`docs/LAUNCHER.md`](docs/LAUNCHER.md) | detection, profiles, troubleshooting |
 
 House rules, short version: **no game files**; **no code from XCL** (GPL-2.0,
