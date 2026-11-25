@@ -425,6 +425,25 @@ with 256 MB card buffers, with a 4 GB texture budget, and without either. That
 leaves the group barrier in hash64 as the remaining suspect - next is the
 lane-shuffle fold.
 
+## 3.19 Texture budget 4096 MB: shipped (2026-11-25)
+
+`VICTORY_TEXTURE_BUDGET_MB=4096` caps the bytes of texture copies on the card.
+On the stable tree, two runs:
+
+| config | median | n | frame | copies | textures | copy-back | GPU | removals |
+|---|---|---|---|---|---|---|---|---|
+| before | 0.50-0.70 | 15-35 | 1,464-1,976 | 239-533 | **350-371** | 91-93 | 53-69 | 0 |
+| **+ budget 4096** | **1.00** | 13 | **1,046** | 590 | **40** | 76 | 40 | 0 |
+| + budget 4096 | 0.80 | 16 | 1,182 | - | **48** | - | - | 0 |
+
+The texture phase drops **7-9x** in both runs - far outside the +/-40 % noise -
+and the frame comes down with it. Copies rise (590) because textures are
+evicted and re-fetched, which is the trade the budget makes; the net is a
+faster, steadier frame. Shipped in the `linux-amd` profiles.
+
+This is the answer to "we run out of VRAM": 16,295 of 16,304 MB was in use, and
+the budget is what bounds it.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
