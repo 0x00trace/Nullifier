@@ -101,6 +101,51 @@ That is why the GPU idles: the title is not waiting for data, it is waiting for
 the emulator to finish bookkeeping. `VICTORY_VIEW_GUARD=0` did not help
 (0.5 fps, then a crash), so the faults are not only the view guards.
 
+## 3.6 Our card-memory passes (a second ~1 s/frame)
+
+`heap buffers N passes T ms` is not the descriptor heap: it is **our own passes
+over copies in the card's memory** (hash passes after ranges go up, compare
+passes after the lists). The code says why it is expensive: each pass walks its
+64 KiB pieces 16 bytes at a time, 4,096 steps, so a pass costs about one piece
+however few pieces it has — and one run sent up **514 ranges a frame = 514
+passes**. Measured here: **90–1,703 ms per frame**.
+
+Two switches target it:
+
+| Config | Heap pass | Median | Stable |
+|---|---|---|---|
+| default | 90–1,703 ms | 0.70–0.90 | yes |
+| `VICTORY_CARD_REHASH_RUNS=1 VICTORY_WIDE_MERGE=1` | up to 1,703 ms, then **0.0 ms** in later frames | 0.50 | **yes** (0 crashes, 0 removals, 5 min) |
+
+The passes did collapse to zero in the later frames, but the median did not
+improve, so the frame is now dominated by something else in that configuration
+(copies). Worth re-measuring on a machine where copies are cheaper.
+
+## 3.7 What upstream did about all of this (2026-11-25, `9376fd6` + `f85101b`)
+
+Two commits landed upstream after our base, self-described as "frame rate,
+processor side" and "frame rate, second night". On an RTX 4070 they measure
+**3.5–4 fps before, 6–7 with all switches, ~4.5–5 by default**. What they do,
+and how it maps onto our numbers:
+
+* **Descriptor sync**: BLAKE3 over 250,000–300,000 records cost 35–42 ms a
+  frame; a multiply-and-fold fingerprint replaces it and the pass went
+  **70–220 ms → ~3 ms**. (Not present in our tree: our descriptor code predates
+  this pass, so we have no equivalent cost to remove.)
+* **`VICTORY_ASYNC_SUBMIT=1`**: submissions prepared and sent by a thread of
+  the layer instead of the title's render thread — our "submitting thread
+  blocked 2 s/frame".
+* **`VICTORY_QUEUE2=1`**: fetches go to a copy queue — our copy/fence
+  coordination.
+* **Staging buffers and up to 512 idle host lists reused**; upload fills and
+  read-only copies no longer wait for flights.
+* **`VICTORY_PROFILE=1`**: a sampling profiler inside the layer (2,961 lines),
+  which is what we lacked because `kernel.perf_event_paranoid=2` blocks `perf`.
+
+Porting those two commits is the highest-value work available: it needs #127
+re-applied over a rewritten `indirect.rs` (11 `ByteAddressBuffer` sites), which
+conflicts in `host.rs` and `indirect.rs`.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
