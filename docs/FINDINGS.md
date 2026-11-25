@@ -336,6 +336,23 @@ Trade-off: lower internal resolution and geometry — a quality setting, not a
 free win. Shipped as `--series-s` (or `VICTORY_CONSOLE=series-s`), **not** as a
 default.
 
+## 3.15 `VICTORY_UNWATCHED_FRAMES` (heap rescan interval) - no effect here
+
+VItoriaBr's newest work reduces heap-buffer CPU overhead with a 64-frame rescan
+and cached spans; our tree already has the interval switch
+(`VICTORY_UNWATCHED_FRAMES`, `draw.rs:1430`, default 1, with a comment that 120
+once produced stale streamed geometry and crashed runs).
+
+| config | median | p10 | frame | copies | textures | heap pass |
+|---|---|---|---|---|---|---|
+| default (every frame) | 0.50-0.70 | 0.10-0.20 | 1,464-1,976 | 239-533 | 351-371 | 90-1,703 ms |
+| `UNWATCHED_FRAMES=4` | 0.70 | 0.10 | 1,446 | 409 | 156 | 254-469 ms |
+
+Inside the noise floor either way, and the heap pass is still 0.25-0.5 s: most
+of its shadows are write-watched, so the interval only touches a minority. The
+win in VItoriaBr must be in the *other* half - cached spans and fewer COM checks
+- not in the interval.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
