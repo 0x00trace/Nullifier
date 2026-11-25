@@ -521,8 +521,15 @@ pub(crate) static VIEW_UNMAPS: std::sync::atomic::AtomicU64 =
 impl Drop for View {
     fn drop(&mut self) {
         use windows_sys::Win32::System::Memory::UnmapViewOfFile;
-        // SAFETY: our view.
-        unsafe { UnmapViewOfFile(self.at) };
+        // Experiment (`VICTORY_LEAK_VIEWS=1`): keep the mapping instead of
+        // paying wineserver's list scan (is_valid_view_addr, 28 % of the CPU).
+        // Leaks address space, so it is a measurement, not a fix.
+        static LEAK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let leak = *LEAK.get_or_init(|| std::env::var_os("VICTORY_LEAK_VIEWS").is_some());
+        if !leak {
+            // SAFETY: our view.
+            unsafe { UnmapViewOfFile(self.at) };
+        }
         let n = VIEW_UNMAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
         if n % 2000 == 0 {
             tracing::info!(unmaps = n, "xmem: view unmaps so far");

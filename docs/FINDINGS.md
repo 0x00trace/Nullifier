@@ -508,6 +508,30 @@ wineserver list scan each way. **That is the hot path to cache**: keep the
 `View` on the `Slice`/`Physical` and hand it out again while the section lives,
 instead of map/unmap per use.
 
+## 3.23 Keeping views alive makes it WORSE - the cache plan is wrong
+
+`VICTORY_LEAK_VIEWS=1` skips `UnmapViewOfFile` (the mapping leaks, which is fine
+for a four-minute measurement) to see what the unmaps cost:
+
+| config | median | n | frame | copies | removals |
+|---|---|---|---|---|---|
+| budget, normal | 0.80-1.00 | 13-16 | 1,046-1,182 | 590 | 0 |
+| budget + leak views | **0.40** | 16 | **2,716** | 1,115 | 0 |
+
+**Twice as slow.** That overturns 3.21/3.22's plan: `is_valid_view_addr` walks a
+*list*, so keeping views alive makes the list longer and every remaining scan
+slower. Caching views would have shipped a regression.
+
+What this means: the cost scales with the number of live views and the number of
+scans. The fixes that can work are therefore the opposite of caching:
+
+1. **Fewer views**, not longer-lived ones - map larger ranges per view (a whole
+   window instead of a page run), so both the list and the scans shrink.
+2. **No views at all** where possible: committed memory plus a copy, which never
+   enters the server's view table.
+3. **Patch Wine** (#340's view tree): turns the scan into a lookup, which would
+   make both the live count and the scan count stop mattering.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
