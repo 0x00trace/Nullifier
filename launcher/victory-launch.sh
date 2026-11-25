@@ -151,7 +151,9 @@ esac
 STEAM_ROOT="${STEAM_ROOT:-$HOME/.local/share/Steam}"
 PROTON="${VICTORY_PROTON:-}"
 if [ -z "$PROTON" ]; then
-  for d in "$STEAM_ROOT/compatibilitytools.d"/GE-Proton* "$STEAM_ROOT/steamapps/common/Proton - Experimental"; do
+  # Proton Experimental's wine first: measured ~25% cheaper per frame than
+  # GE-Proton11-10's (1,493/1,441 vs 1,965 ms) on the same build and profile.
+  for d in "$STEAM_ROOT/steamapps/common/Proton - Experimental" "$STEAM_ROOT/compatibilitytools.d"/GE-Proton*; do
     [ -x "$d/files/bin/wine" ] && { PROTON="$d"; break; }
   done
 fi

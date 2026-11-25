@@ -245,6 +245,10 @@ with `version mismatch 938/931`):
 | GE-Proton11-10 | 0.50–0.70 | 74 | 1,965 ms | 695 | 328 | 62 | 141 | 44 |
 | **Proton Experimental** | 0.70 | 34 | **1,493 ms** | 468 | 270 | 109 | 63 | 33 |
 
+A second run on Proton Experimental reproduced it (frame 1,441 ms, copies 418,
+textures 309), so the launcher now prefers Proton Experimental's wine for the
+wine half and keeps GE-Proton only for a newer vkd3d if one exists.
+
 Both stable, no removals. The newer wine is **~25 % cheaper per frame** and
 shifts nothing else, but the median did not move because the scene mix differs
 between runs. Worth a second run before changing the launcher's default; if it
