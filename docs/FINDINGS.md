@@ -353,6 +353,20 @@ of its shadows are write-watched, so the interval only touches a minority. The
 win in VItoriaBr must be in the *other* half - cached spans and fewer COM checks
 - not in the interval.
 
+## 3.16 Wider hash loads in the card compare - tried, reverted
+
+Port idea from VItoriaBr #33 (64 threads per 64 KiB piece). First step tried
+here was smaller: keep one thread per piece but issue four 16-byte loads at a
+time (64 bytes an iteration) so the fold is identical and only the load
+latency overlaps.
+
+Build fine, but the run produced **2 device removals and 4 world frames**, with
+`heap buffers` at 150-767 ms. That is a failed run, not a measurement, so the
+change was reverted and nothing was merged. Next attempt should take the whole
+of #33 (64 threads per piece, lane fold, dispatch widened) rather than half of
+it - the parallelism has to come from the group, not from unrolling inside one
+thread that is already the only thing walking the piece.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
