@@ -138,6 +138,7 @@ branches. One `main`, contributions as PRs, one idea each.
 | Read | For |
 |---|---|
 | **[`docs/ONBOARD.md`](docs/ONBOARD.md)** | **start here: fresh install, or bringing your existing fork across** |
+| [`docs/STRATEGY.md`](docs/STRATEGY.md) | where the base comes from, and how contributors work during and after a rebase |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | the short version of the rules |
 | [`AGENTS.md`](AGENTS.md) | the rules, the merge protocol, every landmine |
 | [`docs/MIGRATION.md`](docs/MIGRATION.md) | moving your own fork's work here, PR format |

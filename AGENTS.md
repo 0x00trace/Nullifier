@@ -11,7 +11,8 @@ produce symptoms that look like *unrelated* bugs. The evidence behind each one
 is in [`docs/FINDINGS.md`](docs/FINDINGS.md); read that before re-deriving
 anything.
 
-New here, or moving work over from another fork? Do
+Where the base comes from, and how work crosses between forks, is
+[`docs/STRATEGY.md`](docs/STRATEGY.md). New here, or moving work over from another fork? Do
 [`docs/ONBOARD.md`](docs/ONBOARD.md) first — it triages which situation you are
 in before you touch anything.
 
