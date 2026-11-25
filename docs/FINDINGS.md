@@ -473,6 +473,24 @@ plain committed memory with a copy where a view is only an addressing trick.
 This also matches `docs/LAUNCHER.md`'s note from victory-fork #340 about a
 "wineserver view-tree patch": someone already identified this.
 
+## 3.21 How often: ~500 view unmaps a frame
+
+Counter on `View::drop` (`xmem.rs`): the title's window views are unmapped at
+**~350-400 a second** measured (`unmaps=36000 -> 42000` in 6 s), which at
+0.5-0.7 fps is **~500-800 unmaps per frame**. Each one makes wineserver walk
+its view list (`is_valid_view_addr`, 28 % of the CPU; `req_unmap_view`, 15 %).
+
+That is the frame's missing second, and it is not in our process.
+
+Fixes, in order of effort:
+
+1. **Keep views alive.** A view that is dropped and remapped for the same range
+   is pure loss; caching it removes the round trip.
+2. **Batch.** Unmap many ranges in one call (the server's scan is per call, not
+   per range), if the runtime exposes it.
+3. **Patch Wine** with the view-tree lookup from victory-fork #340, which turns
+   the scan into a tree walk. Helps every title, not just this one.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |

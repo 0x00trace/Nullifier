@@ -512,11 +512,21 @@ impl View {
     }
 }
 
+/// Views unmapped since the start: each one costs wineserver a linear scan
+/// (`is_valid_view_addr`, 28 % of the CPU in the first real profile), so the
+/// rate is the number to watch (`docs/FINDINGS.md` 3.20).
+pub(crate) static VIEW_UNMAPS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 impl Drop for View {
     fn drop(&mut self) {
         use windows_sys::Win32::System::Memory::UnmapViewOfFile;
         // SAFETY: our view.
         unsafe { UnmapViewOfFile(self.at) };
+        let n = VIEW_UNMAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        if n % 2000 == 0 {
+            tracing::info!(unmaps = n, "xmem: view unmaps so far");
+        }
     }
 }
 
