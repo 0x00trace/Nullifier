@@ -88,6 +88,24 @@ buffers used in place. Completing it is the rewrite.
   vkd3d-proton, not to victory. That is the first thing to verify — a one-day
   spike, before any rewrite.
 
+## Milestone 0 result (2026-11-25): both sides have the mechanism
+
+```
+vkd3d-proton d3d12core.dll:
+  "Attempting to import host memory, but VK_EXT_external_memory_host is not supported. Falling back."
+  "VK_EXT_external_memory_host"
+  "Cannot get heap properties for reserved resources."
+RADV (Mesa 26.3.1):
+  VK_EXT_external_memory_host  : extension revision 1
+```
+
+So vkd3d-proton **does** import host memory when the driver offers the extension,
+and RADV offers it. The spike is therefore not "does it exist" but "which D3D12
+call makes vkd3d-proton import title memory instead of allocating its own" —
+the fallback message and `CreateHeap1`/reserved-resource strings are the thread
+to pull. That is the next half-day: read vkd3d-proton's memory path, find the
+trigger, and prove it with a triangle drawn from imported bytes.
+
 ## Milestones
 
 | # | Deliverable | Gate |
