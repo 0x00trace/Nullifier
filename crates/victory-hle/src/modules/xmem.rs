@@ -486,6 +486,7 @@ impl View {
     /// Maps `n` slices from `slice` on.
     fn map(slice: &Slice, n: usize) -> Option<View> {
         use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
+        note_run(n);
         let (offset, len) = ((slice.index * PAGE) as u64, n * PAGE);
         // SAFETY: slices of a section we own; the view is ours until dropped.
         let at = unsafe {
@@ -753,6 +754,34 @@ pub fn map_alias(to: u64, from: u64, len: u64) -> bool {
 
 /// Maps `slice` and the slices after it over `[base, base + len)`, which
 /// must lie in one placeholder.
+/// The run length of every `View::map` brought: `buckets[k]` counts runs of
+/// `k` slices (the last bucket: 7 or more). Decides whether the views can be
+/// coalesced (`docs/FINDINGS.md` 3.22): if most runs are one page, the join has
+/// to happen in `Physical`, above this call.
+static RUNS: [std::sync::atomic::AtomicU64; 8] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 8];
+
+fn note_run(n: usize) {
+    use std::sync::atomic::Ordering::Relaxed;
+    let k = n.min(7);
+    let seen = RUNS[k].fetch_add(1, Relaxed) + 1;
+    if seen % 500 == 0 {
+        let mut total = 0u64;
+        let mut parts = [0u64; 8];
+        for (i, b) in RUNS.iter().enumerate() {
+            parts[i] = b.load(Relaxed);
+            total += parts[i];
+        }
+        if total > 0 {
+        tracing::info!(
+            one = parts[1], two = parts[2], three = parts[3], four = parts[4],
+            five = parts[5], six = parts[6], seven_plus = parts[7],
+            "xmem: view run lengths (slices per map)"
+        );
+        }
+    }
+}
+
 /// Maps seen, and those whose `(section, index, len)` had been mapped before:
 /// the measure that decides whether a view cache is worth writing
 /// (`docs/FINDINGS.md` 3.21).

@@ -537,6 +537,26 @@ scans. The fixes that can work are therefore the opposite of caching:
 3. **Patch Wine** (#340's view tree): turns the scan into a lookup, which would
    make both the live count and the scan count stop mattering.
 
+## 3.24 Ninety percent of view maps are ONE page
+
+Histogram of `n` in `View::map` over a run (`xmem: view run lengths`):
+
+| slices per map | count | share |
+|---|---|---|
+| **1** | **25,500** | **~90 %** |
+| 2 | 2,285 | 8 % |
+| 4 | 700 | 2.5 % |
+| 3 / 5 / 6+ | 63 | <1 % |
+
+So the title's memory is touched one page at a time and each touch costs a
+map/unmap pair with a wineserver list scan. That is the 350-400 unmaps a second.
+
+The fix follows from the number, and it is *not* a cache of indefinitely many
+views (3.23 proved a longer list is worse). It is **one larger mapping per
+request**: when a single slice is asked for, map the 16 slices (64 KiB) that
+contain it, provided the section holds them, and hand out the page inside. The
+view count drops 16x, the list stays short, and every scan gets cheaper.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
