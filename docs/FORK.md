@@ -70,6 +70,33 @@ Experimental's vkd3d-proton), Series X profile, 2560×1440, 30 GB RAM
 Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 `RELAY=2` (0.40).
 
+### RTX 5080 (16 GB), NVIDIA 620.73.04, Arch, Proton Experimental 11.0-20261112
+(wine 11.0, vkd3d-proton build 5742), `linux-nvidia` profile, 3840×2160
+
+`tools/bench.sh`, three runs each, medians of world frames in run order.
+
+| Build | Settings | Median | n | Device removals | Picture |
+|---|---|---|---|---|---|
+| `main` @ `3c34f8f` | profile | 0.60 / 1.00 / 0.95 | 9 / 12 / 8 | 0 | none taken: every run ended 17–20 s into the world |
+| + raw reads made again when refused (`a0d014d`) | profile | 1.30 / 0.95 / 1.35 | 39 / 38 / 12 | 0 | world renders (captures of 2.0 and 1.5 MB); some faces black, some frames black |
+
+* **Before:** each run ended on a breakpoint of the title's own
+  (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
+  `dstorage: request failed: copying … hr=0x800703e6`: the kernel would not
+  write a raw read's destination, because a copy had guarded the block again
+  between the opening and the read. Under 20 world frames, so these are not
+  bench rows; they are what the change is measured against.
+* **After:** no request failed in three runs. Five reads were refused and
+  each landed on the second try. Runs 1 and 2 lasted the 300 s window.
+* **Run 3 ended after 134 s** on `unhandled exception 0x80000001` in
+  `victory_try_copy_op` (`copy_mapped` under `Shadow::update`, the submit
+  path): the guarded copy's handler takes access violations and in-page
+  errors, not guard-page violations. No read had been refused in that run.
+  Open.
+* Every run logs `no host pipeline library: pipelines are not kept`: the
+  host refuses even an empty library here, so each run makes its pipelines
+  again and drops hundreds to thousands of draws a frame meanwhile.
+
 ### The texture ask (P0 probe, 2026-11-25)
 
 ~10,000 textures are asked whether they changed, every frame, at ~0.1 ms each:
