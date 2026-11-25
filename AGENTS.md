@@ -9,6 +9,10 @@ this fork.
 Read all of it. Most of the traps below cost hours to find, and several of them
 produce symptoms that look like *unrelated* bugs.
 
+New here, or moving work over from another fork? Do
+[`docs/ONBOARD.md`](docs/ONBOARD.md) first — it triages which situation you are
+in before you touch anything.
+
 ---
 
 ## 0. Absolute rules

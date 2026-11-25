@@ -64,12 +64,17 @@ handles that.
 git clone git@github.com:iNiKKo/victory-universal.git
 cd victory-universal
 
-# one-time: a Rust toolchain that can build the Windows target
-# (rustup with the pinned toolchain, plus cargo-xwin, clang and lld)
+./tools/setup.sh --game /path/to/game   # toolchain, build, detect, run
+```
+
+`tools/setup.sh` needs no sudo and is idempotent: it installs a private Rust
+toolchain into `~/.local/victory-toolchain` if you have none, adds
+`cargo-xwin`, builds, and prints the profile it picked. Prefer doing it by hand?
+
+```bash
 cargo xwin build --profile diag -p victory --features diagnostics \
   --target x86_64-pc-windows-msvc
-
-./launcher/victory-launch.sh --detect            # what it found, and why
+./launcher/victory-launch.sh --detect
 ./launcher/victory-launch.sh --game /path/to/game
 ```
 
@@ -132,6 +137,8 @@ branches. One `main`, contributions as PRs, one idea each.
 
 | Read | For |
 |---|---|
+| **[`docs/ONBOARD.md`](docs/ONBOARD.md)** | **start here: fresh install, or bringing your existing fork across** |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | the short version of the rules |
 | [`AGENTS.md`](AGENTS.md) | the rules, the merge protocol, every landmine |
 | [`docs/MIGRATION.md`](docs/MIGRATION.md) | moving your own fork's work here, PR format |
 | [`docs/AI-PROMPT.md`](docs/AI-PROMPT.md) | paste-ready prompt for your AI assistant |

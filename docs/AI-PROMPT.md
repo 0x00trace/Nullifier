@@ -14,7 +14,18 @@ it. "Universal" means one main branch that runs on AMD and NVIDIA, on Linux and
 Windows; the per-platform differences are chosen at launch from
 launcher/profiles.json, NOT by keeping separate branches.
 
+BEFORE ANYTHING ELSE - TRIAGE (docs/ONBOARD.md)
+  Run the three checks in "Triage" there, then state which path applies:
+    A. fresh start      -> ./tools/setup.sh, then bench a baseline
+    B. existing work     -> docs/ONBOARD.md section B + docs/MIGRATION.md.
+                            Never merge their branch, never delete their tree,
+                            port one commit per PR.
+    C. findings only     -> open an issue with the template.
+  If you cannot tell which one it is, ask the user. Do not guess, do not start
+  editing, and do not touch a tree that is not this clone.
+
 READ FIRST, COMPLETELY, BEFORE RUNNING ANY COMMAND
+  0. docs/ONBOARD.md        - triage, and the path for your situation
   1. AGENTS.md              - rules, build, measurement, merge protocol, landmines
   2. docs/LAUNCHER.md       - how settings are chosen and how to add a profile
   3. docs/MIGRATION.md      - how to port work from another fork, PR format
