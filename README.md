@@ -1,3 +1,8 @@
+> **This is the universal fork** (AMD/NVIDIA, Linux/Windows).
+> Start here: [`docs/FORK.md`](docs/FORK.md) for status and measured numbers,
+> [`docs/LAUNCHER.md`](docs/LAUNCHER.md) to run it, [`AGENTS.md`](AGENTS.md) to
+> contribute. The text below is upstream's, unchanged.
+
 # VIctory fork (work in progress)
 
 ## victory-amd
