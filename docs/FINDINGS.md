@@ -72,6 +72,32 @@ coordination, not the ask.
 `VICTORY_NO_WRITEWATCH=1` (diagnostic) forces the guard path so the two
 mechanisms can be measured apart.
 
+## 3.5 The real cost is page faults and per-object calls, not I/O
+
+Measured on the live title for 20 s in the world (`tools/profile.sh`):
+
+| | |
+|---|---|
+| minor page faults | **424,119 in 20 s ≈ 21,000/s** |
+| major page faults | 305 (≈15/s) |
+| disk read during the window | effectively zero |
+| GPU | 4–6 % busy |
+| CPU | ~0.7 of one core |
+
+So the "slow asset loading" is not the NVMe and not RAM bandwidth: assets are
+already resident, and the disk is idle while the frame is slow. The cost is
+**per-operation overhead inside the emulation layer**:
+
+* ~21,000 page faults a second — every guarded write traps into Wine's
+  exception dispatcher, which costs far more than the write;
+* ~10,000 texture bookkeeping calls a frame, each ~0.1 ms under Wine;
+* 6–16 GB a frame of texture memory re-detiled, because a texture with any
+  changed page is copied whole.
+
+That is why the GPU idles: the title is not waiting for data, it is waiting for
+the emulator to finish bookkeeping. `VICTORY_VIEW_GUARD=0` did not help
+(0.5 fps, then a crash), so the faults are not only the view guards.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
