@@ -286,6 +286,26 @@ unaccounted slice both move in the same direction. A single-run "win" of less
 than 40 % means nothing. A truly deterministic harness needs a fixed save plus
 an exact input replay, which is the next infrastructure item.
 
+## 3.13 Guards are not the second (correction)
+
+`VICTORY_VIEW_GUARD=0 VICTORY_TEXTURE_GUARD=0` was expected to test the fault
+theory: ~21,000 guarded writes a second at Wine's exception cost should be ~1 s
+of every second, so removing the guards should have been a large win.
+
+| config | frame | fps |
+|---|---|---|
+| guards on (3.12 baseline A/B) | 1,464-1,976 ms | 0.50-0.70 |
+| **both guards off** | **1,358 ms** | **0.70** |
+
+No material change, well inside the noise floor. So the "960 ms asking the
+write watch and the guards" line does **not** translate into 960 ms of
+reclaimable time: the cost is in the calls themselves (as copies 27 % /
+textures 19 % of the frame say), not in the traps. The fault count is a
+symptom of how many objects are touched, not the price of each.
+
+This also means the next change must reduce the **number of calls or their
+per-call cost**, not the fault mechanism.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
