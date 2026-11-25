@@ -436,7 +436,12 @@ On the stable tree, two runs:
 | **+ budget 4096** | **1.00** | 13 | **1,046** | 590 | **40** | 76 | 40 | 0 |
 | + budget 4096 | 0.80 | 16 | 1,182 | - | **48** | - | - | 0 |
 
-The texture phase drops **7-9x** in both runs - far outside the +/-40 % noise -
+Third run of the shipped profile (budget applied by `profiles.json`, default
+everything else): **median 1.00, n=15, frame 1,024 ms, copies 277, textures 43.7,
+no removals** - the change now has the three clean runs the rule asks for
+(1.00 / 0.80 / 1.00).
+
+The texture phase drops **7-9x** in every run - far outside the +/-40 % noise -
 and the frame comes down with it. Copies rise (590) because textures are
 evicted and re-fetched, which is the trade the budget makes; the net is a
 faster, steadier frame. Shipped in the `linux-amd` profiles.
