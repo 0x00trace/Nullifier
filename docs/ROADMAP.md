@@ -46,6 +46,32 @@ can be measured apart.
 **Done when:** ask time is down an order of magnitude *and* a 5-minute run has
 no guard-page exception and no device removal.
 
+### P0b — page-granular texture refresh (the biggest safe win)
+
+Today `Staging::refresh_timed` (`crates/victory-gpu/src/texture.rs:646`) decides
+*whether* a texture changed, then copies and detiles **all of it**
+(`detile`, `texture.rs:891`). One dirty 4 KiB page in a 16 MB texture therefore
+costs 16 MB of detiling; a world frame re-detiles 6–16 GB.
+
+The kernel already returns the changed page list (`watch::writes`), so the
+information exists and is discarded. What is missing is the inverse mapping
+*page → tiles/blocks → staging offsets*, which the console's tiling already
+defines:
+
+* block dimensions and swizzle: `crates/victory-formats/src/texture.rs`
+  (block size in bytes, mip placement, mip tails)
+* subresource splits: `Staging::part` / `subresource` (`texture.rs:623`)
+
+Plan: for each changed page, compute the blocks it covers, detile only those
+blocks into their staging positions, and leave the rest of the buffer alone.
+Fall back to the whole-texture path when the layout is not one this mapping
+covers (linear, films, anything unusual).
+
+This cannot stale a texture — it only ever copies *more precisely* what the
+current code copies wholesale — which is why it is rated safer than any
+throttling scheme. **Done when:** a frame's refreshed MB drops by an order of
+magnitude at the same picture, and the median improves.
+
 ## P1 — Copy / fence coordination
 
 The submitting thread spends ~2 s per frame *between* submissions running only
