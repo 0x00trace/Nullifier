@@ -142,9 +142,30 @@ and how it maps onto our numbers:
 * **`VICTORY_PROFILE=1`**: a sampling profiler inside the layer (2,961 lines),
   which is what we lacked because `kernel.perf_event_paranoid=2` blocks `perf`.
 
-Porting those two commits is the highest-value work available: it needs #127
-re-applied over a rewritten `indirect.rs` (11 `ByteAddressBuffer` sites), which
-conflicts in `host.rs` and `indirect.rs`.
+### Tested, and it does not help us (2026-11-25)
+
+Built `f85101b` as our tree would need it: upstream + **PR #174** (compile the
+internal HLSL with DXC when Wine's `d3dcompiler_47` refuses it) instead of
+rewriting 11 `ByteAddressBuffer` sites by hand. DXC 1.9.2609 x64, `VICTORY_DXC`
+set. The conflict is one file (`indirect.rs`): keep upstream's
+`make_from(device, source)` and compile through `host::compile`, which falls
+back to DXC.
+
+| Config | Median | n | Crashes/removals | Frame |
+|---|---|---|---|---|
+| `f85101b` + #174, defaults | 0.60 | 45 | 0 / 0 | 823 ms best |
+| same + `ASYNC_SUBMIT=1 QUEUE2=1` | **0.50** | 40 | 0 / 0 | GPU 1,304 ms, copy-back 1,305 ms |
+| our `main` | **0.70–0.90** | 20–43 | 0 / 0 | — |
+
+The clamp failures are gone under DXC (0 occurrences), so the DXC path works —
+but the new upstream switches are **slower on RADV/Wine here**, not faster: the
+copy queue serialises with a 1.3 s GPU time. Upstream's 6–7 fps on an RTX 4070
+does not transfer to this platform.
+
+**Conclusion: do not take `9376fd6`/`f85101b` on Linux/AMD yet.** Re-test on
+Windows and on NVIDIA before revisiting; the DXC fallback (#174) is still worth
+having as a safety net, because it removes a hard dependency on the Wine
+compiler accepting our HLSL.
 
 ## 4. Switch matrix (same build, same scene class)
 
