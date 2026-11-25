@@ -145,6 +145,7 @@ branches. One `main`, contributions as PRs, one idea each.
 | [`docs/AI-PROMPT.md`](docs/AI-PROMPT.md) | paste-ready prompt for your AI assistant |
 | [`docs/FINDINGS.md`](docs/FINDINGS.md) | every established cause, with the evidence behind it |
 | [`docs/FORK.md`](docs/FORK.md) | measured results and the platform table |
+| [`docs/PIPELINE.md`](docs/PIPELINE.md) | how a frame is assembled, what each stage costs, what to fix |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | what to work on, in order |
 | [`docs/LAUNCHER.md`](docs/LAUNCHER.md) | detection, profiles, troubleshooting |
 
