@@ -33,6 +33,8 @@ Options, roughly in order of payoff:
 | `VICTORY_TEXTURE_ASK_EVERY=4` | **145 ms** | ~1.0 s | 0.7 (n=11) | no — `0x80000001` guard page |
 | `ASK_EVERY=2`, `LATE_WAIT=1` | — | — | 2.30 (n=4) | no — 2 device removals |
 | `ASK_EVERY=2`, `--safe` | 203 ms | 2.4 s | 0.40 | yes |
+| `ASK_EVERY=4`, write-watched only | 330 ms | 1.9 s | 0.70 (n=4) | no — 2 removals |
+| `ASK_EVERY=4`, write-watched only, `--safe` | 330 ms | 1.9 s | 0.50 | yes |
 
 So the ask is ~1 s of every frame and the throttle removes it. What is left is
 correctness: delaying the ask also delays the *guard reset*, and the process

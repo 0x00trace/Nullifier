@@ -77,6 +77,10 @@ struct Last {
     /// The frame whose check last asked the kernel/guard for this texture
     /// (`VICTORY_TEXTURE_ASK_EVERY`).
     asked_frame: u64,
+    /// Whether this texture's memory is write-watched (`Some(true)`): only
+    /// those asks walk page tables, so only those are throttled. Guarded
+    /// memory must be polled every frame or its guard state leaks.
+    watched: Option<bool>,
 }
 
 // SAFETY: the staging mapping is written only at submission, under
@@ -653,9 +657,10 @@ impl Staging {
         let last = &mut *last;
         // Asking costs ~0.1 ms per texture under Wine and the world holds about
         // ten thousand of them, so the world spent ~1 s a frame asking
-        // (docs/ROADMAP.md P0). Ask each texture every Nth frame instead: the
-        // kernel and the guards accumulate writes meanwhile, so a texture lags
-        // at most N-1 frames and nothing is lost.
+        // (docs/ROADMAP.md P0). Only the successful `GetWriteWatch` calls walk
+        // page tables; a texture in guarded view memory fails fast and must be
+        // polled every frame (delaying that leaks guard state and the process
+        // dies with 0x80000001). So throttle write-watched textures only.
         static ASK_EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
         let every = *ASK_EVERY.get_or_init(|| {
             std::env::var("VICTORY_TEXTURE_ASK_EVERY")
@@ -664,14 +669,18 @@ impl Staging {
                 .filter(|&n| n >= 1)
                 .unwrap_or(1)
         });
-        if every > 1 {
-            let frame = crate::frame::current();
-            if last.asked_frame != 0 && frame.wrapping_sub(last.asked_frame) < every {
-                return 0;
-            }
+        let frame = crate::frame::current();
+        if every > 1 && last.watched == Some(true) && last.asked_frame != 0
+            && frame.wrapping_sub(last.asked_frame) < every
+        {
+            return 0;
+        }
+        if frame != 0 {
             last.asked_frame = frame;
         }
-        if let Some((now, written)) = waited(1, || crate::watch::writes(start, start + size, false)) {
+        let asked = waited(1, || crate::watch::writes(start, start + size, false));
+        last.watched = Some(asked.is_some());
+        if let Some((now, written)) = asked {
             if last.asked != 0 && written.iter().all(|&(_, w)| w <= last.asked) {
                 return 0;
             }

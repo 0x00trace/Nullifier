@@ -53,11 +53,21 @@ under Wine that is ~1.1 s.
 | `VICTORY_TEXTURE_ASK_EVERY=4` | **145 ms** | ~1.0 s | 0.70 (n=11) | **no** — `0x80000001` guard page |
 | `ASK_EVERY=2` + `LATE_WAIT=1` | — | — | **2.30** (n=4) | **no** — 2 device removals |
 | `ASK_EVERY=2` + `--safe` | 203 ms | 2.4 s | 0.40 | yes |
+| `ASK_EVERY=4`, write-watched only | 330 ms | 1.9 s | 0.70 (n=4) | no — 2 removals |
+| `ASK_EVERY=4`, write-watched only, `--safe` | 330 ms | 1.9 s | 0.50 | yes |
 
-The throttle works (ask 7× cheaper) but delaying the ask also delays the
-**guard reset**, and the process then dies with a guard-page violation. The
-narrow next step is to reset guards every frame while copying less often, or
-throttle only the `GetWriteWatch` path.
+The throttle works (ask up to 7× cheaper). Two things were learned refining it:
+
+1. Throttling *all* textures delays the **guard reset** and the process dies with
+   `0x80000001`. Guarded (view) memory must be polled every frame.
+2. Throttling only textures whose memory is write-watched (`watched == Some(true)`)
+   removes the crash and still cuts the ask 1075 → 330 ms, because only the
+   successful `GetWriteWatch` calls walk page tables; guarded ones fail fast.
+
+What is left is not the ask but stability of the fast path: with `LATE_WAIT=1`
+the runs still end in device removals, and `--safe` (no send-ahead) is stable
+but pays it back in copy time. The next target is therefore the copy/fence
+coordination, not the ask.
 
 `VICTORY_NO_WRITEWATCH=1` (diagnostic) forces the guard path so the two
 mechanisms can be measured apart.
