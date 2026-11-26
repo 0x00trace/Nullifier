@@ -226,6 +226,34 @@ pub(crate) fn wrote(at: usize, len: usize) {
     }
 }
 
+/// We wrote the 64 KiB page numbered `page` of title memory through a
+/// view of our own (`crate::inplace::write_own`): no guard was opened and
+/// no kernel write-watch bit set, so the journal is told here. The page,
+/// and the same physical page at its other title addresses (`others`,
+/// page numbers), count as written at a new asking, which every host copy
+/// that holds them takes at its next refresh. Returns the asking that had
+/// last found `page` written (0: never) and the new one, for the copy
+/// that wrote to note itself current.
+pub(crate) fn wrote_own(page: usize, others: &[usize]) -> (u64, u64) {
+    let mut j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+    let j = &mut *j;
+    j.asked += 1;
+    let now = j.asked;
+    // An asking that stands for a submission moves with it: a copy taking
+    // the page at the standing asking would find it written "later" at
+    // every refresh until that asking ends.
+    if j.kept || !j.ahead.is_empty() {
+        j.ahead_asked = now;
+    }
+    let before = j.written.insert(page, now).unwrap_or(0);
+    for &other in others {
+        if other != page {
+            j.written.insert(other, now);
+        }
+    }
+    (before, now)
+}
+
 /// One kernel asking for `pieces` (page ranges in order); by halves if it
 /// fails, as a run across two reservations or into memory that is not
 /// write-watched does. A piece alone is left to [`writes`].
@@ -411,6 +439,12 @@ static GUARDS: Mutex<Guards> = Mutex::new(Guards {
 
 fn guards() -> std::sync::MutexGuard<'static, Guards> {
     GUARDS.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Whether the 64 KiB page numbered `page` is guarded and not written
+/// since a copy took it (for `VICTORY_BACK_OWN_CHECK=1`).
+pub(crate) fn clean(page: usize) -> bool {
+    guards().clean.contains(&page)
 }
 
 /// For view memory: the pages of `[start, end)`'s blocks written since
@@ -1057,6 +1091,23 @@ mod tests {
             )
         };
         title_memory_remapped(view, 2 * BLOCK);
+    }
+
+    /// A store through a view of our own is in the journal as a write of
+    /// the page and of its other views, at an asking of its own.
+    #[test]
+    fn a_store_through_our_own_view_is_in_the_journal() {
+        let (page, other) = (0x7b_0000_0000usize / PAGE, 0x7b_4000_0000usize / PAGE);
+        let (before, first) = wrote_own(page, &[other, page]);
+        assert_eq!(before, 0);
+        let (before, second) = wrote_own(page, &[other]);
+        assert_eq!(before, first);
+        assert!(second > first);
+        let j = JOURNAL.lock().unwrap();
+        assert_eq!(
+            (j.written.get(&page), j.written.get(&other)),
+            (Some(&second), Some(&second))
+        );
     }
 
     #[test]
