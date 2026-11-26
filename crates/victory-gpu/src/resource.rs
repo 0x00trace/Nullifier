@@ -383,7 +383,7 @@ pub(crate) fn twin(this: This) -> Option<std::sync::Arc<Twin>> {
     if this.is_null() {
         return None;
     }
-    hosted(this, true).and_then(|made| made.1)
+    with_hosted(this, true, |(_, twin)| twin.clone()).flatten()
 }
 
 /// The twin's texture, for the unordered access views of `this`.
@@ -394,10 +394,12 @@ pub(crate) fn twin_resource<'a>(
     if this.is_null() {
         return None;
     }
-    let (_, twin) = hosted(this, true)?;
+    let twin = with_hosted(this, true, |(_, twin)| {
+        twin.as_ref().map(|t| std::ptr::from_ref(&t.colour.texture))
+    })??;
     // SAFETY: as in `host_resource`: the twin lives as long as the host
     // copy, which a depth texture keeps until the title releases it.
-    twin.map(|t| unsafe { &*std::ptr::from_ref(&t.colour.texture) })
+    Some(unsafe { &*twin })
 }
 
 /// The texture of the twin of the depth plane of `this`, a depth texture
@@ -409,12 +411,12 @@ pub(crate) fn twin_plane_resource<'a>(
     if this.is_null() {
         return None;
     }
-    let (_, twin) = hosted(this, true)?;
-    let twin = twin?;
+    let plane = with_hosted(this, true, |(_, twin)| {
+        let plane = twin.as_ref()?.plane.as_ref()?;
+        Some(std::ptr::from_ref(&plane.texture))
+    })??;
     // SAFETY: as in `twin_resource`.
-    twin.plane
-        .as_ref()
-        .map(|p| unsafe { &*std::ptr::from_ref(&p.texture) })
+    Some(unsafe { &*plane })
 }
 
 /// The colour twin for a texture described by `desc` whose host copy is
@@ -1142,12 +1144,12 @@ type Made = (std::sync::Arc<HostTexture>, Option<std::sync::Arc<Twin>>);
 struct Hosted {
     /// The host copy (and twin) once made. Taken out again only by
     /// [`let_go_idle`] and when the title releases the resource.
-    made: std::sync::Mutex<Option<Made>>,
+    made: std::sync::RwLock<Option<Made>>,
     /// The state and clear value the title created the texture with.
     state: u32,
     clear: Option<[u32; 5]>,
     /// When the host copy was last asked for (`crate::host::moment`),
-    /// written under `made`'s lock.
+    /// written under `made`'s lock (as a reader of it at least).
     used: std::sync::atomic::AtomicU64,
     /// The host refused to make it: not tried again.
     refused: std::sync::atomic::AtomicBool,
@@ -1285,21 +1287,52 @@ pub(crate) fn host_waits(this: This) -> bool {
     let r = resource(this);
     r.desc.dimension != BUFFER
         && !r.host.refused.load(std::sync::atomic::Ordering::Relaxed)
-        && r.host.made.lock().unwrap_or_else(|e| e.into_inner()).is_none()
+        && r.host
+            .made
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_none()
 }
 
-/// The host side of title texture `this`: made now if it is not there and
-/// `make` says so. `None` for buffers and for textures the host refuses.
+/// What `with` says of the host side of title texture `this`, read under
+/// that texture's lock: made first if it is not there and `make` says so.
+/// `None` for buffers and for textures the host refuses.
+///
+/// The host side is read as a reader of its lock, and nothing of it is
+/// cloned unless `with` clones it. A draw asks for the host texture of
+/// everything its tables name (and for its state, and its twin), on five
+/// recording threads at once and mostly of the same few textures: each ask
+/// took the texture's lock for itself and counted two references up and
+/// down again, and the threads waited for those words (run 38-prof2).
 #[cfg(windows)]
-fn hosted(this: This, make: bool) -> Option<Made> {
+fn with_hosted<R>(this: This, make: bool, with: impl FnOnce(&Made) -> R) -> Option<R> {
     use std::sync::atomic::Ordering::Relaxed;
     let r = resource(this);
     if r.desc.dimension == BUFFER {
         return None;
     }
-    let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
+    // Noted under the lock: `let_go_idle` reads it holding the lock to
+    // change what is made. Written only when it changes: every ask wrote it.
+    let used = || {
+        let now = crate::host::moment();
+        if r.host.used.load(Relaxed) != now {
+            r.host.used.store(now, Relaxed);
+        }
+    };
+    {
+        let made = r.host.made.read().unwrap_or_else(|e| e.into_inner());
+        if let Some(made) = made.as_ref() {
+            used();
+            return Some(with(made));
+        }
+    }
+    if !make {
+        return None;
+    }
+    // (Looked at again: another thread may have made it meanwhile.)
+    let mut made = r.host.made.write().unwrap_or_else(|e| e.into_inner());
     if made.is_none() {
-        if !make || r.host.refused.load(Relaxed) {
+        if r.host.refused.load(Relaxed) {
             return None;
         }
         let clear = r
@@ -1341,8 +1374,8 @@ fn hosted(this: This, make: bool) -> Option<Made> {
         // are made before the next submission runs.
         crate::descriptor::texture_made(this as usize);
     }
-    r.host.used.store(crate::host::moment(), Relaxed);
-    made.clone()
+    used();
+    made.as_ref().map(with)
 }
 
 /// The host copy of title texture `this` if it is made, without making it
@@ -1354,9 +1387,9 @@ pub(crate) fn host_made<'a>(
     if this.is_null() {
         return None;
     }
-    let (host, _) = hosted(this, false)?;
+    let texture = with_hosted(this, false, |(host, _)| std::ptr::from_ref(&host.texture))?;
     // SAFETY: as in `host_resource`.
-    Some(unsafe { &*std::ptr::from_ref(&host.texture) })
+    Some(unsafe { &*texture })
 }
 
 /// Whether more host copies of textures the title fills may be made for
@@ -1433,7 +1466,7 @@ pub(crate) fn let_go_idle() {
             continue;
         }
         let gone = {
-            let mut made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
+            let mut made = r.host.made.write().unwrap_or_else(|e| e.into_inner());
             let idle = made.as_ref().is_some_and(|(host, _)| {
                 crate::host::long_ago(r.host.used.load(Relaxed), IDLE_MS, IDLE_FRAMES)
                     && std::sync::Arc::strong_count(host) == 1
@@ -1492,7 +1525,7 @@ pub(crate) fn census() -> [u64; 10] {
     for &at in all.iter() {
         // SAFETY: as in `let_go_idle`.
         let r = unsafe { &*(at as *const Resource) };
-        let made = r.host.made.lock().unwrap_or_else(|e| e.into_inner());
+        let made = r.host.made.read().unwrap_or_else(|e| e.into_inner());
         match made.as_ref() {
             Some((host, twin)) => {
                 let kind = if host.filled { 4 } else { 0 };
@@ -1583,12 +1616,21 @@ pub(crate) fn placed_textures() -> u64 {
 /// resource and the state it leaves, if that is a change.
 #[cfg(windows)]
 pub(crate) fn host_transition(this: This, wanted: u32) -> Option<(*mut c_void, u32)> {
+    use std::sync::atomic::Ordering::Relaxed;
     use windows::core::Interface;
-    let (host, _) = hosted(this, true)?;
-    let before = host
-        .state
-        .swap(wanted, std::sync::atomic::Ordering::Relaxed);
-    (before != wanted).then(|| (host.texture.as_raw(), before))
+    let (texture, before) = with_hosted(this, true, |(host, _)| {
+        // (Written only when it changes.)
+        let before = host.state.load(Relaxed);
+        (
+            host.texture.as_raw(),
+            if before == wanted {
+                before
+            } else {
+                host.state.swap(wanted, Relaxed)
+            },
+        )
+    })?;
+    (before != wanted).then_some((texture, before))
 }
 
 /// The host GPU's copy of a title resource, if it has one: made now if
@@ -1601,13 +1643,36 @@ pub(crate) fn host_resource<'a>(
     if this.is_null() {
         return None;
     }
-    let (host, _) = hosted(this, true)?;
+    let texture = with_hosted(this, true, |(host, _)| std::ptr::from_ref(&host.texture))?;
     // SAFETY: the resource holds the host copy until the title releases it
     // (lists and slots that name the texture hold it past that), or until
     // `let_go_idle` takes it: only from a texture the title fills, that no
     // list and no slot holds and that nothing asked for in seconds (the
     // asking just made is noted under the same lock).
-    Some(unsafe { &*std::ptr::from_ref(&host.texture) })
+    Some(unsafe { &*texture })
+}
+
+/// The host copy of title texture `this` and what tells it from every
+/// other host copy alive (where it lies), with no reference taken: for a
+/// list that may hold the copy already (`HostList::transition`).
+#[cfg(windows)]
+pub(crate) fn host_named<'a>(
+    this: This,
+) -> Option<(
+    &'a windows::Win32::Graphics::Direct3D12::ID3D12Resource,
+    usize,
+)> {
+    if this.is_null() {
+        return None;
+    }
+    let (texture, name) = with_hosted(this, true, |(host, _)| {
+        (
+            std::ptr::from_ref(&host.texture),
+            std::sync::Arc::as_ptr(host) as usize,
+        )
+    })?;
+    // SAFETY: as in `host_resource`.
+    Some((unsafe { &*texture }, name))
 }
 
 /// A title texture's host copy, shared, for a list to hold.
@@ -1616,7 +1681,7 @@ pub(crate) fn host_copy(this: This) -> Option<std::sync::Arc<HostTexture>> {
     if this.is_null() {
         return None;
     }
-    hosted(this, true).map(|made| made.0)
+    with_hosted(this, true, |(host, _)| host.clone())
 }
 
 /// A host texture like the title's: same description, in GPU memory,
@@ -1769,7 +1834,7 @@ fn hand_out_resource(
         backing,
         #[cfg(windows)]
         host: Hosted {
-            made: std::sync::Mutex::new(None),
+            made: std::sync::RwLock::new(None),
             state,
             // SAFETY: the title passes a whole clear value (the format,
             // then color or depth and stencil: 5 words) or null.
@@ -1793,7 +1858,7 @@ fn hand_out_resource(
                 .insert(resource.data() as u64, at);
         }
         if !lazy() {
-            let _ = hosted(at as This, true);
+            let _ = with_hosted(at as This, true, |_| ());
         }
     }
     #[cfg(windows)]
