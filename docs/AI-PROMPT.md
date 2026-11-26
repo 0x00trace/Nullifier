@@ -62,7 +62,7 @@ BUILD (Windows target, from Linux)
   export PATH="$CARGO_HOME/bin:$PATH"
   cargo xwin build --profile diag -p nullifier --features diagnostics \
     --target x86_64-pc-windows-msvc
-  (Windows: cargo build --release -p victory)
+  (Windows: cargo build --release -p nullifier)
 
 RUN
   ./launcher/nullifier-launch.sh --detect          # hardware + chosen profile + why

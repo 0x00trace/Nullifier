@@ -45,7 +45,7 @@ hardware and starts the title. To run it later, or to see what it selected:
 ./tools/bench_scene.sh "label"        # measure a change, with a picture check
 ```
 
-Windows: `cargo build --release -p victory`, then
+Windows: `cargo build --release -p nullifier`, then
 `.\launcher\nullifier-launch.ps1 -Game "D:\path\to\game"`.
 
 Hardware support is a profile, not a fork: add one object to
