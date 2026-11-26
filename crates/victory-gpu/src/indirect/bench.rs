@@ -6,8 +6,9 @@
 //! It needs no title files: the draws are tiny triangles of ours.
 //!
 //! After fxceless/victory-fork f85101b (`indirect/bench.rs`), with the
-//! cases this tree can record and three more: no clamp at all, one clamp for
-//! the whole frame, and the budget in the card's own memory.
+//! cases this tree can record and more: no clamp at all, one clamp for the
+//! whole frame, the budget in the card's own memory, and runs of records
+//! found by a table (`bound_run`).
 
 use super::*;
 use windows::Win32::Foundation::RECT;
@@ -47,6 +48,9 @@ enum Clamps {
     /// A clamp for every `n` records; the scratch buffer stays readable
     /// as arguments until the next clamp, and is common at the end.
     Now(u32),
+    /// A pass for every run of [`RUN_MOST`] records, which finds them by a
+    /// table (`bound_run`).
+    Runs,
 }
 
 #[test]
@@ -189,6 +193,22 @@ fn bench_indirect_draw_barriers() {
         let scratch = host
             .uav_buffer(u64::from(DRAWS * STEP).max(64 << 10))
             .unwrap();
+        // The tables of the runs: for each, the count of its records and
+        // where each lies in the source.
+        const TABLE: u32 = 4 * (1 + RUN_MOST);
+        let run_count = DRAWS.div_ceil(RUN_MOST);
+        let (tables, tables_ptr) = host.shared_buffer(u64::from(run_count * TABLE)).unwrap();
+        for run in 0..run_count {
+            let words = tables_ptr.add((run * TABLE) as usize).cast::<u32>();
+            let records = RUN_MOST.min(DRAWS - run * RUN_MOST);
+            words.write_volatile(records);
+            for i in 0..records {
+                words
+                    .add(1 + i as usize)
+                    .write_volatile((run * RUN_MOST + i) * STEP);
+            }
+        }
+        let tables_gpu = tables.GetGPUVirtualAddress();
         let signature = {
             let arg = D3D12_INDIRECT_ARGUMENT_DESC {
                 Type: D3D12_INDIRECT_ARGUMENT_TYPE_DRAW,
@@ -281,6 +301,32 @@ fn bench_indirect_draw_barriers() {
                         list.ExecuteIndirect(&signature, 1, &src, u64::from(k * STEP), None, 0);
                     }
                 }
+                Clamps::Runs => {
+                    let slot = min_stride(0).unwrap();
+                    for run in 0..run_count {
+                        assert!(record_run_as(
+                            &clamp,
+                            &list,
+                            (&scratch, state),
+                            if card { card_budget_gpu } else { budget_gpu },
+                            &src,
+                            tables_gpu + u64::from(run * TABLE),
+                            (0, slot),
+                        ));
+                        state = D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+                        list.SetPipelineState(&pso);
+                        for k in 0..RUN_MOST.min(DRAWS - run * RUN_MOST) {
+                            list.ExecuteIndirect(
+                                &signature,
+                                1,
+                                &scratch,
+                                u64::from(k * slot),
+                                None,
+                                0,
+                            );
+                        }
+                    }
+                }
                 Clamps::Before(window) | Clamps::Now(window) => {
                     for first in (0..DRAWS).step_by(window as usize) {
                         let records = window.min(DRAWS - first);
@@ -340,7 +386,7 @@ fn bench_indirect_draw_barriers() {
             [gpu, recorded, ran]
         };
 
-        let cases: [(&str, Clamps, bool); 8] = [
+        let cases: [(&str, Clamps, bool); 11] = [
             ("no clamp", Clamps::None, false),
             ("one at a time, before", Clamps::Before(1), false),
             ("one at a time, now", Clamps::Now(1), false),
@@ -351,6 +397,9 @@ fn bench_indirect_draw_barriers() {
             // maps (where a list's budget is).
             ("one at a time, card", Clamps::Now(1), true),
             ("windows of 32, card", Clamps::Now(WINDOW), true),
+            ("one clamp for all, card", Clamps::Now(DRAWS), true),
+            ("runs of 64", Clamps::Runs, false),
+            ("runs of 64, card", Clamps::Runs, true),
         ];
         // Warm up, then the cases in turn, so drift falls on all alike.
         for &(_, clamps, card) in &cases {
@@ -379,7 +428,16 @@ fn bench_indirect_draw_barriers() {
                 median(&times[i], 2),
             );
         }
-        for (from, to) in [(1, 2), (3, 4), (1, 4), (2, 6), (4, 7)] {
+        for (from, to) in [
+            (1, 2),
+            (3, 4),
+            (1, 4),
+            (2, 6),
+            (4, 7),
+            (2, 9),
+            (4, 9),
+            (9, 10),
+        ] {
             let (a, b) = (median(&times[from], 0), median(&times[to], 0));
             eprintln!(
                 "  {} -> {}: GPU time {:+.1} %",
