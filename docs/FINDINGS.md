@@ -1104,6 +1104,44 @@ A video panel is also drawn green in some frames, which is what planes of
 all zeros convert to; in one capture the picture's luma is there under the
 green. Not looked into.
 
+## 3.29 The game's settings: plain XML, and a save container behind it (2026-11-26)
+
+The title keeps two stores, and both are readable.
+
+**`settings.xml`** — plain XML with real names, 112 lines, written on every
+settings change:
+`<prefix>/pfx/drive_c/users/steamuser/AppData/Local/nullifier/data/<title>/storage/settings/settings.xml`
+(the title opens it as `Y:\settings\settings.xml` at boot; a `VICTORY_LOG=debug`
+run logs the host path). Sections and examples:
+
+| section | settings |
+|---|---|
+| graphics | `hdr`, `hdrIntensity`, `gamma`, `anisotropicFiltering`, `desiredFPS` (30), `fsrQuality` (2), `graphicsQualityPreset` |
+| advancedGraphics | `asyncComputeEnabled`, `damageModelsEnabled`, `directionalScreenSpaceShadowQuality`, `fsrSharpen`, `grassLod`, `lodScale`, `texLodScale_*` (Global/6 materials/SLOD1-4), `maxTexUpgradesPerFrame`, `motionBlur*`, `rtLODLightShadows`, `rtDynamicShadows`, `shadow*`, `ssroSampleCount`, `transferQueuesEnabled`, `treeTessellationEnabled`, `vehicleLodBias`, `volumetricsRaymarchResolutionUnclamped`, `waterReflectionResX/Y`, `waterReflectionSSR`, `worldHeightShadowQuality`, `mapMSAA`, `vrsEnabled`, `manualMipBias` |
+| video | `resolutionFullscreen` 3840x2160, `refreshRate` 60/1, `frameRateLimit` 30, `vSync` 2, `tripleBuffered`, `uiResolution`, `adapterIndex`, `outputIndex` |
+
+Two writes to it were read but not applied: `frameRateLimit`/`desiredFPS` 60
+(menus stayed 30 fps) and `resolutionFullscreen` 1280x720 (the swap chain still
+presented 3840x2160). So the XML is read, but the graphics state that takes
+effect comes from the save container, or the console video settings are fixed.
+
+**The save container** — `XGameSave` emulation, JSON with 32-bit hashed keys:
+`.../data/<title>/saves/0009000000000001/<xuid>/SettingsProfileSettings~0b4e25fca06268d0/v<N>/0`
+(`manifest`, `0`, `1` per version; the title keeps v1, v3, ... and a
+`Player~333dc56ddffd8ea0` sibling). After changing three settings in the in-game
+Display menu and diffing v1 -> v3:
+
+| path in the JSON | value | setting (from the menu) |
+|---|---|---|
+| `/$0x8c1c3948/$0x25584db6/$0xcb20b040/$0xcb0db478` | 3 -> 0 | **Motion Blur Strength** |
+| `/$0x8c1c3948/$0x25584db6/$0xcb20b040/$0x2e4a3f2c` | 5 -> 0 | Hit Effects Intensity (menu showed 1; unresolved) |
+| `/$0x8c1c3948/$0x17d82a47/$0x944fa9d9/$0xc89952df` | 0 -> 1 | **Dismemberment** (0 on, 1 off) |
+
+That is the mapping method: change one setting in the menu, save, diff the
+containers. The pause menu is reachable with scripted keys: `Esc` opens it,
+`Up` wraps to Settings, `E` (right bumper) moves tabs to DISPLAY. Settings are
+committed when the container reaches a new version, not when Back is pressed.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
