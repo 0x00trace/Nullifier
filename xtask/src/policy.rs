@@ -13,8 +13,12 @@ use anyhow::{Context, Result, bail};
 const MAX_FILE_SIZE: usize = 512 * 1024;
 const MAX_ENCODED_RUN: usize = 512;
 
+// "patch": a change to free software the layer runs on, carried until that
+// software ships it (tools/wine/: an upstream Wine commit that Proton does
+// not have yet). Text like the rest, and held to the same checks.
 const ALLOWED_EXTENSIONS: &[&str] = &[
     "rs", "toml", "md", "txt", "lock", "yml", "yaml", "json", "hlsl", "hlsli", "ps1", "cmd", "sh",
+    "patch",
 ];
 const ALLOWED_NAMES: &[&str] = &[
     ".gitignore",
@@ -196,6 +200,7 @@ mod tests {
         assert!(check("crates/x/src/lib.rs", b"fn main() {}\n").is_empty());
         assert!(check(".gitignore", b"/target/\n").is_empty());
         assert!(check(".githooks/pre-commit", b"#!/bin/sh\n").is_empty());
+        assert!(check("tools/wine/x.patch", b"--- a/x.c\n+++ b/x.c\n").is_empty());
     }
 
     #[test]

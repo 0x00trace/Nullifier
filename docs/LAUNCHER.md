@@ -63,6 +63,51 @@ A profile is only allowed in if it has evidence:
 * Put the measurement in `docs/FORK.md` too. A profile without a row is a
   guess and must say `untested`.
 
+## The wineserver (Linux)
+
+Wine's server kept a process's views in a list and walked it at every map and
+unmap. The title keeps tens of thousands of views and remaps about a thousand
+a second, so the server ran at a whole core and the frame waited behind it
+(`docs/FINDINGS.md` 2.5). Wine fixed it on 2026-11-25 (commit 3217449b1f71);
+Proton Experimental 11.0-20261112 does not have that commit.
+
+```bash
+./tools/build-wineserver.sh           # once, and again after Proton updates
+./tools/build-wineserver.sh --check   # what is installed, builds nothing
+```
+
+It fetches Valve's Wine at the commit your Proton was built from, applies that
+one commit (`tools/wine/server-view-tree.patch`), builds only `wineserver`,
+checks that it speaks the same protocol as Proton's own, and installs it in
+`~/.local/share/victory/wineserver`. Nothing of Proton's is changed. It needs
+git, gcc, make, autoconf, bison, flex, perl and python3, and about 600 MB
+under `~/.cache/victory`.
+
+The launcher then starts that server for its prefix before it starts wine
+(wine itself only starts the server that lies beside it). `--detect` says
+which server a run will get, and the log's `wineserver:` line says which one
+it got.
+
+| | |
+|---|---|
+| `VICTORY_WINESERVER=0` | Proton's own server, for a comparison |
+| `VICTORY_WINESERVER=PATH` | start this server binary instead |
+| `VICTORY_WINESERVER_DIR` | where the built server is (default `~/.local/share/victory/wineserver`) |
+
+* A server built for another Proton version is not used: the launcher says
+  so and Proton's own serves. Run the build again.
+* A Proton whose own server has the tree needs none of this; the build script
+  and `--detect` say so.
+* Only Valve's Proton is looked up by itself. For another build pass
+  `--wine-commit` and `--wine-repo`; if its server speaks another protocol the
+  script stops and installs nothing.
+* A wineserver stays for 3 s after its last program. The launcher waits for
+  one left by the run before, so two runs in a row with different servers do
+  not share one.
+
+Measured on an RTX 5080, six runs in turn: 3.55 / 3.45 / 3.50 fps with the
+built server, 0.60 / 0.65 / 0.70 with Proton's own.
+
 ## Safety rules the launcher enforces
 
 * `LATE_WAIT >= 2`, `JOIN_COPIES=1` and `RELAY` are never defaulted on Linux:
@@ -87,3 +132,5 @@ A profile is only allowed in if it has evidence:
 | Exit 3 right after a mesh pipeline | vkd3d-proton too old; check `--detect` shows `prefix vkd3d >= 5742` |
 | `no profile applies` | add/repair a profile, or pass `--profile` |
 | Runs but very slow | check for an LLM, then `--detect` and compare VRAM |
+| Under 1.5 fps on Linux with `wineserver` at a whole core | `--detect` says `wineserver  Proton's own, which searches a list for every view`: run `tools/build-wineserver.sh` |
+| `version mismatch` from wine at start | a server of another Wine is serving the prefix: stop it (`wineserver -k`), and build again if Proton was updated |

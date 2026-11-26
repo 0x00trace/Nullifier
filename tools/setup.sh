@@ -98,6 +98,8 @@ if [ -n "$GAME" ]; then
 else
   say "next"
   cat <<EOF
+   ./tools/build-wineserver.sh     (once: Wine's server with its view tree,
+                                    several times the frame rate; docs/LAUNCHER.md)
    ./launcher/victory-launch.sh --game <your game folder>
 
    If a run dies with "device removed", use --safe.

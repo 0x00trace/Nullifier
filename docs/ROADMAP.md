@@ -12,6 +12,16 @@ Where a frame's time goes now (`tools/frames.py`): **copies 122–306 ms**,
 **copy-back ~69 ms**, **textures 34–51 ms**, **unaccounted ~38 ms**, GPU ~55 ms;
 the rest is the title plus Wine's server. The order below follows that.
 
+**Read 2.5 of the findings before you pick from this list.** On Linux those
+phases were mostly waits for Wine's server, which walked a list of every view
+at each of the title's maps and unmaps. With Wine's own fix for that built
+into the server (`tools/build-wineserver.sh`), an RTX 5080 went from 0.60 /
+0.65 / 0.70 to 3.55 / 3.45 / 3.50 fps with nothing changed in the layer:
+frame 285–292 ms, copies 43–46, textures 11–14, copy-back 21–24, and
+157–163 ms waiting for the card, which is then busy 63–64 % of the time. The
+phase numbers below were taken without it. The order has not been measured
+again with it; by those numbers the card's side comes first.
+
 ---
 
 ## P1 — Dirty tracking (was the top cost; now 34–51 ms)
@@ -108,6 +118,14 @@ A real profile is now available (`kernel.perf_event_paranoid=1`, `perf -g`,
 reverted both times (black/red faces in 3 launches of 3). Do not repeat that;
 our section views are safe only because they alias a section's own slices and
 never change what the title sees.
+
+The cost of those remaps was not their number but the server's walk of its
+view list at each one, and Wine has fixed that (commit 3217449b1f71,
+2026-11-25). `tools/build-wineserver.sh` builds the installed Proton's server
+with it: the two functions leave the profile (`wineserver` 84 % of a core →
+1.3 %, for as many requests) and the title's remaps stay as they are
+(`docs/FINDINGS.md` 2.5). When Proton ships that commit the script has
+nothing left to do and says so.
 
 **Careful:** `LATE_WAIT >= 2`, `JOIN_COPIES=1` and `RELAY` remove the device
 (`0x887A0005`) on Linux. Fix the coordination; do not paper over it by sending

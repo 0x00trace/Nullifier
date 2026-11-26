@@ -15,7 +15,7 @@ The world renders correctly and is stable — it is **not yet playable**.
 | | |
 |---|---|
 | Menus, cutscene, prologue | work: characters, buildings, HUD, audio, input, saves |
-| Frame rate (world) | **1.1–1.3 fps** on RX 9070 XT / Linux (median of 3 runs); 3–5 fps reported on Windows |
+| Frame rate (world) | **1.1–1.3 fps** on RX 9070 XT / Linux (median of 3 runs); **3.5 fps** on RTX 5080 / Linux with the wineserver from `tools/build-wineserver.sh`, 0.6–0.7 without (3 runs each); 3–5 fps reported on Windows |
 | Light in shadow | missing — the title's ray-traced light does not run, so shadowed areas are black |
 | Stability | minutes-long runs, no crashes, no device loss |
 
@@ -37,6 +37,7 @@ cd victory-universal          # the repo keeps its old name; the project is Null
 hardware and starts the title. To run it later, or to see what it selected:
 
 ```bash
+./tools/build-wineserver.sh           # Linux, once: several times the frame rate (docs/LAUNCHER.md)
 ./launcher/victory-launch.sh --detect
 ./launcher/victory-launch.sh --game /path/to/game
 ./tools/bench_scene.sh "label"        # measure a change, with a picture check

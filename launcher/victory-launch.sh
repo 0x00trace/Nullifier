@@ -132,11 +132,51 @@ while IFS='=' read -r k v; do
   [ -n "${!k:-}" ] || export "$k=$v"
 done <<< "$(echo "$RESOLVED" | grep -vE '^PROFILE_')"
 
+# ---------------- which proton, which wineserver ----------------
+STEAM_ROOT="${STEAM_ROOT:-$HOME/.local/share/Steam}"
+PROTON="${VICTORY_PROTON:-}"
+if [ -z "$PROTON" ]; then
+  # Proton Experimental's wine first: measured ~25% cheaper per frame than
+  # GE-Proton11-10's (1,493/1,441 vs 1,965 ms) on the same build and profile.
+  for d in "$STEAM_ROOT/steamapps/common/Proton - Experimental" "$STEAM_ROOT/compatibilitytools.d"/GE-Proton*; do
+    [ -x "$d/files/bin/wine" ] && { PROTON="$d"; break; }
+  done
+fi
+
+# Wine's server walked a list of every view the title has mapped (tens of
+# thousands) at each map and unmap, until Wine commit 3217449b1f71 of
+# 2026-11-25. tools/build-wineserver.sh builds this Proton's server with that
+# commit; on an RTX 5080 the world ran at 3.5 fps with it and 0.6-0.7 without
+# (docs/FINDINGS.md 2.5). VICTORY_WINESERVER=0 leaves it unused, and
+# VICTORY_WINESERVER=PATH names another server binary to start.
+WS_DIR="${VICTORY_WINESERVER_DIR:-$HOME/.local/share/victory/wineserver}"
+WS=""       # the server to start before wine; empty: wine starts Proton's own
+WS_SAYS=""  # one line for --detect and the log
+# Whether a wineserver binary has upstream's tree (not "grep -q": with
+# pipefail, a match that makes nm die writing counts as a failure).
+has_tree() { [ -n "$(nm "$1" 2>/dev/null | grep ' compare_memory_views$')" ]; }
+if [ -z "$PROTON" ]; then
+  WS_SAYS="no Proton found"
+elif [ "${VICTORY_WINESERVER:-}" = 0 ]; then
+  WS_SAYS="Proton's own (VICTORY_WINESERVER=0)"
+elif [ -n "${VICTORY_WINESERVER:-}" ]; then
+  WS="$VICTORY_WINESERVER"; WS_SAYS="$WS (VICTORY_WINESERVER)"
+elif has_tree "$PROTON/files/bin/wineserver"; then
+  WS_SAYS="Proton's own, which keeps views in a tree"
+elif [ ! -x "$WS_DIR/bin/wineserver" ]; then
+  WS_SAYS="Proton's own, which searches a list for every view: run tools/build-wineserver.sh"
+elif [ "$(sed -n 1p "$WS_DIR/built-for" 2>/dev/null)" != "$(cat "$PROTON/version" 2>/dev/null)" ]; then
+  WS_SAYS="Proton's own: the server in $WS_DIR was built for another Proton version, run tools/build-wineserver.sh again"
+else
+  WS="$WS_DIR/bin/wineserver"; WS_SAYS="$WS (views in a tree)"
+fi
+
 if [ "$MODE" = "detect" ]; then
   say "OS" "$OS $(uname -r)"
   say "GPU vendor" "$VENDOR"
   say "VRAM" "$VRAM MB"
   say "profile" "$PROFILE_NAME ($PROFILE_CONF)"
+  [ "$OS" = linux ] && say "wineserver" "$WS_SAYS"
   echo
   env | grep -E '^(VICTORY_|VKD3D_)' | sort | sed 's/^/  /'
   echo
@@ -150,15 +190,6 @@ case "$OS" in
 esac
 
 # ---------------- proton ----------------
-STEAM_ROOT="${STEAM_ROOT:-$HOME/.local/share/Steam}"
-PROTON="${VICTORY_PROTON:-}"
-if [ -z "$PROTON" ]; then
-  # Proton Experimental's wine first: measured ~25% cheaper per frame than
-  # GE-Proton11-10's (1,493/1,441 vs 1,965 ms) on the same build and profile.
-  for d in "$STEAM_ROOT/steamapps/common/Proton - Experimental" "$STEAM_ROOT/compatibilitytools.d"/GE-Proton*; do
-    [ -x "$d/files/bin/wine" ] && { PROTON="$d"; break; }
-  done
-fi
 [ -n "$PROTON" ] || { echo "no Proton found under $STEAM_ROOT (set VICTORY_PROTON)" >&2; exit 2; }
 
 vkd3d_build() { cat "$1/files/lib/wine/vkd3d-proton/version" 2>/dev/null | grep -oE 'vkd3d-1\.1-[0-9]+' | grep -oE '[0-9]+$' || echo 0; }
@@ -214,6 +245,32 @@ pgrep -x llama-server >/dev/null 2>&1 && echo "warning: llama-server is running 
 [ -d "$GAME" ] || { echo "not a directory: $GAME" >&2; exit 2; }
 [ -n "$BIN" ] || BIN="$ROOT/target/x86_64-pc-windows-msvc/diag/victory.exe"
 [ -f "$BIN" ] || { echo "no victory.exe at $BIN; build it first (see AGENTS.md)" >&2; exit 2; }
+
+# ---------------- wineserver ----------------
+# wine only ever starts the server that lies beside it, so another one is
+# started here first: wine then finds the prefix served. A server stays for
+# 3 s after its last program: one left by the run before is waited for, so
+# that this run is served by the server it names.
+ours() { # whether a running wineserver is the binary $1
+  local p want; want=$(readlink -f "$1")
+  for p in $(pgrep -x wineserver); do
+    [ "$(readlink -f "/proc/$p/exe" 2>/dev/null)" = "$want" ] && return 0
+  done
+  return 1
+}
+timeout 10 "$PROTON/files/bin/wineserver" -w 2>/dev/null
+if [ -n "$WS" ]; then
+  if [ ! -x "$WS" ]; then
+    echo "warning: no wineserver at $WS; Proton's own will serve" >&2
+  else
+    "$WS"; code=$?
+    # 2: a server holds the prefix already.
+    if [ "$code" != 0 ] && ! ours "$WS"; then
+      echo "warning: $WS did not start (exit $code): the prefix is served by another wineserver" >&2
+    fi
+  fi
+fi
+echo "wineserver: $WS_SAYS" >&2
 
 WIN_GAME="Z:${GAME//\//\\}"
 WIN_BIN="Z:${BIN//\//\\}"

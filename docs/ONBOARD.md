@@ -70,10 +70,16 @@ prints the profile the launcher picked for your hardware.
 Then:
 
 ```bash
+./tools/build-wineserver.sh              # Linux, once: Wine's server with its view tree
 ./launcher/victory-launch.sh --detect    # profile, values, and why
 ./launcher/victory-launch.sh --game DIR  # play
 ./tools/bench.sh "baseline"              # the number you will compare against
 ```
+
+The first line builds a `wineserver` for your Proton with one upstream Wine
+commit that Proton does not have yet (`docs/LAUNCHER.md`). Without it the world
+runs several times slower on Linux (0.6–0.7 against 3.5 fps on an RTX 5080),
+and every number you take measures the wait for Wine's server.
 
 Keep that baseline row. It is your control for every future change.
 

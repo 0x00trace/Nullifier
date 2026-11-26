@@ -127,6 +127,13 @@ KNOWN LANDMINES (all of these cost hours; do not re-derive)
     but black or red faces and garbage in 3 launches of 3, and reverted it.
     Section views (View::map) are a different thing and are safe: they alias a
     section's own 64 KiB slices by index and never change what the title sees.
+  - On Linux, build the wineserver before you measure anything:
+    ./tools/build-wineserver.sh. Wine's server walked a list of every view at
+    each map and unmap (fixed in Wine by commit 3217449b1f71, 2026-11-25; not
+    in Proton Experimental 11.0-20261112). Without the built server the frame
+    is mostly waits for it: 0.60/0.65/0.70 fps against 3.55/3.45/3.50 on an
+    RTX 5080 (docs/FINDINGS.md 2.5). Say in every bench row which server
+    served (the log's "wineserver:" line).
 
 CURRENT STATE (do not contradict it without evidence)
   1.1-1.3 fps median on RX 9070 XT / Mesa 26.3.1 / Wine 11, frame 750-950 ms,
@@ -137,6 +144,9 @@ CURRENT STATE (do not contradict it without evidence)
   is_valid_view_addr ~19% and req_unmap_view ~10% of CPU: that is the TITLE's
   own page remaps (CopyPageMappingsBatchX), not our layer's views, after
   section views removed ours (docs/FINDINGS.md 3.27).
+  With the wineserver from tools/build-wineserver.sh that profile is gone and
+  an RTX 5080 runs the world at 3.5 fps, frame 285-292 ms: 157-163 ms waiting
+  for the card (busy 63-64 %), copies 43-46, textures 11-14, copy-back 21-24.
   Next candidates, in order of measured value in fxceless/victory-fork:
   VICTORY_BACK_OWN_VIEW (~9%), VICTORY_JOIN_PARTS (~6%), VICTORY_INDIRECT_GATHER
   (104 -> 97 ms a frame, the biggest but a real port). None of them exist in
