@@ -81,6 +81,7 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | + raw reads made again when refused (`a0d014d`) | profile | 1.30 / 0.95 / 1.35 | 39 / 38 / 12 | 0 | world renders (captures of 2.0 and 1.5 MB); some faces black, some frames black |
 | + guard pages left unread by copies (`c7e6f5f`) | profile | 0.90 / 1.20 / 0.70 | 40 / 41 / 40 | 0 | world renders (eight captures of 1.0–2.3 MB, one black); one sampled frame looks right, the others have a black face or a low-detail figure |
 | + loops given one latch each (`fa7ea8d`) | profile | 0.90 / 0.80 / 0.80 | 35 / 37 / 40 | 0 | world renders (four world captures of 1.5–1.7 MB); defects as before: in one, hair drawn as a ball of strands over a face, in another a figure lit in a dot pattern |
+| + an empty pipeline library asked for with no blob (`42466d5`) | profile, library kept from an earlier run | 0.85 / 1.30 / 1.40 | 42 / 44 / 44 | 0 | world renders (159 world captures of over 1 MB); faces and hair right in the 22 looked at; left: low-detail figures in one shot, one or two black frames at shot changes, arm hair drawn like fur |
 
 * **Before:** each run ended on a breakpoint of the title's own
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
@@ -116,9 +117,27 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   The frame rate is within the noise of the row above and the picture
   defects are the same. The runs also saved every target of three frames
   (`VICTORY_DUMP_TARGETS=1`), which costs some seconds.
-* Every run logs `no host pipeline library: pipelines are not kept`: the
-  host refuses even an empty library here, so each run makes its pipelines
-  again and drops hundreds to thousands of draws a frame meanwhile.
+* Every run of the first four rows logs `no host pipeline library: pipelines
+  are not kept`: the host refuses even an empty library here, so each run
+  makes its pipelines again and drops hundreds to thousands of draws a frame
+  meanwhile.
+* **The fifth row (`42466d5`):** that refusal was ours to avoid. The empty
+  library was asked for with a pointer and no length, which vkd3d-proton
+  refuses (`E_INVALIDARG`) and Windows takes; with no library nothing was
+  saved, the list of title pipelines to start early included, so every run
+  began cold. Asked for with no blob, the library is made. Cold, the three
+  runs of the fourth row made about 1,800 pipelines each on first use and
+  dropped 74, 36 and 64 compute pipelines (212, 141 and 181 graphics ones) at
+  least once as `being made`: hair simulation and strand generation,
+  character skinning and the face rig's graph among them, passes that keep
+  state from frame to frame. Warm, these three runs loaded 1,834 / 1,956 /
+  1,984 pipelines, started 1,843 / 1,966 / 1,998 early, made 113 / 26 / 15,
+  and dropped no compute pipeline that way (56, 3 and 5 graphics ones). The
+  hair that hid a face is hair again and faces have their skin. The medians
+  are inside the range of the rows above (two runs of the same build differ
+  by ±40 %): this is a picture fix, not a speed claim. Run after a restart
+  of the machine (kernel 7.3.5 to 7.3.6, same driver), with
+  `VICTORY_CAPTURE_WORLD=1` (a picture of two frames in every eight).
 
 ### The texture ask (P0 probe, 2026-11-25)
 
