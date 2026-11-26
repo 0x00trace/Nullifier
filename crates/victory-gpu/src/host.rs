@@ -6775,6 +6775,16 @@ impl Host {
         }
     }
 
+    /// An upload buffer of `size` bytes or more for a texture's staging:
+    /// one a staging let go of if [`staged`] keeps one of that size, else
+    /// made now.
+    pub(crate) fn staging_buffer(&self, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
+        match staged::take(size) {
+            Some(kept) => Some(kept),
+            None => self.upload_buffer(staged::rounded(size)),
+        }
+    }
+
     pub(crate) fn upload_buffer(&self, size: u64) -> Option<(ID3D12Resource, *mut u8)> {
         MADE[0].fetch_add(1, Ordering::Relaxed);
         MADE[1].fetch_add(size, Ordering::Relaxed);
@@ -6820,6 +6830,118 @@ impl Host {
                 None
             }
         }
+    }
+}
+
+/// Upload buffers that the stagings of textures let go of, kept to be used
+/// again (`VICTORY_STAGING_POOL_MB`: the most kept, 256; 0 keeps none, as
+/// before).
+///
+/// A texture the title fills is staged in an upload buffer of its own,
+/// made when a list first samples the texture and released with its
+/// staging (`crate::texture::let_go_idle`, or a staging made anew for
+/// larger mips). While the world streams in that is about 120 buffers made
+/// and as many released in every frame (the memory line's "made so far"),
+/// and each is the host's work twice: in a profile of the thread that
+/// submits, 3.1 ms a frame in the kernel under `vkFreeMemory` alone
+/// (docs/FINDINGS.md 2.10), beside the making and the first touch of the
+/// new memory. A buffer let go is kept here under its size, which is a
+/// power of two for that, and the next staging of that size takes it.
+pub(crate) mod staged {
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+
+    use windows::Win32::Graphics::Direct3D12::ID3D12Resource;
+
+    /// Sizes kept: powers of two from 64 KiB to 64 MiB.
+    const LEAST: u32 = 16;
+    const MOST: u32 = 26;
+
+    struct Kept {
+        /// By size, from 2^LEAST on: the buffers and where they are mapped.
+        buffers: Vec<Vec<(ID3D12Resource, usize)>>,
+        bytes: u64,
+    }
+
+    static KEPT: Mutex<Option<Kept>> = Mutex::new(None);
+
+    /// Since the start: buffers taken from here, buffers given, and of
+    /// those the ones released because [`most`] were kept already.
+    static COUNT: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+
+    /// The most bytes kept.
+    fn most() -> u64 {
+        static MOST_BYTES: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+        *MOST_BYTES.get_or_init(|| {
+            std::env::var("VICTORY_STAGING_POOL_MB")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(256)
+                << 20
+        })
+    }
+
+    /// The power of two a buffer of `size` bytes is kept under; `None`
+    /// for one that is not kept (over 64 MiB, or nothing is kept).
+    fn class(size: u64) -> Option<u32> {
+        let class = size.max(1).next_power_of_two().trailing_zeros().max(LEAST);
+        (class <= MOST && most() > 0).then_some(class)
+    }
+
+    /// The size a staging's buffer of `size` bytes is made with, so that
+    /// it can be kept: `size` itself for one that is not.
+    pub(super) fn rounded(size: u64) -> u64 {
+        class(size).map_or(size, |class| 1 << class)
+    }
+
+    /// A kept buffer of `size` bytes or more, and where it is mapped.
+    pub(super) fn take(size: u64) -> Option<(ID3D12Resource, *mut u8)> {
+        let class = class(size)?;
+        let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        let kept = kept.as_mut()?;
+        let (buffer, data) = kept.buffers[(class - LEAST) as usize].pop()?;
+        kept.bytes -= 1 << class;
+        COUNT[0].fetch_add(1, Relaxed);
+        Some((buffer, data as *mut u8))
+    }
+
+    /// A staging is gone: its buffer (made for `size` bytes, mapped at
+    /// `data`) is kept if there is room. No list names it any more: a list
+    /// holds the staging until it has run and is reset.
+    pub(crate) fn give(buffer: ID3D12Resource, data: *mut u8, size: u64) {
+        let Some(class) = class(size) else {
+            return;
+        };
+        COUNT[1].fetch_add(1, Relaxed);
+        let mut kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        let kept = kept.get_or_insert_with(|| Kept {
+            buffers: (LEAST..=MOST).map(|_| Vec::new()).collect(),
+            bytes: 0,
+        });
+        if kept.bytes + (1 << class) > most() {
+            COUNT[2].fetch_add(1, Relaxed);
+            return;
+        }
+        kept.bytes += 1 << class;
+        kept.buffers[(class - LEAST) as usize].push((buffer, data as usize));
+    }
+
+    /// For the memory line: buffers kept now and their bytes; then, since
+    /// the start, buffers taken from here, given, and released for lack
+    /// of room.
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn memory() -> [u64; 5] {
+        let kept = KEPT.lock().unwrap_or_else(|e| e.into_inner());
+        let (n, bytes) = kept.as_ref().map_or((0, 0), |k| {
+            (k.buffers.iter().map(|b| b.len() as u64).sum(), k.bytes)
+        });
+        [
+            n,
+            bytes,
+            COUNT[0].load(Relaxed),
+            COUNT[1].load(Relaxed),
+            COUNT[2].load(Relaxed),
+        ]
     }
 }
 

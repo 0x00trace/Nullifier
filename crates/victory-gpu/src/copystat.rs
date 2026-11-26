@@ -703,6 +703,17 @@ fn log_memory() {
             WALKING.store(false, Relaxed);
         }
     }
+    let pool = crate::host::staged::memory();
+    tracing::info!(
+        "memory of stagings let go: {} upload buffers {:.0} MB kept to be used again \
+         (VICTORY_STAGING_POOL_MB); since the start {} taken again, {} given, {} of them released \
+         for lack of room",
+        pool[0],
+        mb(pool[1]),
+        pool[2],
+        pool[3],
+        pool[4],
+    );
     let kept = crate::pipeline::kept();
     tracing::info!(
         "memory kept beside the lines below: {} shader containers {:.0} MB, {} translations \
