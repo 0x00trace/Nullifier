@@ -28,12 +28,22 @@ cargo build --manifest-path tools/launcher/Cargo.toml
 ./tools/launcher/target/debug/nullifier-launcher          # Windows: tools\launcher\target\debug\nullifier-launcher.exe
 ```
 
-* **Play** — one big Launch, the game folder with an in-app folder picker, the
-  profile picked from vendor + VRAM (with the full list behind the combo), the
-  three plain-language presets (Recommended, Low memory, Safe), the last run's
-  numbers, and runtime paths. The numbers behind a preset are in Rendering. It runs the same
+* **First run** — a welcome screen: drop the game folder on the window (or use
+  the folder picker), and Nullifier checks for `game_scarlett_master.exe` (or
+  any `.exe`, two folders deep). If the engine has not been built yet, one
+  **Set up now** button runs `tools/setup.sh` in the background with a live
+  tail, plain progress text and a Cancel button. No terminal is needed.
+* **Play** — the chosen game with a green "game found", the measured settings
+  for this card, and one big **Play**. **Change…** reopens the picker,
+  **Settings…** opens Rendering, and the three plain-language presets
+  (Recommended, Low memory, Safe) plus the last run's numbers sit below. The
+  numbers behind a preset are in Rendering. The GUI runs the same
   `nullifier-launch.sh`/`.ps1` as the command line, so there is one source of
   truth.
+* **Simple by default** — the rail shows Play and Graphics only.
+  **Advanced settings** at the bottom reveals Rendering, Advanced and Tools and
+  is remembered. Anything that needs the technical tabs (Settings…, Customise…)
+  reveals them itself.
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a `?` that explains it and a safe value.

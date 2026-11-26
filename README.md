@@ -27,20 +27,21 @@ playable.
 ```bash
 git clone git@github.com:iNiKKo/Nullifier.git
 cd Nullifier
-./tools/setup.sh --game /path/to/game
-```
-
-Linux, once: `./tools/build-wineserver.sh` — several times the frame rate.
-Later: `./launcher/nullifier-launch.sh --game DIR`.
-Windows: `cargo build --release -p nullifier`, then
-`.\launcher\nullifier-launch.ps1 -Game DIR`.
-
-Graphical launcher:
-
-```bash
+./tools/setup.sh
 cargo build --manifest-path tools/launcher/Cargo.toml
 ./tools/launcher/target/debug/nullifier-launcher
 ```
+
+In the launcher: drop your game folder on the window and press **Play**. The
+first run offers one **Set up now** button if the engine still needs building.
+The command line below does the same without the window.
+
+Linux, once: `./tools/build-wineserver.sh` — several times the frame rate (the
+launcher offers this as one button too). Windows: `cargo build --release -p
+nullifier`, then `.\launcher\nullifier-launch.ps1 -Game DIR`.
+
+No window: `./tools/setup.sh --game /path/to/game`, then
+`./launcher/nullifier-launch.sh --game DIR`.
 
 ## Contributing
 

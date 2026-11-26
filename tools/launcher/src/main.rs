@@ -170,6 +170,9 @@ fn main() -> eframe::Result<()> {
                 Some("debug") => Tab::Debug,
                 _ => Tab::Play,
             };
+            if !matches!(app.tab, Tab::Play | Tab::Graphics) {
+                app.settings.show_advanced = true;
+            }
             app.info = start_info;
             if std::env::args().any(|a| a == "--bench") {
                 app.bench_now();
@@ -199,6 +202,9 @@ struct Settings {
     profiles_hash: u64,
     #[serde(default)]
     planned: Planned,
+    /// Show the technical tabs (Rendering, Advanced, Tools).
+    #[serde(default)]
+    show_advanced: bool,
     #[serde(skip)]
     root: Option<PathBuf>,
     #[serde(skip)]
@@ -238,6 +244,7 @@ impl Default for Settings {
             extra_env: String::new(),
             profiles_hash: 0,
             planned: Planned::default(),
+            show_advanced: false,
             root: None,
             reloaded_profile: false,
         }
@@ -658,6 +665,50 @@ fn launcher_path(root: &Path) -> PathBuf {
     }
 }
 
+fn settings_root_readiness(settings: &Settings) -> Readiness {
+    settings.root.as_deref().map(readiness).unwrap_or_default()
+}
+
+/// What still has to be built or installed before Play can work.
+fn readiness(root: &Path) -> Readiness {
+    let engine = if cfg!(windows) {
+        root.join("target/release/nullifier.exe").is_file()
+            || root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe").is_file()
+    } else {
+        root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe").is_file()
+    };
+    let wineserver = data_dir()
+        .map(|d| d.join("wineserver/bin/wineserver").is_file())
+        .unwrap_or(false);
+    Readiness { engine, wineserver }
+}
+
+/// The title's executable. Looks two levels down: dumps often keep one folder
+/// inside the picked one.
+fn title_exe(dir: &Path) -> Option<PathBuf> {
+    const WANT: &str = "game_scarlett_master.exe";
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((at, depth)) = stack.pop() {
+        if depth > 2 {
+            continue;
+        }
+        let Ok(entries) = std::fs::read_dir(&at) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
+                stack.push((path, depth + 1));
+            } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                let lower = name.to_lowercase();
+                if lower == WANT {
+                    return Some(path);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn custom_profile(settings: &Settings) -> Option<PathBuf> {
     let dir = cache_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
@@ -802,6 +853,24 @@ struct App {
     bench_progress: f32,
     bench_result: String,
     pick_for: Pick,
+    readiness: Readiness,
+    prep: Option<Child>,
+    prep_kind: Prep,
+    prep_log: Option<PathBuf>,
+    prep_started: Option<std::time::Instant>,
+    toast: Option<(String, std::time::Instant)>,
+}
+
+#[derive(Default, Clone, Copy)]
+struct Readiness {
+    engine: bool,
+    wineserver: bool,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Prep {
+    Engine,
+    Wineserver,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -938,6 +1007,7 @@ impl App {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .map(|t| tail(&t, 160))
             .unwrap_or_default();
+        let readiness = settings_root_readiness(&settings);
         let status = if settings.reloaded_profile {
             "profile updated; settings reloaded"
         } else {
@@ -971,6 +1041,12 @@ impl App {
             bench_progress: 0.0,
             bench_result: String::new(),
             pick_for: Pick::Game,
+            readiness,
+            prep: None,
+            prep_kind: Prep::Engine,
+            prep_log: None,
+            prep_started: None,
+            toast: None,
         }
     }
 
@@ -1069,6 +1145,92 @@ impl App {
         }
     }
 
+    fn prep_running(&mut self) -> bool {
+        match self.prep.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        }
+    }
+
+    fn prepare(&mut self, kind: Prep) {
+        if self.prep_running() {
+            return;
+        }
+        let Some(root) = self.settings.root.clone() else {
+            self.status = "repo root not found".into();
+            return;
+        };
+        let script = match kind {
+            Prep::Engine => root.join("tools/setup.sh"),
+            Prep::Wineserver => root.join("tools/build-wineserver.sh"),
+        };
+        if !script.is_file() {
+            self.status = format!("missing {}", script.display());
+            return;
+        }
+        let name = match kind {
+            Prep::Engine => "setup.log",
+            Prep::Wineserver => "wineserver.log",
+        };
+        let log = cache_dir().map(|d| d.join(name));
+        if let Some(path) = &log {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+        }
+        let mut cmd = Command::new("sh");
+        cmd.arg(&script).current_dir(&root);
+        if let Some(path) = &log {
+            if let Ok(file) = std::fs::File::create(path) {
+                if let Ok(clone) = file.try_clone() {
+                    cmd.stdout(Stdio::from(clone));
+                }
+                cmd.stderr(Stdio::from(file));
+            }
+        }
+        match cmd.spawn() {
+            Ok(child) => {
+                self.prep = Some(child);
+                self.prep_kind = kind;
+                self.prep_log = log;
+                self.prep_started = Some(std::time::Instant::now());
+                self.log_path = self.prep_log.clone();
+                self.status = match kind {
+                    Prep::Engine => "setting up the engine".into(),
+                    Prep::Wineserver => "building the fast graphics service".into(),
+                };
+            }
+            Err(e) => self.status = format!("cannot run {}: {e}", script.display()),
+        }
+    }
+
+    fn tick_prepare(&mut self, ctx: &egui::Context) {
+        let Some(child) = self.prep.as_mut() else { return };
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                self.prep = None;
+                let kind = self.prep_kind;
+                self.readiness = settings_root_readiness(&self.settings);
+                let ok = status.success();
+                self.status = match (kind, ok) {
+                    (Prep::Engine, true) => "the engine is ready".into(),
+                    (Prep::Engine, false) => "setup failed - the details are in the log".into(),
+                    (Prep::Wineserver, true) => "the fast graphics service is ready".into(),
+                    (Prep::Wineserver, false) => "the fast graphics service did not build - the log has the details".into(),
+                };
+                self.toast = Some((self.status.clone(), std::time::Instant::now()));
+                if !ok {
+                    self.log_open = true;
+                }
+            }
+            Ok(None) => ctx.request_repaint_after(Duration::from_millis(500)),
+            Err(_) => {
+                self.prep = None;
+                self.status = "setup stopped".into();
+            }
+        }
+    }
+
     fn stop(&mut self) {
         if let Some(child) = self.child.as_mut() {
             let _ = child.kill();
@@ -1076,8 +1238,12 @@ impl App {
         if let Some(child) = self.bench.as_mut() {
             let _ = child.kill();
         }
+        if let Some(child) = self.prep.as_mut() {
+            let _ = child.kill();
+        }
         self.child = None;
         self.bench = None;
+        self.prep = None;
         kill_game();
         self.bench_start = None;
         self.bench_world = None;
@@ -1243,114 +1409,346 @@ impl App {
         ui.heading("Play");
         let warn = warnings(&self.settings, &self.hardware);
         warnings_card(ui, &warn);
+        if let Some((text, at)) = &self.toast {
+            if at.elapsed() < Duration::from_secs(6) {
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(text)
+                        .small()
+                        .color(egui::Color32::from_rgb(87, 199, 133)),
+                );
+            }
+        }
         ui.add_space(4.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            card(ui, |ui| {
-                ui.strong("Game folder");
-                ui.horizontal(|ui| {
-                    let width = (ui.available_width() - 110.0).max(120.0);
-                    ui.add_sized(
-                        [width, 28.0],
-                        egui::TextEdit::singleline(&mut self.settings.game_dir)
-                            .hint_text("Where the game is installed"),
-                    );
-                    if ui.button("Choose…").clicked() {
-                        self.pick_for = Pick::Game;
-                        self.pick_dir = PathBuf::from(&self.settings.game_dir);
-                        if !self.pick_dir.is_dir() {
-                            self.pick_dir = home_dir().unwrap_or_else(|| PathBuf::from("/"));
-                        }
-                        self.picking = true;
-                    }
-                });
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    ui.label("Profile");
-                    let auto = auto_profile(&self.profiles, &self.hardware);
-                    let current = if self.settings.profile == auto || self.settings.profile.is_empty() {
-                        format!("Auto ({})", auto)
-                    } else {
-                        self.settings.profile.clone()
-                    };
-                    let mut picked = None;
-                    egui::ComboBox::from_id_salt("profile")
-                        .selected_text(current)
-                        .show_ui(ui, |ui| {
-                            for profile in &self.profiles {
-                                if ui
-                                    .selectable_label(self.settings.profile == profile.name, &profile.name)
-                                    .on_hover_text(if profile.note.len() > 400 {
-                                        &profile.note[..400]
-                                    } else {
-                                        &profile.note
-                                    })
-                                    .clicked()
-                                {
-                                    picked = Some(profile.name.clone());
-                                }
-                            }
-                        });
-                    if let Some(name) = picked {
-                        self.load_profile(&name);
-                    }
-                    if ui.button("Rescan").on_hover_text("Check this PC again and pick the profile.").clicked() {
-                        self.detect_now();
-                        let auto = auto_profile(&self.profiles, &self.hardware);
-                        self.load_profile(&auto);
-                    }
-                });
+            let dir = PathBuf::from(self.settings.game_dir.trim());
+            let found = dir.is_dir().then(|| title_exe(&dir)).flatten();
+            if self.settings.game_dir.trim().is_empty() {
+                self.welcome(ui);
+            } else if !dir.is_dir() || found.is_none() {
+                self.not_a_game(ui, &dir);
+            } else {
+                if !self.readiness.engine {
+                    self.engine_setup(ui);
+                } else {
+                    self.launch_card(ui, &dir, found.as_deref());
+                }
+                if self.prep.is_some() {
+                    self.progress_card(ui);
+                } else if self.readiness.engine && !self.readiness.wineserver {
+                    self.wineserver_tip(ui);
+                }
+                ui.add_space(6.0);
+                if self.readiness.engine {
+                    ui.columns(2, |cols| {
+                        self.quick(&mut cols[0]);
+                        self.last_run_card(&mut cols[1]);
+                    });
+                }
+            }
+        });
+    }
+
+    fn open_game_picker(&mut self) {
+        self.pick_for = Pick::Game;
+        self.pick_dir = PathBuf::from(&self.settings.game_dir);
+        if !self.pick_dir.is_dir() {
+            self.pick_dir = home_dir().unwrap_or_else(|| PathBuf::from("/"));
+        }
+        self.picking = true;
+    }
+
+    fn welcome(&mut self, ui: &mut egui::Ui) {
+        egui::Frame::group(ui.style())
+            .inner_margin(egui::Margin::symmetric(20, 20))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(egui::RichText::new("Welcome to Nullifier").size(21.0).strong());
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(if self.hardware.vendor.is_empty() {
-                            "hardware not detected".to_string()
-                        } else {
-                            format!(
-                                "{} · {:.0} GB of graphics memory",
-                                self.hardware.vendor.to_uppercase(),
-                                self.hardware.vram_mb as f32 / 1024.0
-                            )
-                        })
-                        .small()
-                        .color(egui::Color32::GRAY),
-                    ),
+                        egui::RichText::new(
+                            "Play your Xbox copy on this PC. Nothing is uploaded and no account is needed: the game stays in the folder you choose.",
+                        )
+                        .color(egui::Color32::from_rgb(178, 183, 194)),
+                    )
+                    .wrap(),
                 );
-                ui.add_space(6.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(if self.running() {
-                            "Running"
-                        } else {
-                            "Ready to start"
-                        })
-                        .small()
-                        .color(egui::Color32::GRAY),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let button = if self.running() {
-                            egui::Button::new(
-                                egui::RichText::new("Stop").strong().color(egui::Color32::WHITE),
-                            )
-                            .fill(egui::Color32::from_rgb(176, 68, 68))
-                            .min_size(egui::vec2(150.0, 34.0))
-                        } else {
-                            primary("Launch", 150.0, 34.0)
-                        };
-                        if ui.add(button).clicked() {
-                            if self.running() {
-                                self.stop();
-                            } else {
-                                self.launch();
-                            }
-                        }
+                ui.add_space(12.0);
+                egui::Frame::group(ui.style())
+                    .fill(egui::Color32::from_rgb(27, 30, 36))
+                    .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(64, 70, 82)))
+                    .inner_margin(egui::Margin::symmetric(16, 22))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.vertical_centered(|ui| {
+                            ui.label(egui::RichText::new("Drop your game folder here").size(15.0).strong());
+                            ui.label(
+                                egui::RichText::new("or choose it below")
+                                    .small()
+                                    .color(egui::Color32::GRAY),
+                            );
+                        });
                     });
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.add(primary("Choose game folder…", 190.0, 36.0)).clicked() {
+                        self.open_game_picker();
+                    }
+                    ui.label(
+                        egui::RichText::new("The folder with game_scarlett_master.exe")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
                 });
             });
+    }
 
+    fn not_a_game(&mut self, ui: &mut egui::Ui, dir: &Path) {
+        card(ui, |ui| {
+            ui.label(
+                egui::RichText::new("That folder doesn't look like the game")
+                    .size(16.0)
+                    .strong(),
+            );
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(if dir.is_dir() {
+                        "game_scarlett_master.exe was not found in it, or in the two folders below it."
+                    } else {
+                        "The folder no longer exists. It may have been moved or renamed."
+                    })
+                    .color(egui::Color32::from_rgb(232, 179, 74)),
+                )
+                .wrap(),
+            );
+            ui.add_space(4.0);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(dir.display().to_string())
+                        .small()
+                        .color(egui::Color32::GRAY),
+                )
+                .wrap(),
+            );
+            ui.add_space(8.0);
+            if ui.add(primary("Choose the right folder…", 200.0, 34.0)).clicked() {
+                self.open_game_picker();
+            }
+            ui.label(
+                egui::RichText::new("It is usually the folder that holds the game's .exe files.")
+                    .small()
+                    .color(egui::Color32::GRAY),
+            );
+        });
+    }
+
+    fn engine_setup(&mut self, ui: &mut egui::Ui) {
+        card(ui, |ui| {
+            ui.label(egui::RichText::new("One-time setup").size(16.0).strong());
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(
+                        "Nullifier needs to build its engine for this PC. It takes about ten minutes the first time; later starts are instant.",
+                    )
+                    .color(egui::Color32::from_rgb(178, 183, 194)),
+                )
+                .wrap(),
+            );
             ui.add_space(6.0);
-            ui.columns(2, |cols| {
-                self.quick(&mut cols[0]);
-                self.last_run_card(&mut cols[1]);
+            ui.horizontal(|ui| {
+                let busy = self.prep.is_some();
+                if ui
+                    .add_enabled(!busy, primary("Set up now", 170.0, 34.0))
+                    .clicked()
+                {
+                    self.prepare(Prep::Engine);
+                }
+                ui.label(
+                    egui::RichText::new("Needs clang and lld, and an internet connection.")
+                        .small()
+                        .color(egui::Color32::GRAY),
+                );
             });
+        });
+    }
+
+    fn launch_card(&mut self, ui: &mut egui::Ui, dir: &Path, exe: Option<&Path>) {
+        card(ui, |ui| {
+            ui.horizontal(|ui| {
+                let name = dir
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("game");
+                ui.label(egui::RichText::new(name).size(16.0).strong());
+                ui.label(
+                    egui::RichText::new("game found")
+                        .small()
+                        .color(egui::Color32::from_rgb(87, 199, 133)),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if chip_button(ui, "Change…").clicked() {
+                        self.open_game_picker();
+                    }
+                });
+            });
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(format!(
+                        "{}{}",
+                        dir.display(),
+                        exe.and_then(|e| e.file_name())
+                            .and_then(|n| n.to_str())
+                            .map(|n| format!("  ·  {n}"))
+                            .unwrap_or_default()
+                    ))
+                    .small()
+                    .color(egui::Color32::GRAY),
+                )
+                .wrap(),
+            );
+            ui.add_space(10.0);
+            let vendor = if self.hardware.vendor.is_empty() {
+                "your hardware".to_string()
+            } else {
+                format!(
+                    "{} · {:.0} GB",
+                    self.hardware.vendor.to_uppercase(),
+                    self.hardware.vram_mb as f32 / 1024.0
+                )
+            };
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("Measured settings for {vendor}"))
+                        .small()
+                        .color(egui::Color32::GRAY),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if chip_button(ui, "Settings…").clicked() {
+                        self.settings.show_advanced = true;
+                        self.tab = Tab::Rendering;
+                        self.settings.save();
+                    }
+                });
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(if self.running() {
+                        "Running - Esc pauses the game"
+                    } else if self.prep.is_some() {
+                        "Setting up…"
+                    } else {
+                        "Ready"
+                    })
+                    .small()
+                    .color(egui::Color32::GRAY),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let button = if self.running() {
+                        egui::Button::new(
+                            egui::RichText::new("Stop").strong().color(egui::Color32::WHITE),
+                        )
+                        .fill(egui::Color32::from_rgb(176, 68, 68))
+                        .min_size(egui::vec2(150.0, 38.0))
+                    } else {
+                        primary("Play", 150.0, 38.0)
+                    };
+                    if ui.add_enabled(!self.prep.is_some() || self.running(), button).clicked() {
+                        if self.running() {
+                            self.stop();
+                        } else {
+                            self.launch();
+                        }
+                    }
+                });
+            });
+        });
+    }
+
+    fn wineserver_tip(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        egui::Frame::group(ui.style())
+            .fill(egui::Color32::from_rgb(45, 38, 24))
+            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
+            .inner_margin(egui::Margin::symmetric(14, 12))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    egui::RichText::new("Make it several times faster (one time)")
+                        .strong()
+                        .color(egui::Color32::from_rgb(240, 200, 120)),
+                );
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Nullifier can build its own graphics service. It is the single biggest speed-up.",
+                        )
+                        .color(egui::Color32::from_rgb(225, 210, 180)),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(6.0);
+                if ui
+                    .add_enabled(self.prep.is_none(), primary("Build it now", 150.0, 32.0))
+                    .clicked()
+                {
+                    self.prepare(Prep::Wineserver);
+                }
+            });
+    }
+
+    fn progress_card(&mut self, ui: &mut egui::Ui) {
+        let title = match self.prep_kind {
+            Prep::Engine => "Setting up the engine",
+            Prep::Wineserver => "Building the fast graphics service",
+        };
+        let elapsed = self
+            .prep_started
+            .map(|t| t.elapsed().as_secs())
+            .unwrap_or(0);
+        let tail_text = self
+            .prep_log
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| tail(&t, 8))
+            .unwrap_or_default();
+        card(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(egui::RichText::new(title).size(16.0).strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if chip_button(ui, "Cancel").clicked() {
+                        self.stop();
+                    }
+                });
+            });
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}:{:02} elapsed. This runs once; later starts are instant.",
+                    elapsed / 60,
+                    elapsed % 60
+                ))
+                .small()
+                .color(egui::Color32::GRAY),
+            );
+            if !tail_text.trim().is_empty() {
+                ui.add_space(6.0);
+                egui::Frame::group(ui.style())
+                    .fill(egui::Color32::from_rgb(20, 22, 26))
+                    .inner_margin(egui::Margin::symmetric(8, 6))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(tail_text.trim_end())
+                                    .monospace()
+                                    .small()
+                                    .color(egui::Color32::from_rgb(150, 156, 168)),
+                            )
+                            .wrap(),
+                        );
+                    });
+            }
         });
     }
 
@@ -1409,7 +1807,9 @@ impl App {
                         .link(egui::RichText::new("Customise…").small())
                         .clicked()
                     {
+                        self.settings.show_advanced = true;
                         self.tab = Tab::Rendering;
+                        self.settings.save();
                     }
                 });
             });
@@ -1923,9 +2323,40 @@ impl App {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.tick_bench();
+        self.tick_prepare(ctx);
         self.refresh_log();
-        if self.running() || self.bench_running() {
+        if let Some((_, at)) = &self.toast {
+            if at.elapsed() > Duration::from_secs(6) {
+                self.toast = None;
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(500));
+            }
+        }
+        if self.running() || self.bench_running() || self.prep.is_some() {
             ctx.request_repaint_after(Duration::from_millis(500));
+        }
+
+        // Drop a folder (or the .exe) anywhere on the window to pick the game.
+        let dropped: Option<PathBuf> = ctx.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .filter_map(|f| f.path.clone())
+                .next()
+        });
+        if let Some(path) = dropped {
+            let dir = if path.is_dir() {
+                path
+            } else {
+                path.parent().map(Path::to_path_buf).unwrap_or(path)
+            };
+            self.settings.game_dir = dir.display().to_string();
+            self.settings.save();
+            self.status = match title_exe(&dir) {
+                Some(exe) => format!("found {}", exe.file_name().and_then(|n| n.to_str()).unwrap_or("the game")),
+                None => "that folder has no .exe in it".into(),
+            };
+            self.toast = Some((self.status.clone(), std::time::Instant::now()));
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
@@ -1951,13 +2382,17 @@ impl eframe::App for App {
                 ui.label(egui::RichText::new("Nullifier").size(19.0).strong());
                 ui.label(egui::RichText::new(format!("v{VERSION}")).size(11.0).color(egui::Color32::GRAY));
                 ui.add_space(16.0);
-                for (tab, label) in [
-                    (Tab::Play, "Play"),
-                    (Tab::Graphics, "Graphics"),
-                    (Tab::Rendering, "Rendering"),
-                    (Tab::Advanced, "Advanced"),
-                    (Tab::Debug, "Tools"),
-                ] {
+                let mut tabs = vec![(Tab::Play, "Play"), (Tab::Graphics, "Graphics")];
+                if self.settings.show_advanced {
+                    tabs.extend([
+                        (Tab::Rendering, "Rendering"),
+                        (Tab::Advanced, "Advanced"),
+                        (Tab::Debug, "Tools"),
+                    ]);
+                } else if !matches!(self.tab, Tab::Play | Tab::Graphics) {
+                    self.tab = Tab::Play;
+                }
+                for (tab, label) in tabs {
                     let selected = self.tab == tab;
                     let text = egui::RichText::new(label).size(14.0).color(if selected {
                         egui::Color32::WHITE
@@ -1971,6 +2406,30 @@ impl eframe::App for App {
                         self.tab = tab;
                     }
                 }
+                ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
+                    ui.add_space(10.0);
+                    let label = if self.settings.show_advanced {
+                        "Hide advanced"
+                    } else {
+                        "Advanced settings"
+                    };
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new(label)
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgb(140, 146, 158)),
+                            )
+                            .fill(egui::Color32::TRANSPARENT)
+                            .stroke(egui::Stroke::NONE),
+                        )
+                        .clicked()
+                    {
+                        self.settings.show_advanced = !self.settings.show_advanced;
+                        self.settings.save();
+                    }
+                    ui.add_space(4.0);
+                });
             });
 
         egui::TopBottomPanel::bottom("log")
@@ -2170,17 +2629,43 @@ impl eframe::App for App {
                                 .and_then(|n| n.to_str())
                                 .unwrap_or("")
                                 .to_string();
-                            if ui.selectable_label(false, format!("📁 {name}")).clicked() {
+                            let has_game = dir.join("game_scarlett_master.exe").is_file();
+                            let label = if has_game {
+                                format!("📁 {name}   ·   game found")
+                            } else {
+                                format!("📁 {name}")
+                            };
+                            let text = if has_game {
+                                egui::RichText::new(label).color(egui::Color32::from_rgb(160, 214, 180))
+                            } else {
+                                egui::RichText::new(label)
+                            };
+                            if ui.selectable_label(false, text).clicked() {
                                 self.pick_dir = dir;
                             }
                         }
                     });
                     ui.separator();
                     ui.horizontal(|ui| {
-                        if ui.button("Use this folder").clicked() {
+                        if ui.add(primary("Use this folder", 140.0, 32.0)).clicked()
+                        {
                             let picked = self.pick_dir.display().to_string();
                             match self.pick_for {
-                                Pick::Game => self.settings.game_dir = picked,
+                                Pick::Game => {
+                                    self.settings.game_dir = picked;
+                                    self.settings.save();
+                                    self.tab = Tab::Play;
+                                    self.status = match title_exe(&self.pick_dir) {
+                                        Some(exe) => format!(
+                                            "found {}",
+                                            exe.file_name().and_then(|n| n.to_str()).unwrap_or("the game")
+                                        ),
+                                        None => "game_scarlett_master.exe is not in that folder".into(),
+                                    };
+                                    if title_exe(&self.pick_dir).is_some() {
+                                        self.toast = Some((self.status.clone(), std::time::Instant::now()));
+                                    }
+                                }
                                 Pick::Capture => self.settings.capture_dir = picked,
                             }
                             self.picking = false;
