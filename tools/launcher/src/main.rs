@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const TITLE: &str = "Nullifier";
-const ACCENT: egui::Color32 = egui::Color32::from_rgb(91, 140, 255);
+const ACCENT: egui::Color32 = egui::Color32::from_rgb(77, 122, 235);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 
@@ -1096,21 +1096,36 @@ impl App {
                         .color(egui::Color32::GRAY),
                     ),
                 );
-                ui.add_space(8.0);
-                let big = if self.running() {
-                    egui::Button::new(egui::RichText::new("Stop").strong().color(egui::Color32::WHITE))
-                        .fill(egui::Color32::from_rgb(190, 70, 70))
-                        .min_size(egui::vec2(ui.available_width(), 46.0))
-                } else {
-                    primary("Launch", ui.available_width(), 46.0)
-                };
-                if ui.add(big).clicked() {
-                    if self.running() {
-                        self.stop();
-                    } else {
-                        self.launch();
-                    }
-                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(if self.running() {
+                            "Running"
+                        } else {
+                            "Ready to start"
+                        })
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let button = if self.running() {
+                            egui::Button::new(
+                                egui::RichText::new("Stop").strong().color(egui::Color32::WHITE),
+                            )
+                            .fill(egui::Color32::from_rgb(176, 68, 68))
+                            .min_size(egui::vec2(150.0, 34.0))
+                        } else {
+                            primary("Launch", 150.0, 34.0)
+                        };
+                        if ui.add(button).clicked() {
+                            if self.running() {
+                                self.stop();
+                            } else {
+                                self.launch();
+                            }
+                        }
+                    });
+                });
             });
 
             ui.add_space(6.0);
@@ -1646,10 +1661,18 @@ impl eframe::App for App {
                             .color(if live { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::GRAY }),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let style = ui.style_mut();
+                        style.spacing.button_padding = egui::vec2(8.0, 3.0);
+                        style.spacing.interact_size.y = 22.0;
+                        style.spacing.item_spacing.x = 6.0;
+                        style.visuals.widgets.noninteractive.corner_radius = 4.into();
+                        style.visuals.widgets.inactive.corner_radius = 4.into();
+                        style.visuals.widgets.hovered.corner_radius = 4.into();
+                        style.visuals.widgets.active.corner_radius = 4.into();
                         if ui.small_button("Clear").clicked() {
                             self.log_shown.clear();
                         }
-                        if ui.small_button("Open").clicked() {
+                        if ui.small_button("Open log").clicked() {
                             if let Some(path) = &self.log_path {
                                 open_path(path);
                             }
