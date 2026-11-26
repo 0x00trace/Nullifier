@@ -705,6 +705,24 @@ fn readiness(root: &Path) -> Readiness {
     Readiness { engine, wineserver }
 }
 
+/// The pipeline cache the next run loads: how many title pipelines and how
+/// many bytes of the host library.
+fn pipeline_cache() -> Option<(usize, u64)> {
+    let dir = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA")
+            .map(|dir| PathBuf::from(dir).join("nullifier/cache/pipelines"))?
+    } else {
+        data_dir()?
+            .join("prefix/pfx/drive_c/users/steamuser/AppData/Local/nullifier/cache/pipelines")
+    };
+    let list = std::fs::read_to_string(dir.join("early-pipelines.txt")).ok()?;
+    let count = list.lines().filter(|line| !line.trim().is_empty()).count();
+    let bytes = std::fs::metadata(dir.join("host-pipelines.bin"))
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    Some((count, bytes))
+}
+
 /// The title's executable. Looks two levels down: dumps often keep one folder
 /// inside the picked one.
 fn title_exe(dir: &Path) -> Option<PathBuf> {
@@ -1025,6 +1043,7 @@ struct Readiness {
 enum Prep {
     Engine,
     Wineserver,
+    Preload,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -1326,6 +1345,7 @@ impl App {
         let script = match kind {
             Prep::Engine => root.join("tools/setup.sh"),
             Prep::Wineserver => root.join("tools/build-wineserver.sh"),
+            Prep::Preload => root.join("tools/preload.sh"),
         };
         if !script.is_file() {
             self.status = format!("missing {}", script.display());
@@ -1334,6 +1354,7 @@ impl App {
         let name = match kind {
             Prep::Engine => "setup.log",
             Prep::Wineserver => "wineserver.log",
+            Prep::Preload => "preload.log",
         };
         let log = cache_dir().map(|d| d.join(name));
         if let Some(path) = &log {
@@ -1343,6 +1364,15 @@ impl App {
         }
         let mut cmd = Command::new("sh");
         cmd.arg(&script).current_dir(&root);
+        if kind == Prep::Preload {
+            cmd.env("VICTORY_GAME_DIR", &self.settings.game_dir);
+            if let Some(profile) = custom_profile(&self.settings) {
+                cmd.env("VICTORY_PROFILES", profile);
+            }
+            if !self.settings.keyboard.trim().is_empty() {
+                cmd.env("VICTORY_KEYBOARD", self.settings.keyboard.trim());
+            }
+        }
         if let Some(path) = &log {
             if let Ok(file) = std::fs::File::create(path) {
                 if let Ok(clone) = file.try_clone() {
@@ -1361,6 +1391,7 @@ impl App {
                 self.status = match kind {
                     Prep::Engine => "setting up the engine".into(),
                     Prep::Wineserver => "building the fast graphics service".into(),
+                    Prep::Preload => "preloading shaders".into(),
                 };
             }
             Err(e) => self.status = format!("cannot run {}: {e}", script.display()),
@@ -1380,6 +1411,8 @@ impl App {
                     (Prep::Engine, false) => "setup failed - the details are in the log".into(),
                     (Prep::Wineserver, true) => "the fast graphics service is ready".into(),
                     (Prep::Wineserver, false) => "the fast graphics service did not build - the log has the details".into(),
+                    (Prep::Preload, true) => "shaders preloaded".into(),
+                    (Prep::Preload, false) => "preloading stopped early - the log has the details".into(),
                 };
                 self.toast = Some((self.status.clone(), std::time::Instant::now()));
                 if !ok {
@@ -1769,6 +1802,20 @@ impl App {
                 )
                 .wrap(),
             );
+            let cold = pipeline_cache().map(|(count, _)| count == 0).unwrap_or(true);
+            if cold && self.prep.is_none() {
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("First run: shaders compile while the game loads.")
+                            .small()
+                            .color(egui::Color32::from_rgb(232, 179, 74)),
+                    );
+                    if chip_button(ui, "Preload first").clicked() {
+                        self.prepare(Prep::Preload);
+                    }
+                });
+            }
             ui.add_space(10.0);
             let vendor = if self.hardware.vendor.is_empty() {
                 "your hardware".to_string()
@@ -1855,6 +1902,7 @@ impl App {
         let title = match self.prep_kind {
             Prep::Engine => "Setting up the engine",
             Prep::Wineserver => "Building the fast graphics service",
+            Prep::Preload => "Preloading shaders",
         };
         let elapsed = self
             .prep_started
@@ -2605,6 +2653,61 @@ impl App {
                             ui.monospace(&self.detect_output);
                         }
                     });
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong("Shader cache");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let can = !self.settings.game_dir.trim().is_empty()
+                            && self.prep.is_none()
+                            && !self.running();
+                        if ui
+                            .add_enabled(can, primary("Preload now", 140.0, 30.0))
+                            .on_hover_text(
+                                "Runs the game for about two minutes to compile and save the pipelines the opening uses.",
+                            )
+                            .clicked()
+                        {
+                            self.prepare(Prep::Preload);
+                        }
+                    });
+                });
+                match pipeline_cache() {
+                    Some((count, bytes)) if count > 0 => {
+                        ui.label(format!(
+                            "{count} pipelines ready · {:.0} KB",
+                            bytes as f32 / 1024.0
+                        ));
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(
+                                    "Compiled pipelines are kept between runs and loaded while the game loads.",
+                                )
+                                .small()
+                                .color(egui::Color32::GRAY),
+                            )
+                            .wrap(),
+                        );
+                    }
+                    _ => {
+                        ui.label(
+                            egui::RichText::new("No pipelines cached yet.")
+                                .color(egui::Color32::from_rgb(232, 179, 74)),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(
+                                    "The first run compiles them as it goes. Preloading now makes that first session smoother; it is optional.",
+                                )
+                                .small()
+                                .color(egui::Color32::GRAY),
+                            )
+                            .wrap(),
+                        );
+                    }
+                }
             });
 
             ui.add_space(4.0);

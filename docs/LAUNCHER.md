@@ -81,7 +81,8 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   (FSR, ray tracing, render scale, LOD distance).
 * **Log** — the footer shows the last lines and `Show log`/`Hide log` folds it
   away; while open it also has `Clear`, `Open log` and the detail level.
-* **Tools** — scan the hardware, choose how much the log says, take still
+* **Tools** — scan the hardware, see the **shader cache** (pipelines ready,
+  size) and optionally **Preload now**, choose how much the log says, take still
   screenshots at chosen frame numbers, and a 20-second benchmark run by the
   launcher itself (the same code on Windows and Linux): it loads the game,
   warms up 6 s, measures 20 s, and reports median, p10, frames and crashes
@@ -209,6 +210,21 @@ it got.
 
 Measured on an RTX 5080, six runs in turn: 3.55 / 3.45 / 3.50 fps with the
 built server, 0.60 / 0.65 / 0.70 with Proton's own.
+
+## Shaders and pipelines
+
+Compiled host pipelines are kept in a D3D12 pipeline library under
+`%LOCALAPPDATA%\nullifier\cache\pipelines` (inside the prefix on Linux), and
+the title pipelines a run drew are listed so the next run starts them while the
+title loads — about 2,700 on the current cache, and the world spends 0.0 ms a
+frame waiting for a pipeline. Nothing has to be preloaded before a normal run.
+
+For a cold cache (first install, or after a shader change) **Tools → Shader
+cache → Preload now** starts the title, waits until the world draws, lets the
+first world pipelines compile for twelve seconds, and stops. It takes about two
+minutes and writes the same library and list a normal run would; the first real
+session then starts warm. It is optional: without it the first run compiles the
+same pipelines during its own loading.
 
 ## Safety rules the launcher enforces
 
