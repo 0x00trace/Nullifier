@@ -39,7 +39,7 @@ page marking and texture refresh.
 | Platform | State | Evidence |
 |---|---|---|
 | Linux + AMD | works, 0.7–0.9 fps | measured here (RX 9070 XT, Mesa 26.3.1) |
-| Linux + NVIDIA | works, 1.85–1.97 fps | issue #6 (RTX 5070 Ti); profile is `reported` |
+| Linux + NVIDIA | works, 3.5 fps with the wineserver from `tools/build-wineserver.sh`, 0.6–1.4 with Proton's own | measured here (RTX 5080, below); 1.85–1.97 fps in issue #6 (RTX 5070 Ti); profile is `reported` |
 | Windows + AMD | works, ~1 fps | issue #3 (RX 9070 XT, needs skips) |
 | Windows + NVIDIA | works, 2–4 fps | upstream README, issue #417 |
 | Linux + Intel | untested | profile `untested` |
@@ -84,6 +84,8 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | + an empty pipeline library asked for with no blob (`42466d5`) | profile, library kept from an earlier run | 0.85 / 1.30 / 1.40 | 42 / 44 / 44 | 0 | world renders (159 world captures of over 1 MB); faces and hair right in the 22 looked at; left: low-detail figures in one shot, one or two black frames at shot changes, arm hair drawn like fur |
 | + a streamed texture's host copy made with the mips its view shows (`d038121`) | profile, library kept | 1.00 / 1.30 / 0.70 | 44 / 44 / 40 | 0 | world renders (201 world captures, every second one looked at); both leads' faces have their textures from their first shots in all three runs; left: a dark patch around one eye in one shot of the third run, video panels drawn green in some frames, and the defects of the row above |
 | same build with `VICTORY_SHOWN_MIPS=0` (every mip, as before), run in turn with the row above | profile, library kept | 0.90 / 0.90 / 1.15 | 42 / 41 / 44 | 0 | world renders (232 world captures, every second one of the first 180 frames looked at); a lead's face black for the whole of the second run and dark in the first shots of the third; right in the first |
+| the same build (`9e8bcd8`), served by the wineserver from `tools/build-wineserver.sh` (Wine's view tree) | profile, library kept | **3.55 / 3.45 / 3.50** | 46 / 46 / 47 | 0 | world renders (704 captures of over 50 KB; 72 of each run looked at: 30 spread over the run, 42 from its first 300 world frames); both leads' faces have their skin from their first shot in all three runs; the street, the car, the interior, the title cards and the video panels are drawn; in the third run the man's beard is missing for his first 290 world frames and there from the car scene on (there from the start in the other two) |
+| the same build served by Proton's own wineserver, run in turn with the row above | profile, library kept | 0.60 / 0.65 / 0.70 | 41 / 40 / 42 | 0 | world renders (146 captures of over 50 KB; the first 30 to 42 world captures of each run looked at); a lead's face black in the first shot of the first run; in the third, late shots drawn before their parts have streamed in (a figure as a glowing outline, the things of a room in the air over the city) |
 
 * **Before:** each run ended on a breakpoint of the title's own
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
@@ -164,6 +166,30 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   off), because there is now something to upload in every frame. The layer
   also keeps more texture resources (109–124 thousand after 245 s of world,
   39–58 thousand off): one for each first mip a copy holds.
+
+* **The eighth row and the ninth, its baseline:** nothing in the layer
+  differs between them. Wine's server kept a process's views in a list and
+  walked it at each map and unmap; the title keeps tens of thousands of views
+  and remaps about a thousand a second. Measured in a run of the ninth kind
+  (`perf`, in the world): the server at a whole core, all of it in
+  `is_valid_view_addr` and `req_unmap_view`, and the thread that prepares the
+  frame asleep 71 % of the time behind the two threads whose maps and unmaps
+  the server was answering, because Wine holds its memory lock meanwhile. Wine commit
+  3217449b1f71 of 2026-11-25 makes the list a tree; Proton Experimental
+  11.0-20261112 does not have it. `tools/build-wineserver.sh` builds that
+  Proton's server with it, and the launcher starts it. The two rows are six
+  runs of one build, the two servers in turn. With Proton's own: frame
+  1,694 / 1,571 / 1,503 ms, copies 492–698, textures 314–364, 100–116 ms
+  waiting for the card, which is busy 10–12 % of the time. With the built
+  one: frame 285 / 292 / 287 ms, copies 43–46, textures 11–14, 157–163 ms
+  waiting for the card, busy 63–64 %; the server ran 1.3 % of the time for as
+  many requests. No removal, no unhandled exception and no failed clamp in
+  the six, and the NVIDIA module logged nothing new. In the six runs the
+  server was started by a script outside the tree, as the launcher now
+  starts it; one run each way through the launcher gave 3.70 fps (n=47) and
+  0.90 (n=43). The three runs with the built server are within 3 % of each
+  other, where two runs of a build used to differ by ±40 %. Evidence and
+  method: `docs/FINDINGS.md` 2.5.
 
 ### The texture ask (P0 probe, 2026-11-25)
 
