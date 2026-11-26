@@ -37,7 +37,7 @@ Options, roughly in order of payoff:
 
 1. Amortise: ask every N frames per range, accept one or two frames of texture
    lag. Small, reversible, measurable with `tools/bench.sh`.
-2. Track dirty pages in the emulator instead of asking the kernel (victory
+2. Track dirty pages in the emulator instead of asking the kernel (Nullifier
    already owns the title's mappings in `xmem`).
 3. Batch all of a frame's ranges into one query where the ranges are adjacent.
 

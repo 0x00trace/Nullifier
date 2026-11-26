@@ -102,8 +102,8 @@ add a profile entry with an honest `confidence` instead. See
 Windows target from Linux (this is how it is built here):
 
 ```bash
-export RUSTUP_HOME=~/.local/victory-toolchain/rustup
-export CARGO_HOME=~/.local/victory-toolchain/cargo
+export RUSTUP_HOME=~/.local/nullifier-toolchain/rustup
+export CARGO_HOME=~/.local/nullifier-toolchain/cargo
 export PATH="$CARGO_HOME/bin:$PATH"
 
 cargo xwin build --profile diag -p nullifier --features diagnostics \

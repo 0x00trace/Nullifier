@@ -9,7 +9,7 @@
 use std::path::{Component, Path, PathBuf};
 
 /// Marker file at the root of the source tree.
-pub const ROOT_MARKER: &str = ".victory-root";
+pub const ROOT_MARKER: &str = ".nullifier-root";
 
 /// The source tree this binary was compiled from.
 fn compiled_workspace_root() -> PathBuf {

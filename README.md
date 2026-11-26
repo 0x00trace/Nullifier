@@ -15,7 +15,7 @@ The world renders correctly and is stable — it is **not yet playable**.
 | | |
 |---|---|
 | Menus, cutscene, prologue | work: characters, buildings, HUD, audio, input, saves |
-| Frame rate (world) | **3.1–3.3 fps** on RX 9070 XT / Linux with the wineserver from `tools/build-wineserver.sh` (3 runs, frame ~310 ms; 1.1–1.3 with Proton's own); 3.5 fps on RTX 5080; 3–5 fps reported on Windows |
+| Frame rate (world) | **3.1–3.6 fps** on RX 9070 XT / Linux with the wineserver from `tools/build-wineserver.sh` (frame ~280–310 ms; 1.1–1.3 with Proton's own); 3.5–4.1 fps on RTX 5080; 3–5 fps reported on Windows |
 | Light in shadow | missing — the title's ray-traced light does not run, so shadowed areas are black |
 | Stability | minutes-long runs, no crashes, no device loss |
 
@@ -31,7 +31,7 @@ server alone is 1.1 → 3.2 fps here. What is still slow, with evidence, is in
 
 ```bash
 git clone git@github.com:iNiKKo/Nullifier.git
-cd Nullifier          # the repo keeps its old name; the project is Nullifier
+cd Nullifier
 ./tools/setup.sh --game /path/to/game
 ```
 

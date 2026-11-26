@@ -299,7 +299,7 @@ GPU             60-240 ms
 copy back       100-380 ms
 ```
 
-The open problem is the wall-clock cost of victory's memory tracking and
+The open problem is the wall-clock cost of Nullifier's memory tracking and
 copy/fence coordination under Wine, not bandwidth and not the GPU.
 
 ---

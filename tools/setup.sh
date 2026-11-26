@@ -5,7 +5,7 @@
 #   ./tools/setup.sh --game DIR     # ... and start the title once
 #
 # Idempotent, no sudo, no system packages changed: Rust goes into
-# ~/.local/victory-toolchain. If a system rustup is already set up for the
+# ~/.local/nullifier-toolchain. If a system rustup is already set up for the
 # pinned toolchain, that one is used instead.
 set -uo pipefail
 
@@ -43,8 +43,8 @@ fi
 ok "clang, lld-link"
 
 say "rust toolchain"
-TOOLCHAIN_ENV=(RUSTUP_HOME="$HOME/.local/victory-toolchain/rustup" CARGO_HOME="$HOME/.local/victory-toolchain/cargo")
-LOCAL_CARGO="$HOME/.local/victory-toolchain/cargo/bin/cargo"
+TOOLCHAIN_ENV=(RUSTUP_HOME="$HOME/.local/nullifier-toolchain/rustup" CARGO_HOME="$HOME/.local/nullifier-toolchain/cargo")
+LOCAL_CARGO="$HOME/.local/nullifier-toolchain/cargo/bin/cargo"
 
 if [ -x "$LOCAL_CARGO" ]; then
   ok "using $LOCAL_CARGO"
@@ -54,20 +54,20 @@ elif command -v cargo >/dev/null && command -v rustup >/dev/null; then
 elif command -v cargo >/dev/null && ! command -v rustup >/dev/null; then
   die "a system cargo without rustup cannot add the Windows target; install rustup or remove 'cargo' from PATH to let this script install one into ~/.local"
 else
-  echo "   installing rustup into ~/.local/victory-toolchain (no sudo)"
-  mkdir -p "$HOME/.local/victory-toolchain"
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/victory-rustup-init.sh || die "rustup download failed"
-  RUSTUP_HOME="$HOME/.local/victory-toolchain/rustup" \
-  CARGO_HOME="$HOME/.local/victory-toolchain/cargo" \
-    sh /tmp/victory-rustup-init.sh -y --profile minimal --no-modify-path \
+  echo "   installing rustup into ~/.local/nullifier-toolchain (no sudo)"
+  mkdir -p "$HOME/.local/nullifier-toolchain"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/nullifier-rustup-init.sh || die "rustup download failed"
+  RUSTUP_HOME="$HOME/.local/nullifier-toolchain/rustup" \
+  CARGO_HOME="$HOME/.local/nullifier-toolchain/cargo" \
+    sh /tmp/nullifier-rustup-init.sh -y --profile minimal --no-modify-path \
       --default-toolchain "$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)" \
       --target x86_64-pc-windows-msvc || die "rustup install failed"
-  TOOLCHAIN_ENV=(RUSTUP_HOME="$HOME/.local/victory-toolchain/rustup" CARGO_HOME="$HOME/.local/victory-toolchain/cargo")
+  TOOLCHAIN_ENV=(RUSTUP_HOME="$HOME/.local/nullifier-toolchain/rustup" CARGO_HOME="$HOME/.local/nullifier-toolchain/cargo")
   ok "installed"
 fi
 
 export "${TOOLCHAIN_ENV[@]:-}"
-export PATH="$HOME/.local/victory-toolchain/cargo/bin:$PATH"
+export PATH="$HOME/.local/nullifier-toolchain/cargo/bin:$PATH"
 
 # pinned toolchain + Windows target (rustup handles the toolchain file itself)
 rustup target add x86_64-pc-windows-msvc >/dev/null 2>&1 && ok "x86_64-pc-windows-msvc target" \

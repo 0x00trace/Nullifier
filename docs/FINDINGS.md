@@ -758,7 +758,7 @@ under perf, 220 s, 7.9 MB of samples):
 **Nearly half the process's CPU time is wineserver validating and unmapping
 memory views** — `is_valid_view_addr` alone is 28 %, and it is a linear scan of
 the server's view list, called from `req_unmap_view`. That is the "unaccounted"
-stall, and it explains why nothing in victory's own switches moved the frame:
+stall, and it explains why nothing in Nullifier's own switches moved the frame:
 the time is not in our code, it is in Wine's server process handling the title's
 memory windows.
 

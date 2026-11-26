@@ -1,4 +1,4 @@
-//! `victory`: the command-line front end.
+//! `nullifier`: the command-line front end.
 //!
 //! Every command reads the user's own files and writes only to stdout or to
 //! the user's cache directory (outside the repository).
@@ -16,7 +16,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
 #[command(
-    name = "victory",
+    name = "nullifier",
     version,
     about = "Run an Xbox Series title natively on Windows"
 )]
@@ -228,7 +228,7 @@ pub(crate) fn default_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>> {
     let all: Vec<PathBuf> = cfg.game_dir.into_iter().chain(cfg.test_titles).collect();
     anyhow::ensure!(
         !all.is_empty(),
-        "no paths given and none configured (see victory.example.toml)"
+        "no paths given and none configured (see nullifier.example.toml)"
     );
     Ok(all)
 }

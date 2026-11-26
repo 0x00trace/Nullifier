@@ -38,7 +38,7 @@ Converting them ahead of time from files is only a warm-up.
 | `victory-formats` | the GPU's texture layouts (sizes, tiling, detiling), audio codecs; planned: BCPack |
 | `victory-pipeline` | converter trait, content-addressed cache |
 | `victory-game` | the title-specific formats, build identities, hooks |
-| `apps/victory` | command-line front end |
+| `apps/nullifier` | command-line front end |
 | `xtask` | asset-policy check, git hooks |
 | `tests/fixtures/hle-probe` | a stand-in "title" (our own code) for loader tests |
 
@@ -74,12 +74,12 @@ a folder under `VICTORY_DATA_DIR`. Other paths reach the host unchanged.
 
 An exe's code reaches its static TLS as slot 0; mapped as a DLL it gets
 another slot, so the loader redirects those loads (`victory-loader::tls`).
-`victory run --execute` installs a crash reporter that names faults as
+`nullifier run --execute` installs a crash reporter that names faults as
 `module+rva` and unwinds the faulting thread's stack
 (`victory-loader::crash`).
 
-`victory census` shows this classification without running anything (it
-does not map title DLLs; `victory run` without `--execute` does).
+`nullifier census` shows this classification without running anything (it
+does not map title DLLs; `nullifier run` without `--execute` does).
 
 ## Shaders
 
@@ -94,6 +94,6 @@ waterfall loop reads from the first lane (`v_readfirstlane_b32`) is traced
 to the per-lane load or choice that gives each lane its own (a mask's
 `v_cndmask_b32`, or an if/else whose arms each set it: traced on the paths
 the lanes take, from structurisation), and accessed with a non-uniform heap
-index in one pass. `victory translate`
+index in one pass. `nullifier translate`
 runs every shader it finds (containers, SGD5 files) through these and
 lists what they cannot handle yet.

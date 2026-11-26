@@ -85,7 +85,7 @@ buffers used in place. Completing it is the rewrite.
 * **vkd3d-proton may not expose what we need.** It is a D3D12 implementation;
   a custom heap mapped onto title memory may have to go through
   `VK_EXT_external_memory_host` at the vkd3d level, which is a patch to
-  vkd3d-proton, not to victory. That is the first thing to verify — a one-day
+  vkd3d-proton, not to Nullifier. That is the first thing to verify — a one-day
   spike, before any rewrite.
 
 ## Milestone 0 result (2026-11-25): both sides have the mechanism

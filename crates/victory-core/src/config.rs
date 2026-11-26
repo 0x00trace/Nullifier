@@ -1,8 +1,8 @@
 //! Where the user's files live.
 //!
 //! Resolution order for each value: environment variable, then the config
-//! file (`VICTORY_CONFIG`, else `./victory.toml`), then the default.
-//! See `victory.example.toml` at the repository root.
+//! file (`VICTORY_CONFIG`, else `./nullifier.toml`), then the default.
+//! See `nullifier.example.toml` at the repository root.
 
 use std::path::{Path, PathBuf};
 
@@ -49,7 +49,7 @@ impl Config {
         let explicit = std::env::var_os("VICTORY_CONFIG").map(PathBuf::from);
         let path = explicit
             .clone()
-            .unwrap_or_else(|| PathBuf::from("victory.toml"));
+            .unwrap_or_else(|| PathBuf::from("nullifier.toml"));
         let file = if path.is_file() {
             let text = std::fs::read_to_string(&path)
                 .with_context(|| format!("reading {}", path.display()))?;
@@ -104,7 +104,7 @@ impl Config {
     pub fn require_game_dir(&self) -> Result<&Path> {
         self.game_dir.as_deref().context(
             "no game directory configured: set VICTORY_GAME_DIR or [paths].game_dir in \
-             victory.toml (see victory.example.toml)",
+             nullifier.toml (see nullifier.example.toml)",
         )
     }
 
@@ -133,7 +133,7 @@ fn default_dir(name: &str) -> Result<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
         .context("cannot determine a user directory; set VICTORY_CACHE_DIR and VICTORY_DATA_DIR")?;
-    Ok(base.join("victory").join(name))
+    Ok(base.join("nullifier").join(name))
 }
 
 #[cfg(test)]
@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn example_config_parses() {
-        let text = include_str!("../../../victory.example.toml");
+        let text = include_str!("../../../nullifier.example.toml");
         let parsed: FileConfig = toml::from_str(text).unwrap();
         assert!(parsed.paths.game_dir.is_some());
     }

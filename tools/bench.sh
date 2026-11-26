@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bench: run the title once, then report the world frame rate.
 #
-#   ./tools/bench.sh "label" [-- extra victory args]
+#   ./tools/bench.sh "label" [-- extra Nullifier args]
 #
 # Environment you export is passed through (VICTORY_* switches), so a run is:
 #

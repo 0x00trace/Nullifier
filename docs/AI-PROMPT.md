@@ -57,8 +57,8 @@ ABSOLUTE RULES
     faster" are rejected.
 
 BUILD (Windows target, from Linux)
-  export RUSTUP_HOME=~/.local/victory-toolchain/rustup
-  export CARGO_HOME=~/.local/victory-toolchain/cargo
+  export RUSTUP_HOME=~/.local/nullifier-toolchain/rustup
+  export CARGO_HOME=~/.local/nullifier-toolchain/cargo
   export PATH="$CARGO_HOME/bin:$PATH"
   cargo xwin build --profile diag -p nullifier --features diagnostics \
     --target x86_64-pc-windows-msvc

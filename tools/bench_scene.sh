@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # bench_scene: measure the same *slice* of the world every time.
 #
-#   ./tools/bench_scene.sh "label" [-- extra victory args]
+#   ./tools/bench_scene.sh "label" [-- extra Nullifier args]
 #
 # Why this and not bench.sh: averaging the whole world phase mixes the loading
 # tail, the first room, camera cuts and streaming, and two runs of one build
@@ -62,7 +62,7 @@ START=$(date +%s)
 sleep "$WINDOW"
 END=$(date +%s)
 kill $RUN 2>/dev/null
-for p in $(pgrep -f "victory[.]exe run"); do kill -9 "$p" 2>/dev/null; done
+for p in $(pgrep -f "nullifier[.]exe run"); do kill -9 "$p" 2>/dev/null; done
 
 CLEAN=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG")
 STATS=$(echo "$CLEAN" | grep -oE '^[^ ]* +INFO victory_gpu::host: [0-9.]+ fps' \

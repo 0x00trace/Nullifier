@@ -1,7 +1,8 @@
 > **This is the universal fork** (AMD/NVIDIA, Linux/Windows).
-> Start here: [`docs/FORK.md`](docs/FORK.md) for status and measured numbers,
-> [`docs/LAUNCHER.md`](docs/LAUNCHER.md) to run it, [`AGENTS.md`](AGENTS.md) to
-> contribute. The text below is upstream's, unchanged.
+> Start here: [`docs/FORK.md`](FORK.md) for status and measured numbers,
+> [`docs/LAUNCHER.md`](LAUNCHER.md) to run it, [`AGENTS.md`](../AGENTS.md) to
+> contribute. The text below is upstream's, with only the executable's
+> name changed to `nullifier`.
 
 # VIctory fork (work in progress)
 
@@ -41,7 +42,7 @@ What it changes over `victory-fork` (each is explained in a comment where it is)
 - View indices past the host heap are clamped on AMD too.
 - Programs that stop the AMD driver's compiler, or take it minutes and tens of GB,
   are left out (ray-tracing resolves).
-- Diagnostics: `VICTORY_NULL_MAGENTA`, `victory warm`, more captures.
+- Diagnostics: `VICTORY_NULL_MAGENTA`, `nullifier warm`, more captures.
 
 The guard over all the views of a page is code of
 [victory-fork #115](https://github.com/fxceless/victory-fork/pull/115) by Spexivus
@@ -99,7 +100,7 @@ Rendering:
 - Gathers at a named mip level (with and without an offset) read level 0; fixed.
 - Implicit-level samples outside pixel shaders produced invalid DXIL in 730 compute programs; fixed.
 - Rectangle lists, depth and stencil twins for depth textures written by compute, texture read-backs.
-- Ray tracing, in progress and off by default: the game's own structure-builder programs translate, title memory can be read by raw address from shaders, the hardware ray/box and ray/triangle test is emulated in DXIL (checked against a reference on the GPU), and 59 of the 64 trace programs translate. Nothing is lit by it yet. See [docs/fork-ray-tracing.md](docs/fork-ray-tracing.md).
+- Ray tracing, in progress and off by default: the game's own structure-builder programs translate, title memory can be read by raw address from shaders, the hardware ray/box and ray/triangle test is emulated in DXIL (checked against a reference on the GPU), and 59 of the 64 trace programs translate. Nothing is lit by it yet. See [docs/fork-ray-tracing.md](fork-ray-tracing.md).
 
 Speed and memory:
 - Waits for memory values, write-watch queries and page queries no longer walk page tables per call.
@@ -137,7 +138,7 @@ the user supplies.
 The title's x86-64 code runs unchanged inside our process; VIctory supplies
 the platform underneath it and converts the title's data, ahead of time where
 it can and on first use where it must (shaders). See
-[docs/architecture.md](docs/architecture.md).
+[docs/architecture.md](architecture.md).
 
 ## Status (2026-11-23)
 
@@ -188,7 +189,7 @@ the Windows paging file size, then retry.
 
 ```powershell
 cargo xtask install-hooks                # asset-policy check on every commit
-copy victory.example.toml victory.toml   # then set your paths (outside the repo)
+copy nullifier.example.toml nullifier.toml   # then set your paths (outside the repo)
 cargo test --workspace                   # needs no game data
 cargo run -p victory -- config           # check your paths
 ```
@@ -201,7 +202,7 @@ target\release\victory.exe run <game dir>\<the title's exe> --execute
 ```
 
 The window caption shows the framerate. Saves, settings and `crashes.log`
-are kept under the data folder (default `%LOCALAPPDATA%\victory\data`), derived
+are kept under the data folder (default `%LOCALAPPDATA%\nullifier\data`), derived
 data under the cache folder.
 
 Input: XInput pads. With none connected the keyboard is a pad while the
@@ -224,7 +225,7 @@ victory census [paths...] [--missing] [--strict]
 victory lib-exports <import.lib> [--list]
 victory shader-info [paths...] [--verbose] [--disasm]
 victory translate [paths...] [--validate] [--pipelines] [--list] [--jobs N]
-victory run <exe> [--execute] [--unimplemented trap|zero] [--strict]
+nullifier run <exe> [--execute] [--unimplemented trap|zero] [--strict]
             [--console series-x|series-s] [-- <title arguments>]
 victory config
 ```
@@ -266,4 +267,4 @@ title's data folder.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+GPL-3.0-or-later. See [LICENSE](../LICENSE).

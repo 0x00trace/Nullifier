@@ -306,7 +306,7 @@ pub fn run(
     Ok(())
 }
 
-/// `victory warm`: fills the caches a run reads (`Command::Warm`).
+/// `nullifier warm`: fills the caches a run reads (`Command::Warm`).
 pub fn warm(paths: Vec<PathBuf>, jobs: Option<usize>, pipelines: bool) -> Result<()> {
     let paths = crate::default_paths(paths)?;
     let cfg = victory_core::Config::load()?;

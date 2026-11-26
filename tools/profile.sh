@@ -6,7 +6,7 @@
 #
 # Prints page faults, disk I/O, context switches and the frame rate over a
 # 20 s window after the world is up. Page faults are the interesting number:
-# victory traps writes with page guards, and each trap is an exception through
+# Nullifier traps writes with page guards, and each trap is an exception through
 # Wine, so faults/s is roughly what the frame budget is being spent on.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,7 +15,7 @@ cd "$HERE" || exit 1
 GAME="${VICTORY_GAME_DIR:-$HOME/Downloads/GTA6.Xbox.v1.0.2.1-CYBERLEEK}"
 WAIT="${VICTORY_PROFILE_WAIT:-115}"
 WINDOW="${VICTORY_PROFILE_WINDOW:-20}"
-LOG="/tmp/opencode/victory-profile-$(date +%H%M%S).log"
+LOG="/tmp/opencode/nullifier-profile-$(date +%H%M%S).log"
 mkdir -p /tmp/opencode
 
 export VICTORY_KEYS="${VICTORY_KEYS:-15:Enter,22:Enter,30:Enter,38:Enter,46:Enter,55:Enter,65:Enter,75:Enter,90:Enter,110:Enter,130:Enter}"
@@ -23,7 +23,7 @@ export VICTORY_KEYS="${VICTORY_KEYS:-15:Enter,22:Enter,30:Enter,38:Enter,46:Ente
 
 for _ in $(seq 1 "$WAIT"); do sleep 1; done
 
-PID=$(for p in $(pgrep -f "victory[.]exe run"); do echo "$p $(awk '/VmRSS/{print $2}' /proc/$p/status 2>/dev/null)"; done | sort -k2 -rn | head -1 | cut -d' ' -f1)
+PID=$(for p in $(pgrep -f "nullifier[.]exe run"); do echo "$p $(awk '/VmRSS/{print $2}' /proc/$p/status 2>/dev/null)"; done | sort -k2 -rn | head -1 | cut -d' ' -f1)
 [ -n "$PID" ] || { echo "no title process; see $LOG"; exit 1; }
 
 sample() {
@@ -51,4 +51,4 @@ printf '%-28s %d MB read, %d MB written\n' "disk" "$(( (rb2-rb1)/1048576 ))" "$(
 printf '%-28s %d MB\n' "RSS" "$(( rss2/1024 ))"
 echo
 echo "log: $LOG"
-echo "stop the title: pkill -f 'victory[.]exe run'"
+echo "stop the title: pkill -f 'nullifier[.]exe run'"
