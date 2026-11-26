@@ -80,6 +80,7 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | `main` @ `3c34f8f` | profile | 0.60 / 1.00 / 0.95 | 9 / 12 / 8 | 0 | none taken: every run ended 17–20 s into the world |
 | + raw reads made again when refused (`a0d014d`) | profile | 1.30 / 0.95 / 1.35 | 39 / 38 / 12 | 0 | world renders (captures of 2.0 and 1.5 MB); some faces black, some frames black |
 | + guard pages left unread by copies (`c7e6f5f`) | profile | 0.90 / 1.20 / 0.70 | 40 / 41 / 40 | 0 | world renders (eight captures of 1.0–2.3 MB, one black); one sampled frame looks right, the others have a black face or a low-detail figure |
+| + loops given one latch each (`fa7ea8d`) | profile | 0.90 / 0.80 / 0.80 | 35 / 37 / 40 | 0 | world renders (four world captures of 1.5–1.7 MB); defects as before: in one, hair drawn as a ball of strands over a face, in another a figure lit in a dot pattern |
 
 * **Before:** each run ended on a breakpoint of the title's own
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
@@ -104,6 +105,17 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   with no stop, and 12 more refused reads all landed on the second try, but
   no near-null view in them was long enough to reach the page: the fix is
   shown by its test, not yet in the title.
+* **The fourth row (`fa7ea8d`):** five compute pipelines were never made
+  under Wine: prop instance culling (two) and ray-traced shadow traces
+  (three). vkd3d-proton's DXIL converter calls itself without end on a loop
+  with more than one back edge in a shader that reads another wave lane; the
+  worker making the pipeline ran out of stack, and Wine ends such a thread
+  without a word (`WINEDEBUG=-all` hides its one line). Every earlier run
+  listed them as `being made` for its whole length. These three runs list
+  none of them and log no stack overflow (run with `WINEDEBUG=fixme-all`).
+  The frame rate is within the noise of the row above and the picture
+  defects are the same. The runs also saved every target of three frames
+  (`VICTORY_DUMP_TARGETS=1`), which costs some seconds.
 * Every run logs `no host pipeline library: pipelines are not kept`: the
   host refuses even an empty library here, so each run makes its pipelines
   again and drops hundreds to thousands of draws a frame meanwhile.
