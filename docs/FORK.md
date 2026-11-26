@@ -95,6 +95,7 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | + the wineserver from `tools/build-wineserver.sh` (Wine's view tree) | same | **3.25 / 3.10 / 3.20** | 10 / 9 / 9 | 0 | world renders (captures 3.7–4.1 MB); frame ~310 ms; copies 47–50, textures 14–19; card 6.3–6.4 GB |
 | the same binary, served by Proton's own wineserver (A/B, one run) | same | 1.10 | 11 | 0 | world renders (capture 3.2 MB); frame 930 ms; copies 336, textures 196 |
 * **Before:** each run ended on a breakpoint of the title's own
+| + `VICTORY_INDIRECT_WINDOW=1 VICTORY_INDIRECT_RUNS=1` (on in the linux-amd profiles) | `linux-amd-16gb`, library kept | **3.95 / 3.95 / 4.40** | 6 / 6 / 5 | 0 | world renders; frame 255–259 ms, p10 3.3; 3.05–3.25 and 282 ms with them off |
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
   `dstorage: request failed: copying … hr=0x800703e6`: the kernel would not
   write a raw read's destination, because a copy had guarded the block again

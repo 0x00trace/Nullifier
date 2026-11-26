@@ -146,8 +146,9 @@ CURRENT STATE (do not contradict it without evidence)
   section views removed ours (docs/FINDINGS.md 3.27).
   With the wineserver from tools/build-wineserver.sh that profile is gone: an
   RTX 5080 runs the world at 3.5 fps, frame 285-292 ms (157-163 ms waiting for
-  the card, copies 43-46, textures 11-14), and an RX 9070 XT at 3.1-3.3 fps,
-  frame ~310 ms (copies 47-50, textures 14-19, card 6.3 GB of 15.2).
+  the card, copies 43-46, textures 11-14), and an RX 9070 XT at 3.9-4.4 fps,
+  frame 227-259 ms with VICTORY_INDIRECT_WINDOW and VICTORY_INDIRECT_RUNS on
+  (copies 45-50, textures 14-25, heap pass 41-52, card 6.3 GB of 15.2).
   Next candidates, in order of measured value in fxceless/victory-fork:
   VICTORY_BACK_OWN_VIEW (~9%), VICTORY_JOIN_PARTS (~6%), VICTORY_INDIRECT_GATHER
   (104 -> 97 ms a frame, the biggest but a real port). None of them exist in

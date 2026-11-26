@@ -15,7 +15,7 @@ The world renders correctly and is stable — it is **not yet playable**.
 | | |
 |---|---|
 | Menus, cutscene, prologue | work: characters, buildings, HUD, audio, input, saves |
-| Frame rate (world) | **3.1–3.6 fps** on RX 9070 XT / Linux with the wineserver from `tools/build-wineserver.sh` (frame ~280–310 ms; 1.1–1.3 with Proton's own); 3.5–4.1 fps on RTX 5080; 3–5 fps reported on Windows |
+| Frame rate (world) | **3.9–4.4 fps** on RX 9070 XT / Linux with the wineserver from `tools/build-wineserver.sh` and the indirect window/runs switches (frame 227–259 ms; 1.1–1.3 with Proton's own server and the switches off); 3.5–4.1 fps on RTX 5080; 3–5 fps reported on Windows |
 | Light in shadow | missing — the title's ray-traced light does not run, so shadowed areas are black |
 | Stability | minutes-long runs, no crashes, no device loss |
 
