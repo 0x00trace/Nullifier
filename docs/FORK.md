@@ -86,6 +86,8 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | same build with `VICTORY_SHOWN_MIPS=0` (every mip, as before), run in turn with the row above | profile, library kept | 0.90 / 0.90 / 1.15 | 42 / 41 / 44 | 0 | world renders (232 world captures, every second one of the first 180 frames looked at); a lead's face black for the whole of the second run and dark in the first shots of the third; right in the first |
 | the same build (`9e8bcd8`), served by the wineserver from `tools/build-wineserver.sh` (Wine's view tree) | profile, library kept | **3.55 / 3.45 / 3.50** | 46 / 46 / 47 | 0 | world renders (704 captures of over 50 KB; 72 of each run looked at: 30 spread over the run, 42 from its first 300 world frames); both leads' faces have their skin from their first shot in all three runs; the street, the car, the interior, the title cards and the video panels are drawn; in the third run the man's beard is missing for his first 290 world frames and there from the car scene on (there from the start in the other two) |
 | the same build served by Proton's own wineserver, run in turn with the row above | profile, library kept | 0.60 / 0.65 / 0.70 | 41 / 40 / 42 | 0 | world renders (146 captures of over 50 KB; the first 30 to 42 world captures of each run looked at); a lead's face black in the first shot of the first run; in the third, late shots drawn before their parts have streamed in (a figure as a glowing outline, the things of a room in the air over the city) |
+| + an indirect draw's scratch buffer left readable, no barrier after each draw (`02d27de`), built server | profile, library kept | 3.65 / 3.70 / 3.60 | 46 / 47 / 47 | 0 | world renders (758 captures of over 50 KB; 72 of each run looked at: 30 spread over the run and its first 42); both leads' faces have their textures from their first shots; the street, the car, the interior, the title cards and the video panels are drawn; the woman's top is dark grey in the first captures of the shot with raised hands in two of the runs, as in the three runs two rows up |
+| the same build with `VICTORY_INDIRECT_WINDOW=1`, run in turn with the row above | profile + `VICTORY_INDIRECT_WINDOW=1`, library kept | **4.00 / 3.90 / 4.10** | 47 / 47 / 47 | 0 | world renders (817 captures of over 50 KB; 72 of each run looked at, as above); faces, street, car, interior, title cards and video panels as in the row above; the woman's top is white in every capture of that shot looked at |
 
 | the merged stack (#1–#5, #6 docs) on this AMD machine | `linux-amd-16gb`, library kept | 1.70 / 1.40 / 1.40 | 15 / 16 / 15 | 0 | world renders (captures 3.2–4.2 MB); card 6.1–6.3 GB of 15.2; texture refresh 94–281 ms, mostly the write-watch ask |
 | + the wineserver from `tools/build-wineserver.sh` (Wine's view tree) | same | **3.25 / 3.10 / 3.20** | 10 / 9 / 9 | 0 | world renders (captures 3.7–4.1 MB); frame ~310 ms; copies 47–50, textures 14–19; card 6.3–6.4 GB |
@@ -193,6 +195,33 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   0.90 (n=43). The three runs with the built server are within 3 % of each
   other, where two runs of a build used to differ by ±40 %. Evidence and
   method: `docs/FINDINGS.md` 2.5.
+
+* **The tenth row and the eleventh:** with the built server the card is the
+  larger part of a frame, and a timing run (`VICTORY_GPU_TIMING=1`) shows what
+  it runs: of 117.5 ms a frame on the title's commands, 78.3 ms go to about
+  3,100 indirect commands of one record each, 25 µs a command whatever it
+  draws, against 6 µs for a direct mesh draw. The layer clamps each record
+  with a compute pass of its own in front of the draw, between two waits,
+  and moved its scratch buffer back to the common state behind the draw: a
+  third barrier, and the only thing left between two draws served from a
+  window (`VICTORY_INDIRECT_WINDOW=1`), which is why windows alone gave
+  nothing on `9e8bcd8` (3.50 fps, n=47, 1,734 passes a frame of about 3,000).
+  `02d27de`, ported from fxceless/victory-fork `f85101b`, leaves the scratch
+  buffer readable until the next clamp, and takes that tree's rule that a
+  draw record of 2^23 vertices an instance or more runs empty (it lost the
+  device with windows on before it). A benchmark of the clamp's barriers
+  (`indirect::bench`, no title needed) gives for 3,200 draws on this card:
+  26.9 ms before and 20.3 ms now clamped one at a time, 12.7 ms before and
+  2.7 ms now in windows of 32. The two rows are six runs of one build,
+  windows off and on in turn. A run's frame lines stand in different scenes,
+  so a line was fitted to each set's world frame lines against draws a
+  frame: at 3,000 draws the frame is 279 ms on `9e8bcd8`, 262 ms with the
+  change and 243 ms with windows on, and the wait for the card 152.6, 141.6
+  and 122.5 ms. No removal, no unhandled exception and no failed clamp in
+  the six, and the NVIDIA module logged nothing new. Windows stay off by
+  default: under half of the title's records lie one step apart, and 1,727
+  commands a frame still had a pass of their own. Evidence and method:
+  `docs/FINDINGS.md` 2.6.
 
 ### The texture ask (P0 probe, 2026-11-25)
 

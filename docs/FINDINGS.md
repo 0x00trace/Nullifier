@@ -138,6 +138,104 @@ under 4 µs each); the frame thread ran 35 % of the time, and 6.98 s of the
 * `bench.sh` counts frame lines under 10 fps as the world. The fastest lines
   of these runs are 7.7 to 8.6 fps: the limit will need raising soon.
 
+## 2.6 What the card runs: two thirds of its time on the title's commands went to indirect draws, about 25 µs each (2026-11-26)
+
+Same machine and settings as 2.5, with the built server. Build `9e8bcd8` for
+the measurements, `02d27de` for the change.
+
+**What was measured.** One run with `VICTORY_GPU_TIMING=1 VICTORY_D3D12_DRED=1`:
+every list is waited for on its own and has a timestamp in front of every
+command the title recorded (median 2.90 fps, n=47, no removal). Medians over
+its 47 world lines, per frame:
+
+| the title's commands, by first word | on the card | commands | each |
+|---|---|---|---|
+| indirect (one record a call) | 78.3 ms | 3,110 | 25.2 µs |
+| dispatch | 41.8 ms | 1,262 | 33.1 µs |
+| alias copy | 6.3 ms | 78 | 80.8 µs |
+| mesh (direct) | 2.4 ms | 378 | 6.3 µs |
+| indexed, draw (direct) | 2.4 ms | 210 | 11 µs |
+| all | 117.5 ms | | |
+
+The card was waited for 188 ms of a 344 ms frame in that run. What the
+commands do not account for is the layer's own lists (the passes over copies
+in the card's memory, preludes) and the waits themselves.
+
+* The dispatches are the title's work: in one line of that run thirteen
+  compute pipelines took 0.7 to 9.3 ms a frame each, 29 ms together.
+* The indirect commands are not. A direct mesh draw costs the card 6 µs and an
+  indirect one 25, whatever it draws: two pipelines that draw depth only (44
+  and 72 commands a frame in that line) cost 16 and 11 µs a command. The
+  difference is what the layer records around each one.
+
+**Why.** Before an indirect command the layer clamps its record into a
+scratch buffer with a compute pass of its own (`indirect.rs`), so that a
+record of garbage cannot run the card for seconds. Around one draw that was:
+a wait for every earlier shader write and a state change, the pass, a second
+wait and state change, the draw, and a third state change that moved the
+scratch buffer back to the common state. The card leaves drawing for compute
+and comes back, and each of the three barriers ends the pass the draw was
+in.
+
+**The benchmark.** `indirect::bench` draws 3,200 one-record indirect draws of
+a tiny triangle each way and times them on the card
+(`cargo test -p victory-gpu --lib indirect::bench -- --ignored --nocapture`;
+no title files). On the RTX 5080, through the vkd3d-proton of Proton
+Experimental 11.0-20261112:
+
+| the 3,200 draws | on the card | a draw |
+|---|---|---|
+| read straight from the title's records (not something the layer may do) | 0.06 ms | 0.02 µs |
+| a pass for each, the scratch buffer back to common after each (before) | 26.9 ms | 8.4 µs |
+| a pass for each, the scratch buffer left readable (now) | 20.3 ms | 6.3 µs |
+| a pass for every 32, back to common after each draw (windows, before) | 12.7 ms | 4.0 µs |
+| a pass for every 32, left readable (windows, now) | 2.7 ms | 0.9 µs |
+
+So the third barrier was a quarter of the cost of a draw clamped alone, and
+nearly all of the cost of a draw served from a window: a window
+(`VICTORY_INDIRECT_WINDOW=1`) took the pass away and left a barrier after
+every draw. One run of `9e8bcd8` with windows on shows it: 1,734 passes a
+frame where there were about 3,000, and the same frame rate (3.50 fps, n=47;
+3.45 to 3.55 without).
+
+**The change** (`02d27de`, ported by hand from fxceless/victory-fork
+`f85101b`): the scratch buffer stays readable as indirect arguments after a
+clamp. The next clamp moves it straight back to unordered access, and the
+list moves it to the common state once, when it closes. With it comes that
+tree's rule for windows, which it lost the device without: a draw record that
+asks for 2^23 vertices or indices an instance or more runs empty and charges
+nothing. A window charges the list's budget once for a record however often
+it is drawn, and upstream found a list drawing 90 records of 2^24 vertices
+from one.
+
+**Six runs of `02d27de`, windows off and on in turn** (`tools/bench.sh`,
+300 s each, `VICTORY_CAPTURE_WORLD=1`), against the three runs of 2.5 with
+the built server. A run's frame lines stand in different scenes (1,000 to
+4,700 draws a frame), so beside the medians a line is fitted to each set's
+world frame lines, of frame time and of the wait for the card against draws
+a frame, and read at 3,000 draws:
+
+| | median fps | n | frame at 3,000 draws | wait for the card at 3,000 draws | per 1,000 draws | removals |
+|---|---|---|---|---|---|---|
+| `9e8bcd8` (2.5) | 3.55 / 3.45 / 3.50 | 46 / 46 / 47 | 279 ms | 152.6 ms | 28.2 ms | 0 |
+| `02d27de`, default | 3.65 / 3.70 / 3.60 | 46 / 47 / 47 | 262 ms | 141.6 ms | 24.4 ms | 0 |
+| `02d27de`, `VICTORY_INDIRECT_WINDOW=1` | **4.00 / 3.90 / 4.10** | 47 / 47 / 47 | **243 ms** | **122.5 ms** | 19.6 ms | 0 |
+
+The fit is steady: the three runs of the first row give 152.6, 153.1 and
+152.1 ms one by one. No device removal, no unhandled exception and no failed
+clamp in the six. With windows on, 1,727 indirect commands a frame still
+have a pass of their own (the median of the first such run): the title keeps
+its mesh records scattered through one large argument buffer, and a window
+of records one step apart serves under half of them.
+
+Picture, from 72 captures of each run (30 spread over the run and its first
+42): the title cards, the street, the car, the interior and the video panels
+are drawn, and both leads have their face textures from their first shots.
+In the first captures of the shot with raised hands the woman's top is dark
+grey in two of the three default runs, as it is in the three runs of 2.5,
+and white in every capture of that shot looked at in the three runs with
+windows.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
