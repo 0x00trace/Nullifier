@@ -1672,7 +1672,41 @@ void main(uint3 id : SV_DispatchThreadID) {
     lo = lo & ~15u;
     hi = (hi + 15u) & ~15u;
     uint4 h = uint4(0x9E3779B9u, 0x85EBCA6Bu, 0xC2B2AE35u, 0x27D4EB2Fu);
-    for (uint at = lo; at < hi; at += 16u) {
+    uint at = lo;
+    // Eight units (128 bytes) at a time: the thirty-two loads are issued
+    // before any of them is consumed, so they overlap in memory instead of
+    // one at a time (cool_fox 9b90ad11, "the same hashes"; the hash order is
+    // unchanged). A piece is 4096 units, all hashed by this thread.
+    [loop]
+    for (; at + 128u <= hi; at += 128u) {
+        uint w = at / 4u;
+        uint4 v0 = uint4(now[w], now[w + 1u], now[w + 2u], now[w + 3u]);
+        uint4 v1 = uint4(now[w + 4u], now[w + 5u], now[w + 6u], now[w + 7u]);
+        uint4 v2 = uint4(now[w + 8u], now[w + 9u], now[w + 10u], now[w + 11u]);
+        uint4 v3 = uint4(now[w + 12u], now[w + 13u], now[w + 14u], now[w + 15u]);
+        uint4 v4 = uint4(now[w + 16u], now[w + 17u], now[w + 18u], now[w + 19u]);
+        uint4 v5 = uint4(now[w + 20u], now[w + 21u], now[w + 22u], now[w + 23u]);
+        uint4 v6 = uint4(now[w + 24u], now[w + 25u], now[w + 26u], now[w + 27u]);
+        uint4 v7 = uint4(now[w + 28u], now[w + 29u], now[w + 30u], now[w + 31u]);
+        h = (h ^ v0) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+        h = (h ^ v1) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+        h = (h ^ v2) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+        h = (h ^ v3) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+        h = (h ^ v4) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+        h = (h ^ v5) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+        h = (h ^ v6) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+        h = (h ^ v7) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+    }
+    [loop]
+    for (; at < hi; at += 16u) {
         uint w = at / 4u;
         uint4 v = uint4(now[w], now[w + 1u], now[w + 2u], now[w + 3u]);
         h = (h ^ v) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
