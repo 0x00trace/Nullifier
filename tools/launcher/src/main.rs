@@ -790,6 +790,8 @@ struct App {
     new_value: String,
     info: Option<String>,
     game: Option<GameSettings>,
+    game_warned: bool,
+    game_warning_open: bool,
     bench_start: Option<std::time::Instant>,
     bench_world: Option<std::time::Instant>,
     bench_measure: Option<std::time::Instant>,
@@ -956,6 +958,8 @@ impl App {
             new_value: String::new(),
             info: None,
             game: load_game_settings(),
+            game_warned: false,
+            game_warning_open: false,
             bench_start: None,
             bench_world: None,
             bench_measure: None,
@@ -1505,6 +1509,27 @@ impl App {
 
     fn game_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Game settings");
+        egui::Frame::group(ui.style())
+            .fill(egui::Color32::from_rgb(45, 38, 24))
+            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
+            .inner_margin(egui::Margin::symmetric(12, 10))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    egui::RichText::new("Experimental - most of these do not take effect yet")
+                        .strong()
+                        .color(egui::Color32::from_rgb(240, 200, 120)),
+                );
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Only gamma was verified. Fullscreen resolution, the frame-rate limit, motion blur and ray-traced shadows were tested and are ignored by this build. Apply keeps settings.xml.bak.",
+                        )
+                        .color(egui::Color32::from_rgb(225, 210, 180)),
+                    )
+                    .wrap(),
+                );
+            });
         ui.add(
             egui::Label::new(
                 egui::RichText::new("The title's own options, from settings.xml. Close the game before changing them; it writes the file when it exits.")
@@ -2007,6 +2032,45 @@ impl eframe::App for App {
             Tab::Advanced => self.advanced(ui),
             Tab::Debug => self.debug(ui),
         });
+
+        if self.tab == Tab::Game && !self.game_warned {
+            self.game_warned = true;
+            self.game_warning_open = true;
+        }
+        if self.game_warning_open {
+            let mut open = true;
+            egui::Window::new("Game settings are experimental")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(430.0)
+                .show(ctx, |ui| {
+                    ui.label(
+                        "Most of the title's own settings do not take effect in this build yet.",
+                    );
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Verified: gamma (the picture goes black at its lowest value).\nTested and ignored: fullscreen resolution, frame-rate limit, motion blur, ray-traced shadows.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        egui::RichText::new(
+                            "Changing values is safe: Apply writes settings.xml and keeps settings.xml.bak. Close the game first; it rewrites the file on exit.",
+                        )
+                        .small(),
+                    );
+                    if ui.button("Understood").clicked() {
+                        self.game_warning_open = false;
+                    }
+                });
+            if !open {
+                self.game_warning_open = false;
+            }
+        }
 
         if let Some(key) = self.info.clone() {
             let mut open = true;

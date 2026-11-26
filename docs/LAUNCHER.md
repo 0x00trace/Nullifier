@@ -42,9 +42,11 @@ cargo build --manifest-path tools/launcher/Cargo.toml
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
 * **Game** — the title's own settings, parsed from its `settings.xml` (88
   values: HDR, gamma, anisotropic filtering, FSR quality/sharpen, LOD scales,
-  shadows, motion blur, water reflections, resolution, frame cap). Apply writes
-  the file with `settings.xml.bak` beside it; the game must be closed. The
-  title writes this file itself on exit, so reload after playing.
+  shadows, motion blur, water reflections, resolution, frame cap). **Experimental:**
+  only `gamma` is verified; fullscreen resolution, the frame-rate limit, motion
+  blur and ray-traced shadows were tested and are ignored by this build. Apply
+  writes the file with `settings.xml.bak` beside it; the game must be closed.
+  The title writes this file itself on exit, so reload after playing.
 * **Advanced** — the exact set as editable `KEY=VALUE` rows, free-form
   environment, profile notes, and the disabled list of what needs engine work
   (FSR, ray tracing, render scale, LOD distance).
