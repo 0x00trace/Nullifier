@@ -267,6 +267,18 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
 * Linux ceiling observed across reports: 0.16 fps (3090), 1.85–1.97 (5070 Ti),
   1.1–1.3 here. Windows on the same build: 2–4 fps. The gap is Wine, not the
   hardware.
+* **On the card, an indirect draw cost about 25 µs whatever it drew (2.6).**
+  The layer clamps each indirect record with a compute pass of its own in
+  front of the draw, and about 3,100 such draws a frame took two thirds of
+  the card's time on the title's commands. `02d27de` took one of the three
+  barriers around a draw away, and `VICTORY_INDIRECT_WINDOW=1` then serves
+  under half of the records from windows: 3.60-3.70 fps by default and
+  3.90-4.10 with windows on, against 3.45-3.55, on an RTX 5080. To see what
+  the card runs, take a timing run (`VICTORY_GPU_TIMING=1
+  VICTORY_D3D12_DRED=1`: every list waited for on its own, a timestamp
+  before each command). To compare ways of recording a draw without the
+  title: `cargo test -p victory-gpu --lib indirect::bench -- --ignored
+  --nocapture`.
 
 The next wins are on the copy lane (copy-back through the layer's own view,
 joined submission parts) and the draw lane (indirect records clamped once per
