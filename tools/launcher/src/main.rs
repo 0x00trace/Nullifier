@@ -165,12 +165,13 @@ fn main() -> eframe::Result<()> {
             app.tab = match start_tab.as_deref() {
                 Some("game") => Tab::Graphics,
                 Some("graphics") => Tab::Graphics,
+                Some("controls") => Tab::Controls,
                 Some("rendering") => Tab::Rendering,
                 Some("advanced") => Tab::Advanced,
                 Some("debug") => Tab::Debug,
                 _ => Tab::Play,
             };
-            if !matches!(app.tab, Tab::Play | Tab::Graphics) {
+            if matches!(app.tab, Tab::Rendering | Tab::Advanced | Tab::Debug) {
                 app.settings.show_advanced = true;
             }
             app.info = start_info;
@@ -205,6 +206,9 @@ struct Settings {
     /// Show the technical tabs (Rendering, Advanced, Tools).
     #[serde(default)]
     show_advanced: bool,
+    /// `Esc=Menu,Enter=A,...` for the keyboard stand-in pad. Empty = defaults.
+    #[serde(default)]
+    keyboard: String,
     /// The one-time experimental warning on the Graphics page was acknowledged.
     #[serde(default)]
     game_warning_seen: bool,
@@ -248,6 +252,7 @@ impl Default for Settings {
             profiles_hash: 0,
             planned: Planned::default(),
             show_advanced: false,
+            keyboard: String::new(),
             game_warning_seen: false,
             root: None,
             reloaded_profile: false,
@@ -713,6 +718,119 @@ fn title_exe(dir: &Path) -> Option<PathBuf> {
     None
 }
 
+/// The stand-in pad's buttons, in the order the Controls page shows them.
+const PAD_ACTIONS: [(&str, &str); 14] = [
+    ("Menu", "Esc"),
+    ("View", "Tab"),
+    ("A", "Enter"),
+    ("B", "Backspace"),
+    ("X", "X"),
+    ("Y", "Y"),
+    ("Up", "Up"),
+    ("Down", "Down"),
+    ("Left", "Left"),
+    ("Right", "Right"),
+    ("LB", "Q"),
+    ("RB", "E"),
+    ("LS", "F"),
+    ("RS", "H"),
+];
+
+fn load_keys(text: &str) -> Vec<String> {
+    let mut keys: Vec<String> = PAD_ACTIONS.iter().map(|(_, key)| (*key).to_string()).collect();
+    for pair in text.split([',', ';']) {
+        let Some((key, action)) = pair.split_once('=') else { continue };
+        if let Some(index) = PAD_ACTIONS
+            .iter()
+            .position(|(name, _)| name.eq_ignore_ascii_case(action.trim()))
+        {
+            keys[index] = key.trim().to_string();
+        }
+    }
+    keys
+}
+
+fn keys_to_text(keys: &[String]) -> String {
+    PAD_ACTIONS
+        .iter()
+        .zip(keys)
+        .map(|((action, _), key)| format!("{}={}", key.trim(), action))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn key_name_ok(name: &str) -> bool {
+    let name = name.trim().to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        "esc" | "escape" | "tab" | "enter" | "return" | "backspace" | "back" | "space"
+            | "up" | "down" | "left" | "right" | "shift" | "ctrl" | "control" | "alt"
+    ) {
+        return true;
+    }
+    if name.len() == 1 {
+        return name.as_bytes()[0].is_ascii_alphanumeric();
+    }
+    name.strip_prefix('f')
+        .and_then(|n| n.parse::<u8>().ok())
+        .is_some_and(|n| (1..=12).contains(&n))
+}
+
+/// Connected pads, as the system names them. Soft errors are just "none".
+fn scan_controllers() -> Vec<String> {
+    let mut names = Vec::new();
+    if cfg!(windows) {
+        let out = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "Get-CimInstance Win32_PnPEntity | Where-Object { $_.Name -match 'Xbox|DualSense|DualShock|Wireless Controller|Gamepad' } | ForEach-Object { $_.Name }",
+            ])
+            .output();
+        if let Ok(out) = out {
+            for line in String::from_utf8_lossy(&out.stdout).lines() {
+                let line = line.trim();
+                if !line.is_empty() {
+                    names.push(line.to_string());
+                }
+            }
+        }
+    } else {
+        let root = std::env::var_os("NULLIFIER_INPUT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/sys/class/input"));
+        if let Ok(entries) = std::fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                if !name.to_string_lossy().starts_with("event") {
+                    continue;
+                }
+                let path = entry.path().join("device/name");
+                if let Ok(text) = std::fs::read_to_string(path) {
+                    let text = text.trim().to_string();
+                    let lower = text.to_lowercase();
+                    if [
+                        "xbox",
+                        "dualsense",
+                        "dualshock",
+                        "controller",
+                        "gamepad",
+                        "sony interactive",
+                    ]
+                    .iter()
+                    .any(|needle| lower.contains(needle))
+                    {
+                        names.push(text);
+                    }
+                }
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
+}
+
 fn custom_profile(settings: &Settings) -> Option<PathBuf> {
     let dir = cache_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
@@ -782,6 +900,9 @@ fn launch_command(root: &Path, settings: &Settings, profile_file: &Path) -> Comm
     }
     if !settings.keys.trim().is_empty() {
         cmd.env("VICTORY_KEYS", settings.keys.trim());
+    }
+    if !settings.keyboard.trim().is_empty() {
+        cmd.env("VICTORY_KEYBOARD", settings.keyboard.trim());
     }
     for (k, v) in extra_env(settings) {
         cmd.env(k, v);
@@ -866,6 +987,9 @@ struct App {
     game_advanced_open: bool,
     update_tag: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<Option<String>>>,
+    keyboard_keys: Vec<String>,
+    controllers: Vec<String>,
+    controllers_checked: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -913,6 +1037,7 @@ fn current_preset(sets: &BTreeMap<String, String>, shipped: &BTreeMap<String, St
 enum Tab {
     Play,
     Graphics,
+    Controls,
     Rendering,
     Advanced,
     Debug,
@@ -1016,6 +1141,7 @@ impl App {
             .unwrap_or_default();
         let readiness = settings_root_readiness(&settings);
         let (update_tag, update_rx) = update_check();
+        let keyboard_keys = load_keys(&settings.keyboard);
         let status = if settings.reloaded_profile {
             "profile updated; settings reloaded"
         } else {
@@ -1058,6 +1184,9 @@ impl App {
             game_advanced_open: false,
             update_tag,
             update_rx,
+            keyboard_keys,
+            controllers: Vec::new(),
+            controllers_checked: false,
         }
     }
 
@@ -2082,6 +2211,150 @@ impl App {
         }
     }
 
+    fn controls(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Controls");
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "Xbox and DualSense pads work through the system's own controller support. While no pad is connected, the keyboard stands in for one.",
+                )
+                .small()
+                .color(egui::Color32::GRAY),
+            )
+            .wrap(),
+        );
+        if !self.controllers_checked {
+            self.controllers = scan_controllers();
+            self.controllers_checked = true;
+        }
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong("Controllers");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if chip_button(ui, "Check again").clicked() {
+                            self.controllers = scan_controllers();
+                            self.status = if self.controllers.is_empty() {
+                                "no controller found".into()
+                            } else {
+                                format!("{} controller(s) found", self.controllers.len())
+                            };
+                        }
+                    });
+                });
+                if self.controllers.is_empty() {
+                    ui.label(
+                        egui::RichText::new("No controller found.")
+                            .color(egui::Color32::from_rgb(232, 179, 74)),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "Plug in an Xbox pad or a DualSense and press Check again. On Linux, a DualSense sometimes needs Steam Input to appear as a pad.",
+                            )
+                            .small()
+                            .color(egui::Color32::GRAY),
+                        )
+                        .wrap(),
+                    );
+                } else {
+                    for name in &self.controllers {
+                        ui.label(
+                            egui::RichText::new(format!("•  {name}"))
+                                .color(egui::Color32::from_rgb(87, 199, 133)),
+                        );
+                    }
+                }
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.strong("Keyboard pad");
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Keys that act as pad buttons while no controller is connected. Write a key as Enter, Space, F1, or one letter.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(4.0);
+                ui.columns(2, |columns| {
+                    for (half, column) in columns.iter_mut().enumerate() {
+                        let first = half * 7;
+                        egui::Grid::new(format!("keyboard grid {half}"))
+                            .num_columns(2)
+                            .spacing([12.0, 6.0])
+                            .show(column, |ui| {
+                                for (index, (action, _)) in
+                                    PAD_ACTIONS.iter().enumerate().skip(first).take(7)
+                                {
+                                    ui.label(*action);
+                                    ui.add_sized(
+                                        [88.0, 24.0],
+                                        egui::TextEdit::singleline(&mut self.keyboard_keys[index]),
+                                    );
+                                    ui.end_row();
+                                }
+                            });
+                    }
+                });
+                if self.keyboard_keys.iter().any(|key| !key_name_ok(key)) {
+                    ui.label(
+                        egui::RichText::new("A key name is not recognised; the game will ignore that one.")
+                            .small()
+                            .color(egui::Color32::from_rgb(232, 106, 106)),
+                    );
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add(primary("Apply", 90.0, 30.0)).clicked() {
+                        self.settings.keyboard = keys_to_text(&self.keyboard_keys);
+                        self.settings.save();
+                        self.status = "keyboard bindings saved".into();
+                    }
+                    if chip_button(ui, "Reset to defaults").clicked() {
+                        self.keyboard_keys = load_keys("");
+                        self.settings.keyboard.clear();
+                        self.settings.save();
+                        self.status = "keyboard bindings reset".into();
+                    }
+                });
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Sticks: W A S D (left) and I J K L (right). Triggers: Z and C. Those stay fixed.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.strong("Mouse");
+                ui.label(
+                    egui::RichText::new("Mouse look is not available yet.")
+                        .color(egui::Color32::from_rgb(232, 179, 74)),
+                );
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "The title reads the right stick for looking. Mapping the mouse to it needs a new host input path and is the next step after this page.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+            });
+        });
+    }
+
     fn rendering(&mut self, ui: &mut egui::Ui) {
         ui.heading("Rendering");
         ui.add(
@@ -2452,14 +2725,18 @@ impl eframe::App for App {
                     }
                 });
                 ui.add_space(16.0);
-                let mut tabs = vec![(Tab::Play, "Play"), (Tab::Graphics, "Graphics")];
+                let mut tabs = vec![
+                    (Tab::Play, "Play"),
+                    (Tab::Graphics, "Graphics"),
+                    (Tab::Controls, "Controls"),
+                ];
                 if self.settings.show_advanced {
                     tabs.extend([
                         (Tab::Rendering, "Rendering"),
                         (Tab::Advanced, "Advanced"),
                         (Tab::Debug, "Tools"),
                     ]);
-                } else if !matches!(self.tab, Tab::Play | Tab::Graphics) {
+                } else if !matches!(self.tab, Tab::Play | Tab::Graphics | Tab::Controls) {
                     self.tab = Tab::Play;
                 }
                 for (tab, label) in tabs {
@@ -2566,6 +2843,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Play => self.play(ui),
             Tab::Graphics => self.game_page(ui),
+            Tab::Controls => self.controls(ui),
             Tab::Rendering => self.rendering(ui),
             Tab::Advanced => self.advanced(ui),
             Tab::Debug => self.debug(ui),

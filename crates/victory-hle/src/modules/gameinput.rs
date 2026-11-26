@@ -63,7 +63,7 @@ const POLL: Duration = Duration::from_millis(8);
 
 /// The keyboard's stand-in gamepad (virtual key, button); README lists it.
 /// Sticks: W/A/S/D left, I/J/K/L right; triggers Z and C.
-const FALLBACK_BUTTONS: [(u8, u32); 14] = [
+const DEFAULT_BUTTONS: [(u8, u32); 14] = [
     (0x1B, MENU), // Esc
     (0x09, VIEW), // Tab
     (0x0D, A),    // Enter
@@ -79,6 +79,77 @@ const FALLBACK_BUTTONS: [(u8, u32); 14] = [
     (b'F', LEFT_STICK),
     (b'H', RIGHT_STICK),
 ];
+
+/// `VICTORY_KEYBOARD=Space=A,Enter=B,...`: the launcher's Controls page writes
+/// it. Sticks and triggers stay W/A/S/D, I/J/K/L and Z/C.
+static FALLBACK_BUTTONS: LazyLock<Vec<(u8, u32)>> = LazyLock::new(|| {
+    let text = std::env::var("VICTORY_KEYBOARD").unwrap_or_default();
+    let custom = !text.trim().is_empty();
+    let mut bindings = parse_bindings(&text);
+    if bindings.is_empty() {
+        bindings = DEFAULT_BUTTONS.to_vec();
+    }
+    tracing::info!(custom, list = %text, "keyboard to gamepad bindings");
+    bindings
+});
+
+/// A host key name as a Windows virtual-key code.
+fn vk_named(name: &str) -> Option<u8> {
+    match name.to_ascii_lowercase().as_str() {
+        "esc" | "escape" => Some(0x1B),
+        "tab" => Some(0x09),
+        "enter" | "return" => Some(0x0D),
+        "backspace" | "back" => Some(0x08),
+        "space" => Some(0x20),
+        "up" => Some(0x26),
+        "down" => Some(0x28),
+        "left" => Some(0x25),
+        "right" => Some(0x27),
+        "shift" => Some(0x10),
+        "ctrl" | "control" => Some(0x11),
+        "alt" => Some(0x12),
+        name if name.len() == 1 => {
+            let c = name.as_bytes()[0].to_ascii_uppercase();
+            c.is_ascii_alphanumeric().then_some(c)
+        }
+        name if name.starts_with('f') => name[1..]
+            .parse::<u8>()
+            .ok()
+            .filter(|n| (1..=12).contains(n))
+            .map(|n| 0x6F + n),
+        _ => None,
+    }
+}
+
+/// A stand-in pad button by the name the Controls page shows.
+fn pad_button_named(name: &str) -> Option<u32> {
+    match name.to_ascii_lowercase().as_str() {
+        "menu" | "start" => Some(MENU),
+        "view" | "back" => Some(VIEW),
+        "a" => Some(A),
+        "b" => Some(B),
+        "x" => Some(X),
+        "y" => Some(Y),
+        "up" => Some(UP),
+        "down" => Some(DOWN),
+        "left" => Some(LEFT),
+        "right" => Some(RIGHT),
+        "lb" | "leftshoulder" => Some(LEFT_SHOULDER),
+        "rb" | "rightshoulder" => Some(RIGHT_SHOULDER),
+        "ls" | "leftstick" => Some(LEFT_STICK),
+        "rs" | "rightstick" => Some(RIGHT_STICK),
+        _ => None,
+    }
+}
+
+fn parse_bindings(text: &str) -> Vec<(u8, u32)> {
+    text.split([',', ';'])
+        .filter_map(|pair| {
+            let (key, button) = pair.split_once('=')?;
+            Some((vk_named(key.trim())?, pad_button_named(button.trim())?))
+        })
+        .collect()
+}
 
 /// A gamepad reading: triggers 0 to 1, sticks -1 to 1 (up positive).
 #[repr(C)]
@@ -1245,6 +1316,14 @@ mod host {
             GetWindowThreadProcessId(GetForegroundWindow(), &mut process);
             process == GetCurrentProcessId()
         }
+    }
+
+    #[test]
+    fn keyboard_bindings_parse() {
+        let bindings = super::parse_bindings("Space=A, Enter=B; F1=Menu, nope=A, Space=nope");
+        assert_eq!(bindings, vec![(0x20, super::A), (0x0D, super::B), (0x70, super::MENU)]);
+        assert_eq!(super::vk_named("f12"), Some(0x7B));
+        assert_eq!(super::pad_button_named("RB"), Some(super::RIGHT_SHOULDER));
     }
 
     #[test]

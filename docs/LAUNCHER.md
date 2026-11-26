@@ -52,6 +52,12 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   **Advanced settings** at the bottom reveals Rendering, Advanced and Tools and
   is remembered. Anything that needs the technical tabs (Settings…, Customise…)
   reveals them itself.
+* **Controls** — pads the system reports (Xbox, DualSense, DualShock) with a
+  **Check again** button, and the keyboard bindings used while no pad is
+  connected. Apply writes `VICTORY_KEYBOARD` for the next run; Accept is a
+  normal key name (`Enter`, `Space`, `F1`, or one letter). Sticks and triggers
+  stay W/A/S/D, I/J/K/L, Z/C. Mouse look is not implemented yet and the page
+  says so.
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every
