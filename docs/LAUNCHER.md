@@ -60,6 +60,15 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   the game has focus and no pad is connected, the cursor is kept in the window
   and its movement turns the right stick; sensitivity and inversion are on the
   same page. Menu navigation with the mouse is not included.
+* **Community** — a nickname, **Share last run** (adds a local entry and puts
+  a Markdown block on the clipboard), and a filterable list of shared runs:
+  name, Nullifier version, fps, title build, profile and date, newest or
+  fastest first, with a log viewer. The log is filtered to frame lines and
+  failures, and home paths, the game folder, emails and IP addresses are
+  replaced before it is stored or copied. Entries stay on this PC in
+  `~/.local/share/nullifier/community.json`; **Open folder** and
+  **Discussions** are there to share the JSON or post the block. There is no
+  hosted leaderboard yet; the file is the format a small server could read.
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every

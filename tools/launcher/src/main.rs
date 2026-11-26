@@ -166,6 +166,7 @@ fn main() -> eframe::Result<()> {
                 Some("game") => Tab::Graphics,
                 Some("graphics") => Tab::Graphics,
                 Some("controls") => Tab::Controls,
+                Some("community") => Tab::Community,
                 Some("rendering") => Tab::Rendering,
                 Some("advanced") => Tab::Advanced,
                 Some("debug") => Tab::Debug,
@@ -215,6 +216,9 @@ struct Settings {
     mouse_sensitivity: f32,
     #[serde(default)]
     mouse_invert: bool,
+    /// The name shown next to shared runs.
+    #[serde(default)]
+    community_name: String,
     /// `VICTORY_OUTPUT`: "", "2560x1440" or "1920x1080".
     #[serde(default)]
     output: String,
@@ -268,6 +272,7 @@ impl Default for Settings {
             mouse_look: false,
             mouse_sensitivity: 0.02,
             mouse_invert: false,
+            community_name: String::new(),
             output: String::new(),
             render_scale: 0.0,
             game_warning_seen: false,
@@ -320,6 +325,204 @@ impl Settings {
             let _ = std::fs::write(path, text);
         }
     }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct CommunityEntry {
+    name: String,
+    version: String,
+    game: String,
+    profile: String,
+    fps: f32,
+    frame_ms: f32,
+    gpu_ms: f32,
+    draws: u32,
+    when: u64,
+    log: String,
+}
+
+fn community_path() -> Option<PathBuf> {
+    data_dir().map(|dir| dir.join("community.json"))
+}
+
+fn load_community() -> Vec<CommunityEntry> {
+    community_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default()
+}
+
+fn save_community(entries: &[CommunityEntry]) {
+    let Some(path) = community_path() else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(text) = serde_json::to_string_pretty(entries) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+fn date_of(epoch: u64) -> String {
+    let days = (epoch / 86_400) as i64;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn mask_ipv4(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            let token = &text[start..i];
+            let parts: Vec<&str> = token.split('.').collect();
+            if parts.len() == 4 && parts.iter().all(|p| !p.is_empty() && p.parse::<u8>().is_ok()) {
+                out.push_str("<ip>");
+            } else {
+                out.push_str(token);
+            }
+        } else {
+            let ch = text[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+fn mask_emails(line: &str) -> String {
+    line.split_whitespace()
+        .map(|word| {
+            if word.contains('@') && word.contains('.') && !word.starts_with("http") {
+                "<email>"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The log as it is safe to share: paths, the machine's name and addresses
+/// are replaced, and only the interesting lines are kept (header, frame
+/// lines, failures, the resolution patch) so an entry is a few dozen KB.
+fn sanitize_log(raw: &str, settings: &Settings) -> String {
+    let clean = strip_ansi(raw);
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let user = Path::new(&home)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_string();
+    let prefix = data_dir()
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_default();
+    let game = settings.game_dir.trim().to_string();
+    let mut kept: Vec<String> = Vec::new();
+    for (index, line) in clean.lines().enumerate() {
+        let keep = index < 25
+            || line.contains(" fps,")
+            || line.contains("device removed")
+            || line.contains("unhandled exception")
+            || line.contains("panicked")
+            || line.contains(" ERROR ")
+            || line.contains("resolution:")
+            || line.contains("wineserver:")
+            || line.contains("build ");
+        if !keep {
+            continue;
+        }
+        let mut line = line.trim_end().to_string();
+        if !game.is_empty() {
+            line = line.replace(&game, "<game>");
+        }
+        if !prefix.is_empty() {
+            line = line.replace(&prefix, "<prefix>");
+        }
+        if !home.is_empty() {
+            line = line.replace(&home, "<home>");
+        }
+        if !user.is_empty() {
+            line = line.replace(&format!("/home/{user}"), "/home/<user>");
+            line = line.replace(&format!(r"\Users\{user}"), r"\Users\<user>");
+            line = line.replace(&format!("Users\\{user}"), "Users\\<user>");
+        }
+        line = mask_ipv4(&line);
+        line = mask_emails(&line);
+        kept.push(line);
+    }
+    if kept.len() > 240 {
+        let mut cut = kept[..20].to_vec();
+        cut.extend(kept[kept.len() - 220..].iter().cloned());
+        cut.insert(20, format!("... {} lines omitted ...", kept.len() - cut.len()));
+        cut.join("\n")
+    } else {
+        kept.join("\n")
+    }
+}
+
+/// Median of the world frame lines (under 10 fps; menus are 30), with the
+/// last frame time, GPU time and draw count.
+fn world_stats(raw: &str) -> (Option<f32>, Option<f32>, Option<f32>, Option<u32>) {
+    let clean = strip_ansi(raw);
+    let mut values = Vec::new();
+    let (mut frame, mut gpu, mut draws) = (None, None, None);
+    for line in clean.lines() {
+        let Some(rest) = after(line, "host: ") else { continue };
+        if let Some(value) = before(rest, " fps,").and_then(|v| v.trim().parse().ok()) {
+            values.push(value);
+        }
+        if let Some(value) = before(rest, " ms/frame").and_then(last_num) {
+            frame = Some(value);
+        }
+        if let Some(value) = before(rest, " on the GPU").and_then(last_num) {
+            gpu = Some(value);
+        }
+        if let Some(value) = before(rest, " draws/frame").and_then(last_num) {
+            draws = Some(value as u32);
+        }
+    }
+    let mut world: Vec<f32> = values.iter().copied().filter(|value| *value < 10.0).collect();
+    if world.is_empty() {
+        world = values;
+    }
+    world.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = match world.len() {
+        0 => None,
+        n if n % 2 == 1 => Some(world[n / 2]),
+        n => Some((world[n / 2 - 1] + world[n / 2]) / 2.0),
+    };
+    (median, frame, gpu, draws)
+}
+
+fn game_label(raw: &str) -> String {
+    let clean = strip_ansi(raw);
+    for line in clean.lines().take(40) {
+        if let Some(rest) = after(line, "build          ") {
+            return rest.trim().chars().take(40).collect();
+        }
+        if let Some(rest) = after(line, "build ") {
+            if rest.contains('(') {
+                return rest.trim().chars().take(40).collect();
+            }
+        }
+    }
+    "unknown".into()
 }
 
 fn default_mouse_sensitivity() -> f32 {
@@ -1045,6 +1248,12 @@ struct App {
     keyboard_keys: Vec<String>,
     controllers: Vec<String>,
     controllers_checked: bool,
+    community: Vec<CommunityEntry>,
+    community_open: Option<usize>,
+    community_filter: String,
+    community_game: String,
+    community_sort: u8,
+    community_status: String,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1094,6 +1303,7 @@ enum Tab {
     Play,
     Graphics,
     Controls,
+    Community,
     Rendering,
     Advanced,
     Debug,
@@ -1243,6 +1453,12 @@ impl App {
             keyboard_keys,
             controllers: Vec::new(),
             controllers_checked: false,
+            community: load_community(),
+            community_open: None,
+            community_filter: String::new(),
+            community_game: String::new(),
+            community_sort: 0,
+            community_status: String::new(),
         }
     }
 
@@ -2489,6 +2705,348 @@ impl App {
         });
     }
 
+    fn share_run(&mut self) -> Option<String> {
+        let Some(path) = self.log_path.clone() else {
+            self.community_status = "No run log yet - play or measure once first.".into();
+            return None;
+        };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            self.community_status = "Could not read the last log.".into();
+            return None;
+        };
+        let name = self.settings.community_name.trim().to_string();
+        if name.is_empty() {
+            self.community_status = "Choose a name first (a nickname is fine).".into();
+            return None;
+        }
+        let log = sanitize_log(&raw, &self.settings);
+        let (fps, frame, gpu, draws) = world_stats(&raw);
+        let fps = fps.unwrap_or(0.0);
+        let when = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let entry = CommunityEntry {
+            name: name.clone(),
+            version: VERSION.to_string(),
+            game: game_label(&raw),
+            profile: if self.settings.profile.is_empty() {
+                "custom".into()
+            } else {
+                self.settings.profile.clone()
+            },
+            fps,
+            frame_ms: frame.unwrap_or(0.0),
+            gpu_ms: gpu.unwrap_or(0.0),
+            draws: draws.unwrap_or(0),
+            when,
+            log: log.clone(),
+        };
+        let game = entry.game.clone();
+        let profile = entry.profile.clone();
+        let frame_ms = entry.frame_ms;
+        let gpu_ms = entry.gpu_ms;
+        let draws = entry.draws;
+        self.community.insert(0, entry);
+        save_community(&self.community);
+        self.community_status = format!("Added {name}'s run; a share block is on the clipboard.");
+        Some(format!(
+            "**{name}** · Nullifier v{VERSION} · {game} · **{fps:.1} fps**\n\
+             {draws} draws/frame · frame {frame_ms:.1} ms · GPU {gpu_ms:.1} ms · profile {profile}\n\
+             \n```\n{log}\n```\n"
+        ))
+    }
+
+    fn community_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Community");
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "Runs you choose to share, with a sanitized log. Everything stays on this PC until you paste the share block somewhere.",
+                )
+                .small()
+                .color(egui::Color32::GRAY),
+            )
+            .wrap(),
+        );
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong("Your name");
+                    if ui
+                        .add_sized(
+                            [200.0, 26.0],
+                            egui::TextEdit::singleline(&mut self.settings.community_name)
+                                .hint_text("a nickname"),
+                        )
+                        .changed()
+                    {
+                        self.settings.save();
+                    }
+                });
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new("Shown next to your runs. Don't use your real name.")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.strong("Share the last run");
+                let run = self.last_run();
+                if let Some(fps) = run.fps {
+                    ui.label(format!(
+                        "{fps:.1} fps · {} draws a frame · {}",
+                        run.draws.unwrap_or(0),
+                        if run.removals == 0 { "no crashes" } else { "crashes" }
+                    ));
+                } else {
+                    ui.label(
+                        egui::RichText::new("No run yet.")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
+                }
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "The log is filtered to frame lines and failures; home paths, the game folder and IPs are replaced before it is stored or copied.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    let can = self.log_path.is_some()
+                        && !self.settings.community_name.trim().is_empty()
+                        && !self.running();
+                    if ui
+                        .add_enabled(can, primary("Share last run", 140.0, 32.0))
+                        .clicked()
+                    {
+                        if let Some(markdown) = self.share_run() {
+                            ui.ctx().copy_text(markdown);
+                        }
+                    }
+                    if chip_button(ui, "Discussions").clicked() {
+                        open_url("https://github.com/iNiKKo/Nullifier/discussions");
+                    }
+                    if !self.community_status.is_empty() {
+                        ui.label(
+                            egui::RichText::new(&self.community_status)
+                                .small()
+                                .color(egui::Color32::from_rgb(87, 199, 133)),
+                        );
+                    }
+                });
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong(format!("Shared runs ({})", self.community.len()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        egui::ComboBox::from_id_salt("community sort")
+                            .selected_text(if self.community_sort == 1 {
+                                "Fastest"
+                            } else {
+                                "Newest"
+                            })
+                            .width(95.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(self.community_sort == 0, "Newest").clicked() {
+                                    self.community_sort = 0;
+                                }
+                                if ui.selectable_label(self.community_sort == 1, "Fastest").clicked() {
+                                    self.community_sort = 1;
+                                }
+                            });
+                        if chip_button(ui, "Open folder").clicked() {
+                            if let Some(dir) = community_path().and_then(|p| p.parent().map(Path::to_path_buf)) {
+                                open_path(&dir);
+                            }
+                        }
+                    });
+                });
+                let mut games: Vec<String> = self.community.iter().map(|e| e.game.clone()).collect();
+                games.sort();
+                games.dedup();
+                ui.horizontal(|ui| {
+                    ui.label("Filter");
+                    ui.add_sized(
+                        [190.0, 24.0],
+                        egui::TextEdit::singleline(&mut self.community_filter)
+                            .hint_text("name or game"),
+                    );
+                    ui.label("Game");
+                    let current = if self.community_game.is_empty() {
+                        "All".to_string()
+                    } else {
+                        self.community_game.clone()
+                    };
+                    egui::ComboBox::from_id_salt("community game")
+                        .selected_text(current)
+                        .width(180.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(self.community_game.is_empty(), "All")
+                                .clicked()
+                            {
+                                self.community_game.clear();
+                            }
+                            for game in &games {
+                                if ui
+                                    .selectable_label(self.community_game == *game, game)
+                                    .clicked()
+                                {
+                                    self.community_game = game.clone();
+                                }
+                            }
+                        });
+                });
+                ui.add_space(4.0);
+                let needle = self.community_filter.to_lowercase();
+                let mut shown: Vec<usize> = self
+                    .community
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| {
+                        (self.community_game.is_empty() || e.game == self.community_game)
+                            && (needle.is_empty()
+                                || e.name.to_lowercase().contains(&needle)
+                                || e.game.to_lowercase().contains(&needle)
+                                || e.profile.to_lowercase().contains(&needle))
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                if self.community_sort == 1 {
+                    let entries = &self.community;
+                    shown.sort_by(|a, b| {
+                        entries[*b]
+                            .fps
+                            .partial_cmp(&entries[*a].fps)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+                let mut open = self.community_open;
+                if shown.is_empty() {
+                    ui.label(
+                        egui::RichText::new(if self.community.is_empty() {
+                            "Nothing shared yet. Play once, then press Share last run."
+                        } else {
+                            "No run matches the filter."
+                        })
+                        .color(egui::Color32::GRAY),
+                    );
+                }
+                egui::ScrollArea::vertical().max_height(330.0).show(ui, |ui| {
+                    for index in shown {
+                        let entry = &self.community[index];
+                        egui::Frame::group(ui.style())
+                            .inner_margin(egui::Margin::symmetric(10, 8))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(
+                                        [120.0, 20.0],
+                                        egui::Label::new(
+                                            egui::RichText::new(&entry.name).strong(),
+                                        ),
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("v{}", entry.version))
+                                            .small()
+                                            .color(egui::Color32::GRAY),
+                                    );
+                                    ui.add_sized(
+                                        [72.0, 20.0],
+                                        egui::Label::new(
+                                            egui::RichText::new(format!("{:.1} fps", entry.fps))
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(87, 199, 133)),
+                                        ),
+                                    );
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(format!(
+                                                "{} · {}",
+                                                entry.game, entry.profile
+                                            ))
+                                            .small(),
+                                        ),
+                                    );
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if chip_button(ui, "Log").clicked() {
+                                                open = Some(index);
+                                            }
+                                            ui.label(
+                                                egui::RichText::new(date_of(entry.when))
+                                                    .small()
+                                                    .color(egui::Color32::GRAY),
+                                            );
+                                        },
+                                    );
+                                });
+                            });
+                    }
+                });
+                self.community_open = open;
+            });
+        });
+
+        if let Some(index) = self.community_open {
+            let mut open = true;
+            let mut remove = false;
+            if let Some(entry) = self.community.get(index) {
+                let title = format!("{} · {:.1} fps · {}", entry.name, entry.fps, entry.game);
+                egui::Window::new(title)
+                    .open(&mut open)
+                    .collapsible(false)
+                    .default_size([640.0, 460.0])
+                    .show(ui.ctx(), |ui| {
+                        ui.horizontal(|ui| {
+                            if chip_button(ui, "Copy log").clicked() {
+                                ui.ctx().copy_text(entry.log.clone());
+                            }
+                            if chip_button(ui, "Remove").clicked() {
+                                remove = true;
+                            }
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Nullifier v{} · profile {} · {} draws · frame {:.1} ms · GPU {:.1} ms",
+                                    entry.version,
+                                    entry.profile,
+                                    entry.draws,
+                                    entry.frame_ms,
+                                    entry.gpu_ms
+                                ))
+                                .small()
+                                .color(egui::Color32::GRAY),
+                            );
+                        });
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.monospace(&entry.log);
+                        });
+                    });
+            }
+            if remove {
+                self.community.remove(index);
+                save_community(&self.community);
+                self.community_open = None;
+            } else if !open {
+                self.community_open = None;
+            }
+        }
+    }
+
     fn rendering(&mut self, ui: &mut egui::Ui) {
         ui.heading("Rendering");
         ui.add(
@@ -3004,6 +3562,7 @@ impl eframe::App for App {
                     (Tab::Play, "Play"),
                     (Tab::Graphics, "Graphics"),
                     (Tab::Controls, "Controls"),
+                    (Tab::Community, "Community"),
                 ];
                 if self.settings.show_advanced {
                     tabs.extend([
@@ -3011,7 +3570,10 @@ impl eframe::App for App {
                         (Tab::Advanced, "Advanced"),
                         (Tab::Debug, "Tools"),
                     ]);
-                } else if !matches!(self.tab, Tab::Play | Tab::Graphics | Tab::Controls) {
+                } else if !matches!(
+                    self.tab,
+                    Tab::Play | Tab::Graphics | Tab::Controls | Tab::Community
+                ) {
                     self.tab = Tab::Play;
                 }
                 for (tab, label) in tabs {
@@ -3119,6 +3681,7 @@ impl eframe::App for App {
             Tab::Play => self.play(ui),
             Tab::Graphics => self.game_page(ui),
             Tab::Controls => self.controls(ui),
+            Tab::Community => self.community_page(ui),
             Tab::Rendering => self.rendering(ui),
             Tab::Advanced => self.advanced(ui),
             Tab::Debug => self.debug(ui),
@@ -4061,4 +4624,46 @@ fn strip_ansi(line: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod community_tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_log_has_no_home_paths_addresses_or_mail() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/tester".into());
+        let mut settings = Settings::default();
+        settings.game_dir = "/games/title".into();
+        let raw = format!(
+            "6.7 fps, 150.0 ms/frame at {home}/secret/file and /games/title/x\n\
+             contact bob@example.com from 192.168.1.42 and 10.0.0.7\n"
+        );
+        let out = sanitize_log(&raw, &settings);
+        assert!(!out.contains(&home), "{out}");
+        assert!(!out.contains("/games/title"), "{out}");
+        assert!(!out.contains("bob@example.com"), "{out}");
+        assert!(!out.contains("192.168.1.42"), "{out}");
+        assert!(out.contains("<ip>"), "{out}");
+        assert!(out.contains("6.7 fps"), "{out}");
+    }
+
+    #[test]
+    fn shared_stats_take_world_frames_only() {
+        let raw = "\
+30.0 fps, 33.3 ms/frame (0.1 preparing: copies 0.1 ms 0.1 MB; 0.2 on the GPU; 0.0 copying back), 2 draws/frame\n\
+INFO victory_gpu::host: 6.6 fps, 151.0 ms/frame (60.0 preparing: copies 50.0 ms 200.0 MB; 30.0 on the GPU; 0.0 copying back), 2904 draws/frame\n\
+INFO victory_gpu::host: 4.4 fps, 227.0 ms/frame (90.0 preparing: copies 70.0 ms 245.0 MB; 35.0 on the GPU; 0.0 copying back), 3000 draws/frame\n";
+        let (fps, frame, gpu, draws) = world_stats(raw);
+        assert!((fps.unwrap() - 5.5).abs() < 0.01, "{fps:?}");
+        assert_eq!(frame, Some(227.0));
+        assert_eq!(gpu, Some(35.0));
+        assert_eq!(draws, Some(3000));
+    }
+
+    #[test]
+    fn dates_are_civil() {
+        assert_eq!(date_of(0), "1970-01-01");
+        assert_eq!(date_of(1_700_000_000), "2023-11-14");
+    }
 }
