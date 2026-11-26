@@ -6984,6 +6984,14 @@ struct Meter {
     logged: crate::clock::Stamp,
     /// The caption the window had, once read.
     caption: Option<Vec<u16>>,
+    /// When the last frame was presented, and the shortest and the longest
+    /// time between two presents since the last line, in microseconds: a
+    /// frame rate does not say how evenly the frames come.
+    last: crate::clock::Stamp,
+    gaps: (u64, u64),
+    /// The frame being presented was read back first (saved or listed):
+    /// the time up to its present is not a frame's.
+    read_back: bool,
 }
 
 impl Meter {
@@ -6997,6 +7005,9 @@ impl Meter {
             drawn: crate::draw::drawn(),
             logged: now,
             caption: None,
+            last: now,
+            gaps: (u64::MAX, 0),
+            read_back: false,
         }
     }
 
@@ -7011,6 +7022,12 @@ impl Meter {
         {
             self.copy_stats_frames += 1;
         }
+        let presented = crate::clock::Stamp::now();
+        if !std::mem::take(&mut self.read_back) {
+            let gap = presented.duration_since(self.last).as_micros() as u64;
+            self.gaps = (self.gaps.0.min(gap), self.gaps.1.max(gap));
+        }
+        self.last = presented;
         let elapsed = self.since.elapsed();
         if elapsed < std::time::Duration::from_secs(1) {
             return;
@@ -7039,6 +7056,14 @@ impl Meter {
         tracing::info!(
             "indirect mesh dispatches: the largest group count asked for {mesh_largest} (run: at most 65535), {mesh_groups:.0} groups asked per frame"
         );
+        let (shortest, longest) = std::mem::replace(&mut self.gaps, (u64::MAX, 0));
+        if longest > 0 {
+            tracing::info!(
+                "presents since the last line: {frames:.0}, from {:.0} to {:.0} ms apart (not counting a frame that was read back first)",
+                shortest as f64 / 1e3,
+                longest as f64 / 1e3
+            );
+        }
         late_line(frames);
         fill_ahead::line(frames);
         #[cfg(feature = "diagnostics")]
@@ -7358,6 +7383,7 @@ impl Host {
             }
             pace_frame();
             let _ = p.swap_chain.Present(present_interval(), DXGI_PRESENT(0));
+            p.meter.read_back = read_now;
             p.meter.frame(p.hwnd);
             #[cfg(feature = "diagnostics")]
             return Some(probe.is_some_and(|b| crate::capture::black(&b)));
