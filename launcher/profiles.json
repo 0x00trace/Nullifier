@@ -28,9 +28,10 @@
         "VICTORY_CARD_BUFFERS_MB": "512",
         "VICTORY_TEXTURE_BUDGET_MB": "4096",
         "VICTORY_INDIRECT_WINDOW": "1",
-        "VICTORY_INDIRECT_RUNS": "1"
+        "VICTORY_INDIRECT_RUNS": "1",
+        "VICTORY_CARD_HASH_LANES": "1"
       },
-      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device. Texture budget 4096 MB: texture phase 350 -> 40-48 ms, frame 1,464-1,976 -> 1,046-1,182 ms, median 0.80-1.00 (two runs, no removals). Section views on by default under Wine (code, not a variable): one mapping per section, view unmaps 44,000 -> 0, frame 1,203-1,448 -> 750-952 ms, median 0.80 -> 1.10-1.30 across three runs each. Indirect window + runs on (from #8/#9, AST/steve ports of fxceless): two quick runs each 3.95 fps / 255-259 ms against 3.05-3.25 default, p10 3.30, no removals. VICTORY_INDIRECT_WINDOW=0 or RUNS=0 if a long session ever loses the device."
+      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device. Texture budget 4096 MB: texture phase 350 -> 40-48 ms, frame 1,464-1,976 -> 1,046-1,182 ms, median 0.80-1.00 (two runs, no removals). Section views on by default under Wine (code, not a variable): one mapping per section, view unmaps 44,000 -> 0, frame 1,203-1,448 -> 750-952 ms, median 0.80 -> 1.10-1.30 across three runs each. Indirect window + runs on (from #8/#9, AST/steve ports of fxceless): two quick runs each 3.95 fps / 255-259 ms against 3.05-3.25 default, p10 3.30, no removals. VICTORY_INDIRECT_WINDOW=0 or RUNS=0 if a long session ever loses the device. Card hash lanes on (from #11, astrosteveo): GPU phase 88-110 -> 31.7 ms, frame 226 -> 150 ms, median 4.45 -> 6.60/6.70 across two runs, no removals; NVIDIA measured 5.25-5.30 vs 4.40-4.65 by the author. VICTORY_CARD_HASH_LANES=0 turns it off."
     },
     {
       "name": "linux-amd-8gb",
@@ -47,9 +48,10 @@
         "VICTORY_CARD_BUFFERS_MB": "512",
         "VICTORY_TEXTURE_BUDGET_MB": "4096",
         "VICTORY_INDIRECT_WINDOW": "1",
-        "VICTORY_INDIRECT_RUNS": "1"
+        "VICTORY_INDIRECT_RUNS": "1",
+        "VICTORY_CARD_HASH_LANES": "1"
       },
-      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device. Texture budget 4096 MB: texture phase 350 -> 40-48 ms, frame 1,464-1,976 -> 1,046-1,182 ms, median 0.80-1.00 (two runs, no removals). Section views on by default under Wine (code, not a variable): one mapping per section, view unmaps 44,000 -> 0, frame 1,203-1,448 -> 750-952 ms, median 0.80 -> 1.10-1.30 across three runs each. Indirect window + runs on (from #8/#9, AST/steve ports of fxceless): two quick runs each 3.95 fps / 255-259 ms against 3.05-3.25 default, p10 3.30, no removals. VICTORY_INDIRECT_WINDOW=0 or RUNS=0 if a long session ever loses the device."
+      "note": "RX 9070 XT, Mesa 26.3.1. 512 MB card buffers: median 0.60-0.70 fps, 10th percentile 0.30-0.40 vs 0.10 at 1024 (two sweeps, 0 removals) - the steadiest configuration measured. Do not raise LATE_WAIT: 3 removes the device. Texture budget 4096 MB: texture phase 350 -> 40-48 ms, frame 1,464-1,976 -> 1,046-1,182 ms, median 0.80-1.00 (two runs, no removals). Section views on by default under Wine (code, not a variable): one mapping per section, view unmaps 44,000 -> 0, frame 1,203-1,448 -> 750-952 ms, median 0.80 -> 1.10-1.30 across three runs each. Indirect window + runs on (from #8/#9, AST/steve ports of fxceless): two quick runs each 3.95 fps / 255-259 ms against 3.05-3.25 default, p10 3.30, no removals. VICTORY_INDIRECT_WINDOW=0 or RUNS=0 if a long session ever loses the device. Card hash lanes on (from #11, astrosteveo): GPU phase 88-110 -> 31.7 ms, frame 226 -> 150 ms, median 4.45 -> 6.60/6.70 across two runs, no removals; NVIDIA measured 5.25-5.30 vs 4.40-4.65 by the author. VICTORY_CARD_HASH_LANES=0 turns it off."
     },
     {
       "name": "linux-nvidia",
@@ -64,9 +66,10 @@
         "VICTORY_WIDE_BACK": "1",
         "VICTORY_CARD_BUFFERS_MIN_MB": "1",
         "VICTORY_CARD_BUFFERS_MB": "1024",
-        "VKD3D_DISABLE_EXTENSIONS": "VK_NV_raw_access_chains"
+        "VKD3D_DISABLE_EXTENSIONS": "VK_NV_raw_access_chains",
+        "VICTORY_CARD_HASH_LANES": "1"
       },
-      "note": "Issue #6 (RTX 5070 Ti, 1.85-1.97 fps): raw access chains must be off under vkd3d-proton."
+      "note": "Issue #6 (RTX 5070 Ti, 1.85-1.97 fps): raw access chains must be off under vkd3d-proton. Card hash lanes on (from #11, astrosteveo): GPU phase 88-110 -> 31.7 ms, frame 226 -> 150 ms, median 4.45 -> 6.60/6.70 across two runs, no removals; NVIDIA measured 5.25-5.30 vs 4.40-4.65 by the author. VICTORY_CARD_HASH_LANES=0 turns it off."
     },
     {
       "name": "linux-other",

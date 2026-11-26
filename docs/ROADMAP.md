@@ -4,12 +4,12 @@ Ordered by "what actually changes the frame rate". Everything here is a
 candidate for a PR; read [`AGENTS.md`](../AGENTS.md) first, and bring a bench
 row.
 
-Current baseline: **3.9–4.4 fps** median in the world on an RX 9070 XT (Linux,
+Current baseline: **6.6–6.7 fps** median in the world on an RX 9070 XT (Linux,
 Mesa 26.3.1, Wine 11) with the wineserver built by `tools/build-wineserver.sh`
-and `VICTORY_INDIRECT_WINDOW`/`RUNS` on (both in the linux-amd profiles), frame
-227–259 ms, stable, picture correct, no device removals; 3.1–3.6 fps before
-those switches, 1.1–1.3 with Proton's own server. **Build the server before
-measuring**.
+and the measured switches in the linux-amd profiles (indirect window/runs, card
+hash lanes), frame ~150 ms, stable, picture correct, no device removals;
+3.9–4.4 fps before the hash lanes, 1.1–1.3 with Proton's own server. **Build
+the server before measuring**.
 
 Where a frame's time goes now (`tools/frames.py`, built server, both switches):
 **GPU ~88–110 ms including our heap pass 41–52 ms**, **copies 45–50 ms**,

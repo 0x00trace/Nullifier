@@ -453,6 +453,19 @@ the card, 70 ms of preparing, about 20 ms of copying back. The card is busy
 half of the time. The submitting thread still stops for the card about 20
 times a frame, so the two rarely work at the same time.
 
+**On the RX 9070 XT / Mesa 26.3.1 here** (the same switch, two runs of 15 s of
+world against the shipped profile):
+
+| | median fps | p10 | frame | GPU time | removals |
+|---|---|---|---|---|---|
+| profile (window + runs on) | 4.45 | 3.9 | 226 ms | ~88-110 ms | 0 |
+| **+ `VICTORY_CARD_HASH_LANES=1`** | **6.60 / 6.70** | 4.5 / 4.6 | **151 / 150 ms** | **31.7 ms** | 0 |
+
+The GPU phase fell by two thirds and the frame by a third; copies 41 ms,
+textures 15, copy-back 22, unaccounted 8. Real frames (3.7 MB), no device
+removal and the same three untranslated pixel shaders as before. Enabled for
+the Linux AMD and NVIDIA profiles.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask

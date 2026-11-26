@@ -99,6 +99,7 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 * **Before:** each run ended on a breakpoint of the title's own
 | + `VICTORY_INDIRECT_WINDOW=1 VICTORY_INDIRECT_RUNS=1` (on in the linux-amd profiles) | `linux-amd-16gb`, library kept | **3.95 / 3.95 / 4.40** | 6 / 6 / 5 | 0 | world renders; frame 255–259 ms, p10 3.3; 3.05–3.25 and 282 ms with them off |
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
+| + `VICTORY_CARD_HASH_LANES=1` (on in the linux-amd and linux-nvidia profiles) | `linux-amd-16gb`, library kept | **6.60 / 6.70** | 5 / 5 | 0 | world renders (captures 3.7 MB); GPU 31.7 ms, frame 150-151 ms, copies 41, textures 15, copy-back 22 |
   `dstorage: request failed: copying … hr=0x800703e6`: the kernel would not
   write a raw read's destination, because a copy had guarded the block again
   between the opening and the read. Under 20 world frames, so these are not
