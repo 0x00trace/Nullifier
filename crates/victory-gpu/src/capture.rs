@@ -47,7 +47,9 @@ pub(crate) fn listed(n: u64) -> bool {
     });
     let first = WORLD.load(std::sync::atomic::Ordering::Relaxed);
     let after = n.wrapping_sub(first);
-    named || first != u64::MAX && ([2, 6, 30, 80].contains(&after) || also.contains(&after))
+    named
+        || AFTER_BLACK.load(std::sync::atomic::Ordering::Relaxed) == n
+        || first != u64::MAX && ([2, 6, 30, 80].contains(&after) || also.contains(&after))
 }
 
 /// With a capture folder, for the frames [`listed`]: `what` is added to
@@ -351,9 +353,58 @@ fn dump_on() -> bool {
     *ON.get_or_init(|| folder().is_some() && std::env::var_os("VICTORY_DUMP_TARGETS").is_some())
 }
 
+/// `VICTORY_DUMP_BLACK=<n>` (with a capture folder): how many black frames
+/// have their targets saved ([`black_frame`]); 0 without it.
+///
+/// The title's opening cutscene shows one or two black frames at some of
+/// its shot changes (a level of 0 between two different pictures). Which
+/// frame that will be is not known while it is recorded, so with this set
+/// the targets of every frame are noted, and kept only for a frame that
+/// turned out black: what each target holds then tells a frame the title
+/// drew black from one whose picture a later pass lost.
+fn dump_black() -> u64 {
+    static N: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *N.get_or_init(|| {
+        let n = std::env::var("VICTORY_DUMP_BLACK").ok().and_then(|v| v.trim().parse().ok());
+        if folder().is_some() { n.unwrap_or(0) } else { 0 }
+    })
+}
+
+/// The frame after a black frame whose targets were saved: listed, so its
+/// operations and targets are saved too ([`listed`]).
+static AFTER_BLACK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+
+/// Whether the targets noted for frame `frame` are saved at its present.
+pub(crate) fn dumped(frame: u64) -> bool {
+    listed(frame) && (dump_on() || AFTER_BLACK.load(std::sync::atomic::Ordering::Relaxed) == frame)
+}
+
+/// After the present of `frame`, which was black after a frame that was
+/// not: saves its targets and lists the next frame, for the first
+/// `VICTORY_DUMP_BLACK` such frames.
+pub(crate) fn black_frame(frame: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    static SAVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    if SAVED.load(Relaxed) >= dump_black() {
+        return;
+    }
+    SAVED.fetch_add(1, Relaxed);
+    tracing::warn!(frame, "a black frame: its targets are saved, and the next frame is listed");
+    dump_targets(frame);
+    AFTER_BLACK.store(frame + 1, Relaxed);
+}
+
+/// After a present: the targets noted for a frame that was not saved are
+/// let go (`VICTORY_DUMP_BLACK` notes every frame's).
+pub(crate) fn forget_targets() {
+    if dump_black() > 0 {
+        TARGETS.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
 /// Notes a title texture the frame being built renders to or writes.
 pub(crate) fn note_target(resource: crate::object::This) {
-    if resource.is_null() || !dump_on() || !listed(crate::queue::presented() + 1) {
+    if resource.is_null() || !(dump_black() > 0 || dump_on() && listed(crate::queue::presented() + 1)) {
         return;
     }
     let mut targets = TARGETS.lock().unwrap_or_else(|e| e.into_inner());

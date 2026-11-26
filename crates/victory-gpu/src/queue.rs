@@ -810,7 +810,7 @@ extern "system" fn present(
     #[cfg(all(windows, feature = "diagnostics"))]
     {
         crate::capture::frame_drew(frame, crate::draw::drawn());
-        if crate::capture::listed(frame) {
+        if crate::capture::dumped(frame) {
             crate::capture::dump_targets(frame);
         }
     }
@@ -864,7 +864,13 @@ fn blinks(frame: u64, resource: This, state: u32, shown: Option<bool>) {
             tracing::warn!("black frame {frame}: {d}");
         }
         AFTER.store(frame + 6, Ordering::Relaxed);
+        // Of a frame with a world's worth of draws and nothing but black
+        // (a dark night shot has a level of a few): `VICTORY_DUMP_BLACK`.
+        if drawn - last.1 >= 300 && crate::capture::recent_levels().last() == Some(&0) {
+            crate::capture::black_frame(frame);
+        }
     }
+    crate::capture::forget_targets();
     // Six frames on: the levels around it (a fade or a single drop).
     static AFTER: AtomicU64 = AtomicU64::new(0);
     if AFTER.load(Ordering::Relaxed) == frame {
