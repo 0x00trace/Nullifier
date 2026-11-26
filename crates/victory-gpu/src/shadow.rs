@@ -101,6 +101,11 @@ struct Card {
     sent: Mutex<Vec<(usize, usize, u64)>>,
     /// The buffers' bytes (the title buffer's, rounded up to 64 KiB).
     size: u64,
+    /// With `crate::host::card_gather`: a twin of the copy in the PC's
+    /// memory (and its mapping), made when a submission sent ahead first
+    /// declares shader writes for the copy. The compare's threads whose
+    /// bytes differ hand them down to it, at the copy's own offsets.
+    landing: Mutex<Option<(ID3D12Resource, usize)>>,
 }
 
 /// Whether the host copies of big title buffers are in the card's own
@@ -157,6 +162,23 @@ fn card_limits() -> (u64, u64) {
 
 /// Bytes alive of copies' card sides, and of their "before" twins.
 static CARD_BYTES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+
+/// The bytes of the twins in the PC's memory that card copies' compares
+/// hand bytes down to (`crate::host::card_gather`), alive now.
+pub(crate) static LANDING_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// The first and last-but-one byte offsets of piece `piece` of a copy of
+/// `size` bytes whose piece 0 starts `skew` bytes in, as the compare with
+/// a group a piece cuts it for its threads (`CARD_COMPARE_LANES`): widened
+/// to 16 bytes. Thread `t` of the group has the 16 bytes at the first
+/// offset plus `16 t`, and those every 1,024 bytes on.
+pub(crate) fn card_lanes_of(piece: u32, skew: u32, size: u64) -> (usize, usize) {
+    let lo = (u64::from(piece) * PIECE as u64).saturating_sub(u64::from(skew));
+    let hi = ((u64::from(piece) + 1) * PIECE as u64)
+        .saturating_sub(u64::from(skew))
+        .min(size);
+    ((lo & !15) as usize, ((hi + 15) & !15) as usize)
+}
 
 /// The copies in the card's memory.
 static CARDED: Mutex<Vec<std::sync::Weak<Shadow>>> = Mutex::new(Vec::new());
@@ -547,6 +569,35 @@ impl Flights {
     }
 }
 
+/// Puts into `now`, which holds offsets `[lo, hi)` of a copy, the bytes
+/// the compare's threads in `threads` (a bit each) handed down to the
+/// copy's twin at `twin`: of a piece that spans `[first, end)` as the
+/// threads cut it ([`card_lanes_of`]), thread `t` has the 16 bytes at
+/// `first + 16 t` and those every 1,024 bytes on.
+///
+/// # Safety
+/// `twin` maps at least `hi` bytes.
+unsafe fn threads_over(
+    now: &mut [u8],
+    (lo, hi): (usize, usize),
+    twin: *const u8,
+    (first, end): (usize, usize),
+    threads: u64,
+) {
+    for t in (0..64usize).filter(|t| threads >> t & 1 != 0) {
+        for step in (first + t * 16..end).step_by(1024) {
+            let (a, b) = (step.max(lo), (step + 16).min(hi));
+            if a < b {
+                // SAFETY: `[a, b)` lies in `[lo, hi)`, which `now` holds
+                // and the twin maps.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(twin.add(a), now.as_mut_ptr().add(a - lo), b - a)
+                };
+            }
+        }
+    }
+}
+
 /// The relay's merge of a stretch of a copy ([`relay`]). `now` is what the
 /// card's memory holds, read once; `held` is the copy's reference for the
 /// stretch (its snapshot, or the CPU's side of a copy in the card's
@@ -597,7 +648,49 @@ fn outside(from: usize, to: usize, mut skip: Vec<(usize, usize)>) -> Vec<(usize,
 
 #[cfg(test)]
 mod relay_tests {
-    use super::{Flights, changed_runs, merge_piece, outside};
+    use super::{Flights, PIECE, card_lanes_of, changed_runs, merge_piece, outside, threads_over};
+
+    /// The bytes of the threads that came down go over what is held, cut
+    /// to the stretch asked for, and no other byte changes: for a piece in
+    /// the middle of a copy that starts off a piece boundary, for its first
+    /// piece (short by the skew) and for a stretch that is part of a piece.
+    #[test]
+    fn the_bytes_of_the_threads_that_came_down_go_over_what_is_held() {
+        const SKEW: u32 = 0x3456;
+        let size = 5 * PIECE;
+        let twin: Vec<u8> = (0..size).map(|i| (i * 7 + 3) as u8).collect();
+        let held: Vec<u8> = (0..size).map(|i| (i * 13 + 1) as u8 | 1).collect();
+        for (piece, stretch, threads) in [
+            (2u32, None, 1u64 << 5 | 1 << 63),
+            (0, None, 1 << 0 | 1 << 17),
+            (1, Some((70, 3000)), 1 << 4 | 1 << 60),
+            (4, None, !0),
+            (3, None, 0),
+        ] {
+            let (first, end) = card_lanes_of(piece, SKEW, size as u64);
+            assert!(first % 16 == 0 && end % 16 == 0 && end - first <= PIECE + 16);
+            // The piece's own bytes, or a stretch inside them.
+            let lo = (piece as usize * PIECE).saturating_sub(SKEW as usize);
+            let hi = ((piece as usize + 1) * PIECE - SKEW as usize).min(size);
+            let (lo, hi) = stretch.map_or((lo, hi), |(a, b)| (lo + a, lo + b));
+            let mut now = held[lo..hi].to_vec();
+            // SAFETY: the twin holds `size` bytes, and `hi` is within them.
+            unsafe { threads_over(&mut now, (lo, hi), twin.as_ptr(), (first, end), threads) };
+            for at in lo..hi {
+                let thread = (at - first) / 16 % 64;
+                let want = if threads >> thread & 1 != 0 {
+                    twin[at]
+                } else {
+                    held[at]
+                };
+                assert_eq!(
+                    now[at - lo],
+                    want,
+                    "piece {piece}, offset {at:#x}, thread {thread}"
+                );
+            }
+        }
+    }
 
     /// A range two flights declared is free only when both are done, in
     /// either order; a submission that declares it many times counts once.
@@ -1413,6 +1506,14 @@ impl Drop for Shadow {
             }
             if card.before.get_mut().unwrap_or_else(|e| e.into_inner()).is_some() {
                 CARD_BYTES[1].fetch_sub(card_hash_bytes(card.size), Ordering::Relaxed);
+            }
+            if card
+                .landing
+                .get_mut()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_some()
+            {
+                LANDING_BYTES.fetch_sub(card.size, Ordering::Relaxed);
             }
         }
     }
@@ -2631,6 +2732,35 @@ impl Shadow {
         before.is_some()
     }
 
+    /// With `crate::host::card_gather`, for a copy in the card's memory:
+    /// the mapping of its twin in the PC's memory, made with `make` (bytes
+    /// to a buffer shaders can store to, and its mapping) if it has none.
+    /// `None` without one (no memory): the copy's pieces are fetched.
+    pub(crate) fn card_landing(
+        &self,
+        make: impl FnOnce(u64) -> Option<(ID3D12Resource, *mut u8)>,
+    ) -> Option<usize> {
+        let card = self.card.as_ref()?;
+        let mut landing = card.landing.lock().unwrap_or_else(|e| e.into_inner());
+        if landing.is_none() {
+            *landing = make(card.size).map(|(buffer, data)| (buffer, data as usize));
+            if landing.is_some() {
+                LANDING_BYTES.fetch_add(card.size, Ordering::Relaxed);
+            }
+        }
+        landing.as_ref().map(|l| l.1)
+    }
+
+    /// The host GPU address of the twin [`Shadow::card_landing`] made.
+    pub(crate) fn card_landing_address(&self) -> Option<u64> {
+        let card = self.card.as_ref()?;
+        let landing = card.landing.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: a live buffer.
+        landing
+            .as_ref()
+            .map(|l| unsafe { l.0.GetGPUVirtualAddress() })
+    }
+
     /// The declared range `[address, end)` as the compare on the card
     /// takes it; `None` if none of it lies in the copy.
     pub(crate) fn card_span(&self, address: usize, end: usize) -> Option<CardSpan> {
@@ -2719,7 +2849,6 @@ impl Shadow {
     /// `title` is scratch memory. Returns the bytes written to title
     /// memory.
     pub(crate) fn card_merge_relay(&self, at: usize, gpu: &[u8], fetched_after: u64, title: &mut Vec<u8>) -> usize {
-        let start = self.start as usize;
         let Some(card) = &self.card else {
             return 0;
         };
@@ -2732,6 +2861,74 @@ impl Shadow {
         // does write it (the title's bytes put in under shader writes)
         // holds the lock held here.
         let held = unsafe { std::slice::from_raw_parts_mut(self.data.add(at), gpu.len()) };
+        self.card_merge_held(card, at, gpu, held, fetched_after, title)
+    }
+
+    /// [`Shadow::card_merge_relay`] for offsets `[lo, hi)` of piece `piece`
+    /// of the copy, when the compare handed the piece's bytes down itself
+    /// (`crate::host::card_gather`): `twin` maps the copy's twin in the
+    /// PC's memory, which holds the bytes of the compare's threads whose
+    /// bit is set in `threads`, at the copy's own offsets
+    /// ([`card_lanes_of`]; `skew` as in the span). The bytes of the other
+    /// threads are the CPU side's: their hashes were the ones stored, so
+    /// the card held what it was sent. `sent_as` is the number of the
+    /// plan's sends of title bytes, which stands where a fetch's place on
+    /// the queue stands. `now` and `title` are scratch memory.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn card_merge_handed_down(
+        &self,
+        (lo, hi): (usize, usize),
+        twin: usize,
+        (piece, skew): (u32, u32),
+        threads: u64,
+        sent_as: u64,
+        now: &mut Vec<u8>,
+        title: &mut Vec<u8>,
+    ) -> usize {
+        let Some(card) = &self.card else {
+            return 0;
+        };
+        if lo >= hi || hi > self.len as usize {
+            return 0;
+        }
+        let _side = self.before.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: as in `card_merge_relay`.
+        let held = unsafe { std::slice::from_raw_parts_mut(self.data.add(lo), hi - lo) };
+        // What the card held: the CPU's side, with the bytes of the threads
+        // that came down over it. Taken under the lock, so that a byte the
+        // title's bytes changed meanwhile is not taken for the card's.
+        now.clear();
+        now.extend_from_slice(held);
+        // SAFETY: the twin is the copy's size, and `hi` is within the
+        // copy; the card may be storing there for a later flight, as it
+        // may into a piece that is fetched.
+        unsafe {
+            threads_over(
+                now,
+                (lo, hi),
+                twin as *const u8,
+                card_lanes_of(piece, skew, card.size),
+                threads,
+            )
+        };
+        let gpu = std::mem::take(now);
+        let written = self.card_merge_held(card, lo, &gpu, held, sent_as, title);
+        *now = gpu;
+        written
+    }
+
+    /// The merge of [`Shadow::card_merge_relay`], with the CPU side's lock
+    /// held: `held` is the CPU's side at offset `at` on, as long as `gpu`.
+    fn card_merge_held(
+        &self,
+        card: &Card,
+        at: usize,
+        gpu: &[u8],
+        held: &mut [u8],
+        fetched_after: u64,
+        title: &mut Vec<u8>,
+    ) -> usize {
+        let start = self.start as usize;
         let Some(first) = first_difference(gpu, held) else {
             return 0;
         };
@@ -2957,6 +3154,7 @@ fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
                     dirty: Mutex::default(),
                     sent: Mutex::default(),
                     size,
+                    landing: Mutex::default(),
                 };
                 (on_card, Some(card))
             }
@@ -3209,6 +3407,7 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
                 dirty: Mutex::default(),
                 sent: Mutex::default(),
                 size: len,
+                landing: Mutex::default(),
             };
             (on_card, Some(card))
         }

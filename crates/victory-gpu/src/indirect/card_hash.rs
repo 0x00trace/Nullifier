@@ -187,13 +187,196 @@ unsafe fn pass(
     (now, hashes, differs): (u64, u64, u64),
     constants: [u32; 6],
 ) {
+    let [first, skew, size, pieces, out_at, compare] = constants;
+    // SAFETY: as the caller promises. Nothing is handed down: the two more
+    // views of the form with a group a piece are bound to the results.
+    unsafe {
+        pass_down(
+            list,
+            lanes,
+            (now, hashes, differs, differs, differs),
+            [first, skew, size, pieces, out_at, compare, 0, 0],
+        );
+    }
+}
+
+/// [`pass`], with the twin the threads that differ hand their bytes down
+/// to, the dwords they store the stamp in, and the stamp (the seventh
+/// constant; 0: nothing is handed down).
+///
+/// # Safety
+/// As [`pass`], for the five addresses.
+unsafe fn pass_down(
+    list: &ID3D12GraphicsCommandList,
+    lanes: bool,
+    (now, hashes, differs, twin, by_thread): (u64, u64, u64, u64, u64),
+    constants: [u32; 8],
+) {
     // SAFETY: as the caller promises.
     unsafe {
-        list.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
+        list.SetComputeRoot32BitConstants(0, 8, constants.as_ptr().cast(), 0);
         list.SetComputeRootShaderResourceView(1, now);
         list.SetComputeRootUnorderedAccessView(2, hashes);
         list.SetComputeRootUnorderedAccessView(3, differs);
+        list.SetComputeRootUnorderedAccessView(4, twin);
+        list.SetComputeRootUnorderedAccessView(5, by_thread);
         list.Dispatch(crate::host::card_compare_groups(constants[3], lanes), 1, 1);
+    }
+}
+
+/// Told a stamp, the compare with a group a piece hands down the bytes of
+/// the threads whose hashes differ, and of no other thread, to the twin at
+/// the copy's own offsets, and stores the stamp in those threads' dwords
+/// (`crate::host::card_gather`). The threads are where
+/// `crate::shadow::card_lanes_of` says they are, which is what the merge
+/// goes by.
+#[test]
+fn card_compare_hands_down_the_bytes_of_the_threads_that_differ() {
+    let Some(host) = super::host() else {
+        eprintln!("no host GPU");
+        return;
+    };
+    const SKEW: u32 = 0x3456;
+    const ALL: u32 = 6;
+    // The results' first dword: not 0, so that the dwords by thread are
+    // counted from it.
+    const AT: usize = 8;
+    const UNTOUCHED: u8 = 0xee;
+    let size = PIECE * ALL as usize - PIECE;
+    // SAFETY: a live device; the lists below name buffers that live to the
+    // end of this block, and every list is waited for.
+    unsafe {
+        let mut rig = Rig::new(&host.device);
+        let compare = compare_made(&host.device, crate::host::CARD_COMPARE_LANES);
+        let (now, now_ptr) = host.shared_buffer(size as u64).unwrap();
+        let (hashes, _) = host
+            .shared_buffer(crate::shadow::card_hash_bytes_as(size as u64, true))
+            .unwrap();
+        let (differs, differs_ptr) = host.shared_buffer(256).unwrap();
+        let (twin, twin_ptr) = host.shared_buffer(size as u64).unwrap();
+        let by_thread_dwords = (AT + ALL as usize) * 64;
+        let (by_thread, by_thread_ptr) = host.shared_buffer(by_thread_dwords as u64 * 4).unwrap();
+        let mut content: Vec<u8> = (0..size).map(|i| (i * 131 + i / 7) as u8).collect();
+        std::ptr::copy_nonoverlapping(content.as_ptr(), now_ptr, size);
+        std::ptr::write_bytes(twin_ptr, UNTOUCHED, size);
+        std::ptr::write_bytes(by_thread_ptr, 0, by_thread_dwords * 4);
+        let addresses = (
+            now.GetGPUVirtualAddress(),
+            hashes.GetGPUVirtualAddress(),
+            differs.GetGPUVirtualAddress(),
+            twin.GetGPUVirtualAddress(),
+            by_thread.GetGPUVirtualAddress(),
+        );
+        // A pass over the whole copy; what it left in the results.
+        let mut run = |mode: u32, stamp: u32| -> Vec<u32> {
+            for i in 0..ALL as usize {
+                differs_ptr.cast::<u32>().add(AT + i).write_volatile(0);
+            }
+            rig.run(|list| {
+                list.SetComputeRootSignature(&compare.root);
+                list.SetPipelineState(&compare.pso);
+                pass_down(
+                    list,
+                    true,
+                    addresses,
+                    [0, SKEW, size as u32, ALL, (AT * 4) as u32, mode, stamp, 0],
+                );
+            });
+            (0..ALL as usize)
+                .map(|i| differs_ptr.cast::<u32>().add(AT + i).read_volatile())
+                .collect()
+        };
+        let stamps = || -> Vec<u32> {
+            (0..by_thread_dwords)
+                .map(|i| by_thread_ptr.cast::<u32>().add(i).read_volatile())
+                .collect()
+        };
+        let twin_now =
+            || -> Vec<u8> { std::slice::from_raw_parts(twin_ptr.cast_const(), size).to_vec() };
+        // The piece and the thread of the byte at an offset of the copy.
+        let place = |at: usize| -> (u32, usize) {
+            let piece = ((at + SKEW as usize) / PIECE) as u32;
+            let (first, _) = crate::shadow::card_lanes_of(piece, SKEW, size as u64);
+            (piece, (at - first) / 16 % 64)
+        };
+        // What the twin and the dwords by thread must hold after passes
+        // that handed down the threads in `down` (piece, thread, stamp),
+        // in order, with the copy as `content` was at each.
+        let expect = |down: &[(u32, usize, u32, Vec<u8>)]| -> (Vec<u8>, Vec<u32>) {
+            let mut bytes = vec![UNTOUCHED; size];
+            let mut dwords = vec![0u32; by_thread_dwords];
+            for (piece, thread, stamp, content) in down {
+                dwords[(AT + *piece as usize) * 64 + thread] = *stamp;
+                let (first, end) = crate::shadow::card_lanes_of(*piece, SKEW, size as u64);
+                for step in (first + thread * 16..end).step_by(1024) {
+                    bytes[step..step + 16].copy_from_slice(&content[step..step + 16]);
+                }
+            }
+            (bytes, dwords)
+        };
+
+        // The hashes are stored; nothing is handed down by that pass, nor
+        // by a compare that finds nothing changed.
+        run(0, 0x51);
+        assert_eq!(run(2, 0x52), vec![0; ALL as usize]);
+        assert_eq!(
+            (twin_now(), stamps()),
+            expect(&[]),
+            "nothing differs: nothing comes down"
+        );
+
+        // Bytes in pieces 0, 1 (two threads), 3 and the last one.
+        let mut down = Vec::new();
+        let mut flagged = vec![0u32; ALL as usize];
+        for at in [
+            5usize,
+            PIECE - SKEW as usize + 16,
+            PIECE - SKEW as usize + 1040 + 16 * 37,
+            3 * PIECE + 30001,
+            size - 100,
+        ] {
+            content[at] ^= 0x5a;
+            now_ptr.add(at).write_volatile(content[at]);
+            let (piece, thread) = place(at);
+            flagged[piece as usize] = 1;
+            down.push((piece, thread, 0x77u32, Vec::new()));
+        }
+        for d in &mut down {
+            d.3 = content.clone();
+        }
+        assert_eq!(
+            run(2, 0x77),
+            flagged,
+            "the pieces of the changed bytes are flagged"
+        );
+        assert_eq!(
+            (twin_now(), stamps()),
+            expect(&down),
+            "their threads' bytes came down, and no other thread's"
+        );
+
+        // Told 2 the hashes were stored: the next compare hands nothing
+        // down, and what came down before stays.
+        assert_eq!(run(2, 0x78), vec![0; ALL as usize]);
+        assert_eq!((twin_now(), stamps()), expect(&down));
+
+        // One byte changed back: its thread comes down again, under the
+        // new stamp, with the bytes as they are now.
+        let at = 3 * PIECE + 30001;
+        content[at] ^= 0x5a;
+        now_ptr.add(at).write_volatile(content[at]);
+        let (piece, thread) = place(at);
+        down.push((piece, thread, 0x79, content.clone()));
+        let only: Vec<u32> = (0..ALL).map(|p| u32::from(p == piece)).collect();
+        assert_eq!(run(2, 0x79), only);
+        assert_eq!((twin_now(), stamps()), expect(&down));
+
+        // Without a stamp a piece that differs is flagged and nothing
+        // comes down.
+        content[5] ^= 0x33;
+        now_ptr.add(5).write_volatile(content[5]);
+        assert_eq!(run(2, 0), vec![1, 0, 0, 0, 0, 0]);
+        assert_eq!((twin_now(), stamps()), expect(&down));
     }
 }
 
