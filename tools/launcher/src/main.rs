@@ -915,7 +915,12 @@ impl App {
     fn refresh_log(&mut self) {
         let Some(path) = &self.log_path else { return };
         if let Ok(text) = std::fs::read_to_string(path) {
-            self.log_shown = tail(&text, 160);
+            let clean: String = text
+                .lines()
+                .map(strip_ansi)
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.log_shown = tail(&clean, 160);
         }
     }
 
@@ -934,24 +939,34 @@ impl App {
                 run.frame = last_num(v);
             }
             if let Some(part) = after(rest, "copies ") {
-                run.copies_ms = first_num(part);
-                run.copies_mb = megabytes(part);
+                if let Some(v) = first_num(part) {
+                    run.copies_ms = Some(v);
+                }
+                if let Some(v) = megabytes(part) {
+                    run.copies_mb = Some(v);
+                }
             }
             if let Some(part) = after(rest, "textures ") {
-                run.textures_ms = first_num(part);
-                run.textures_mb = megabytes(part);
+                if let Some(v) = first_num(part) {
+                    run.textures_ms = Some(v);
+                }
+                if let Some(v) = megabytes(part) {
+                    run.textures_mb = Some(v);
+                }
             }
-            if let Some(v) = before(rest, " on the GPU") {
-                run.gpu_ms = last_num(v);
+            if let Some(v) = before(rest, " on the GPU").and_then(last_num) {
+                run.gpu_ms = Some(v);
             }
-            if let Some(v) = before(rest, " copying back") {
-                run.back_ms = last_num(v);
+            if let Some(v) = before(rest, " copying back").and_then(last_num) {
+                run.back_ms = Some(v);
             }
             if let Some(part) = after(rest, "passes ") {
-                run.heap_ms = before(part, " ms").and_then(|v| v.trim().parse().ok());
+                if let Some(v) = before(part, " ms").and_then(|v| v.trim().parse().ok()) {
+                    run.heap_ms = Some(v);
+                }
             }
-            if let Some(v) = before(rest, " draws/frame") {
-                run.draws = last_num(v).map(|v| v as u32);
+            if let Some(v) = before(rest, " draws/frame").and_then(last_num) {
+                run.draws = Some(v as u32);
             }
         }
         run
@@ -1210,15 +1225,16 @@ impl App {
                 }
             });
             egui::Grid::new("last run")
-                .num_columns(3)
-                .spacing([22.0, 6.0])
+                .num_columns(2)
+                .spacing([18.0, 6.0])
                 .show(ui, |ui| {
-                    stat(ui, "Frame time", run.frame.map(|v| format!("{v:.1} ms")));
-                    stat(ui, "Graphics card", run.gpu_ms.map(|v| format!("{v:.1} ms")));
-                    stat(ui, "Copy back", run.back_ms.map(|v| format!("{v:.1} ms")));
+                    stat(ui, "Frame", run.frame.map(|v| format!("{v:.1} ms")));
+                    stat(ui, "GPU", run.gpu_ms.map(|v| format!("{v:.1} ms")));
                     ui.end_row();
                     stat(ui, "Copies", pair(run.copies_ms, run.copies_mb));
                     stat(ui, "Textures", pair(run.textures_ms, run.textures_mb));
+                    ui.end_row();
+                    stat(ui, "Copy back", run.back_ms.map(|v| format!("{v:.1} ms")));
                     stat(ui, "Card check", run.heap_ms.map(|v| format!("{v:.1} ms")));
                     ui.end_row();
                 });
@@ -1863,6 +1879,7 @@ fn pair(ms: Option<f32>, mb: Option<f32>) -> Option<String> {
 
 fn stat(ui: &mut egui::Ui, label: &str, value: Option<String>) {
     ui.vertical(|ui| {
+        ui.set_min_width(150.0);
         ui.label(egui::RichText::new(label).small().color(egui::Color32::GRAY));
         ui.label(value.unwrap_or_else(|| "—".into()));
     });
