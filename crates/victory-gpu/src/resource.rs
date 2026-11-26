@@ -1366,7 +1366,7 @@ pub(crate) fn host_made<'a>(
 /// system's rule ([`room_in_budget`]): no more copies while those alive
 /// hold that share of the budget.
 #[cfg(windows)]
-pub(crate) fn room() -> bool {
+pub(crate) fn room() -> Room {
     use std::sync::atomic::Ordering::Relaxed;
     const FLOOR: u64 = 2 << 30;
     const WITHOUT_BUDGET: u64 = 4 << 30;
@@ -1377,36 +1377,60 @@ pub(crate) fn room() -> bool {
     });
     let filled = KINDS[1].load(Relaxed);
     if let Some(limit) = limit {
-        return filled < limit;
+        return if filled < limit {
+            Room::Free
+        } else {
+            Room::Full
+        };
     }
     if filled < FLOOR {
-        return true;
+        return Room::Free;
     }
-    static SHARE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
-    let share = *SHARE.get_or_init(|| {
-        let percent = std::env::var("VICTORY_TEXTURE_SHARE").ok().and_then(|v| v.trim().parse::<u64>().ok());
-        percent.filter(|p| (1..=90).contains(p)).unwrap_or(0)
-    });
     match crate::host::host().and_then(|h| h.video_memory()) {
-        Some([budget, used, ..]) => match room_in_budget(budget, used, filled, share) {
-            Room::Free => true,
-            Room::Full => false,
-            Room::Share => {
-                ROOM_BY_SHARE.fetch_add(1, Relaxed);
-                false
-            }
-        },
-        None => filled < WITHOUT_BUDGET,
+        Some([budget, used, ..]) => room_in_budget(budget, used, filled, share()),
+        None if filled < WITHOUT_BUDGET => Room::Free,
+        None => Room::Full,
     }
 }
 
-/// Passes that made no copy because of `VICTORY_TEXTURE_SHARE` alone
-/// (diagnostics, for the memory line).
-pub(crate) static ROOM_BY_SHARE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// `VICTORY_TEXTURE_SHARE` in percent (0: not set, or not 1 to 90).
+#[cfg(windows)]
+fn share() -> u64 {
+    static SHARE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SHARE.get_or_init(|| {
+        let percent = std::env::var("VICTORY_TEXTURE_SHARE")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok());
+        percent.filter(|p| (1..=90).contains(p)).unwrap_or(0)
+    })
+}
 
-/// What [`room_in_budget`] finds.
+/// Whether [`room`] is asked again while a pass makes copies, not only
+/// before it: with a share. A pass is limited by the bytes it uploads, and
+/// a copy is several times the size of what is uploaded into it (a
+/// streamed texture has every mip on the card and the small ones in title
+/// memory). Asked once a pass, the copies went 1.4 to 1.6 GB past a share
+/// of 4.0 to 4.2 GB (three runs), and what the title then let go was kept
+/// space that filled the card ([`room_in_budget`]).
+#[cfg(windows)]
+pub(crate) fn room_within_pass() -> bool {
+    share() > 0
+}
+
+/// The bytes of the host copies alive of textures the title fills.
+#[cfg(windows)]
+pub(crate) fn filled_bytes() -> u64 {
+    KINDS[1].load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Passes that `VICTORY_TEXTURE_SHARE` alone stopped, before their first
+/// copy or after some (diagnostics, for the memory line).
+pub(crate) static ROOM_BY_SHARE: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// What [`room`] finds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Room {
+pub(crate) enum Room {
     /// More copies may be made.
     Free,
     /// The process uses nine tenths of its budget or more.

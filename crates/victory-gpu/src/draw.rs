@@ -349,8 +349,8 @@ pub(crate) static HEAP_BUFFER_MICROS: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_TEXTURES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_TEXTURE_BYTES: AtomicU64 = AtomicU64::new(0);
 pub(crate) static HEAP_TEXTURES_WAITING: AtomicU64 = AtomicU64::new(0);
-/// Passes that made no texture because the card had no room
-/// (`crate::resource::room`), for the memory line.
+/// Passes stopped because the card had no room (`crate::resource::room`),
+/// for the memory line.
 pub(crate) static HEAP_TEXTURES_FULL: AtomicU64 = AtomicU64::new(0);
 
 /// Looks at uploaded textures picked by index that found the memory as it
@@ -1509,11 +1509,30 @@ impl State {
         // makes room again: so the slots are still looked at (the pass
         // returned here, and a slot whose texture had been streamed out
         // kept its host copy for as long as the card was full).
-        let room = crate::resource::room();
-        if !room {
-            HEAP_TEXTURES_FULL.fetch_add(1, Ordering::Relaxed);
-            once!("textures picked by index: the card has no room for more; they wait");
+        use crate::resource::Room;
+        fn stopped(room: Room) {
+            match room {
+                Room::Free => {}
+                Room::Full => {
+                    HEAP_TEXTURES_FULL.fetch_add(1, Ordering::Relaxed);
+                    once!("textures picked by index: the card has no room for more; they wait");
+                }
+                Room::Share => {
+                    crate::resource::ROOM_BY_SHARE.fetch_add(1, Ordering::Relaxed);
+                    once!(
+                        "textures picked by index: their copies hold the share of the budget they may; the rest wait"
+                    );
+                }
+            }
         }
+        let mut room = crate::resource::room();
+        stopped(room);
+        // With a share the question is put again while the pass makes
+        // copies (`resource::room_within_pass`): each time those alive
+        // have grown by this much.
+        const ASK_AGAIN: u64 = 64 << 20;
+        let within = crate::resource::room_within_pass();
+        let mut asked_at = crate::resource::filled_bytes();
         let mut refused = 0;
         // Slots whose texture's memory the runtime mapped, unmapped or
         // wrote since the last pass are due again.
@@ -1617,7 +1636,15 @@ impl State {
             }
             // From here on a host texture is made: not without room. The
             // slot stays due.
-            if !room {
+            if within
+                && room == Room::Free
+                && crate::resource::filled_bytes() >= asked_at + ASK_AGAIN
+            {
+                asked_at = crate::resource::filled_bytes();
+                room = crate::resource::room();
+                stopped(room);
+            }
+            if room != Room::Free {
                 refused += 1;
                 if refused > 256 {
                     break;
