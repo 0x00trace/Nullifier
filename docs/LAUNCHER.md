@@ -28,15 +28,19 @@ cargo build --manifest-path tools/launcher/Cargo.toml
 ./tools/launcher/target/debug/nullifier-launcher          # Windows: tools\launcher\target\debug\nullifier-launcher.exe
 ```
 
-* **Play** — game folder, profile (with what it was measured on), `--detect`
-  output, and Launch/Stop. It runs the same `nullifier-launch.sh`/`.ps1` as
-  the command line, so there is one source of truth.
-* **Graphics** — the switches this build reads: texture budget, card buffers,
-  send-ahead, texture/copy toggles, indirect windows and runs. Off means the
-  variable is absent, never `=0`, so a reader that tests for presence cannot
-  be fooled. Presets: Shipped, Safe, Fast.
-* **Debug** — log level, frame captures, scripted keys, and free-form
-  `KEY=VALUE` environment, applied last.
+* **Play** — one big Launch, the game folder with an in-app folder picker, the
+  profile picked from vendor + VRAM (with the full list behind the combo), the
+  three settings a player touches (texture budget, card buffers, send-ahead),
+  the last run's numbers, and runtime paths. It runs the same
+  `nullifier-launch.sh`/`.ps1` as the command line, so there is one source of
+  truth.
+* **Graphics** — everything measured, in plain words: memory and copies, the
+  draw path, and the timing switches with their history.
+* **Advanced** — the exact set as editable `KEY=VALUE` rows, free-form
+  environment, profile notes, and the disabled list of what needs engine work
+  (FSR, ray tracing, render scale, V-Sync, FPS cap, LOD distance).
+* **Debug** — `--detect`, log level, frame captures, scripted keys, and a
+  20-second benchmark that runs `tools/bench_scene.sh` with this profile.
 
 The GUI writes an exact profile to `~/.cache/nullifier/launcher-profile.json`
 and passes it with `VICTORY_PROFILES`, forcing it by name. That is why the
