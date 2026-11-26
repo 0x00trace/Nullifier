@@ -90,6 +90,8 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | the same build with `VICTORY_INDIRECT_WINDOW=1`, run in turn with the row above | profile + `VICTORY_INDIRECT_WINDOW=1`, library kept | **4.00 / 3.90 / 4.10** | 47 / 47 / 47 | 0 | world renders (817 captures of over 50 KB; 72 of each run looked at, as above); faces, street, car, interior, title cards and video panels as in the row above; the woman's top is white in every capture of that shot looked at |
 | + a run of single indirect records clamped by one pass (`7754069`), switch off, built server | profile, library kept | 3.80 / 3.80 / 3.80 | 47 / 47 / 47 | 0 | world renders (783 captures of over 50 KB; 72 of each run looked at: 30 spread over the run and its first 42); faces, street, car, interior, title cards and video panels as in the rows above; the woman's top in the shot with raised hands is white, grey and dark in the three runs |
 | the same build with `VICTORY_INDIRECT_RUNS=1`, run in turn with the row above | profile + `VICTORY_INDIRECT_RUNS=1`, library kept | **4.50 / 4.40 / 4.40** | 47 / 47 / 47 | 0 | world renders (924 captures of over 50 KB; 72 of each run looked at, as above); faces, street, car, interior, title cards and video panels as in the rows above; the woman's top is white in the three runs |
+| + a piece of a card copy hashed by a group of 64 threads (`7b4ffa4`), switch off, built server | profile + `VICTORY_INDIRECT_RUNS=1`, library kept | 4.40 / 4.60 / 4.65 | 47 / 48 / 48 | 0 | world renders (927 captures of over 50 KB; 100 of each run looked at: 30 spread over the run, its first 42 and 28 around the car scene); faces, street, car, interior, title cards and video panels as in the rows above, but in the third run the man's face is black in the car interior (a defect from before these changes that comes and goes from run to run); the woman's top is grey in the first run and white in the other two |
+| the same build with `VICTORY_CARD_HASH_LANES=1` too, run in turn with the row above | profile + `VICTORY_INDIRECT_RUNS=1 VICTORY_CARD_HASH_LANES=1`, library kept | **5.30 / 5.25 / 5.30** | 47 / 48 / 47 | 0 | world renders (1,054 captures of over 50 KB; 100 of each run looked at, as above); faces, street, car, interior, title cards and video panels as in the rows above, the man's face right in the car interior in all three; the woman's top is grey in the first run and white in the other two |
 
 * **Before:** each run ended on a breakpoint of the title's own
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
@@ -246,6 +248,30 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   module logged nothing new. Off by default: one machine and one scene are
   not enough to change a profile. Evidence and method:
   `docs/FINDINGS.md` 2.7.
+
+* **The fourteenth row and the fifteenth:** a timing run now also times the
+  two lists the layer itself adds to a submission for copies in the card's
+  memory (`a881feb`): the one that sends up what the title changed and
+  hashes those pieces again, and the one that hashes what the submission's
+  shaders may write and flags the pieces that differ. They were 29.9 and
+  15.5 ms of the card's time in a frame, of 124.3 ms for all commands: more
+  than the indirect draws by now. The compare's shader hashed a 64 KiB
+  piece with one thread, in 4,096 steps one after the other, which takes
+  0.45 ms on this card however little else the card has to do, and every
+  copy with pieces to hash costs that once in the list in front of a
+  submission. `VICTORY_CARD_HASH_LANES=1` gives a piece a group of 64
+  threads; each thread hashes every 64th step into a hash of its own, with
+  no memory the threads share and no barrier between them (the form with
+  both lost the device on RADV, `docs/FINDINGS.md` 3.17). The two lists
+  then take 9.4 and 4.8 ms. A benchmark (`indirect::card_hash`, no title
+  needed) gives 17.8 ms against 1.95 ms for 520 hash passes of 40 copies.
+  The two rows are six runs of one build, the switch off and on in turn,
+  all with `VICTORY_INDIRECT_RUNS=1`: at 3,000 draws the frame is 213 ms
+  off and 190 ms on, the wait for the card 100.1 and 75.5 ms. Both forms
+  flag as many pieces a frame (995 to 1,088 and 913 to 1,039). No removal,
+  no unhandled exception and no failed clamp in the six, and the NVIDIA
+  module logged nothing new. Off by default, as the row above. Evidence
+  and method: `docs/FINDINGS.md` 2.8.
 
 ### The texture ask (P0 probe, 2026-11-25)
 

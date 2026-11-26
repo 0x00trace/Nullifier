@@ -334,6 +334,125 @@ wait no longer grows much with the draws (10.3 ms per 1,000); 70 ms of it
 are there at any number of draws. The 400 passes left are in front of the
 title's indirect dispatches, each of which may write the next one's record.
 
+## 2.8 The layer's own hash passes: a group of threads to a piece (2026-11-26)
+
+Same machine and settings as 2.6 and 2.7. Builds `a881feb` (the timing) and
+`7b4ffa4` (the change), and `44f17e3` for the benchmark.
+
+**What they are.** For each copy of a title buffer in the card's memory the
+layer keeps hashes of the copy's 64 KiB pieces on the card (3.6). A list of
+ours in front of a submission's lists sends up what the title changed and
+hashes those pieces again. Another behind them hashes the ranges the
+submission's shaders may write and flags the pieces whose hash is another;
+those are fetched. In the title's opening, medians of a run's world frame
+lines: 934 to 975 hash passes a frame over 2,051 to 2,253 pieces, and 119
+to 123 compare passes over about 50,000 pieces, of which 913 to 1,088 are
+flagged and fetched.
+
+**What they cost.** A timing run (2.6) did not show these lists: it timed
+the title's commands. `a881feb` waits for each of the two lists on its own
+in a timing run and logs its time from submission to its end ("ours-sync",
+"ours-compare"). By the clock, which is about 0.05 ms a list more than the
+card's time. (Timestamps around the lists were tried first and read 0.0 ms
+for the compare: a timestamp behind a list's last compute passes was taken
+while they still ran. A title list that ends in dispatches may be short in
+the timing run's figures in the same way.) With `VICTORY_INDIRECT_RUNS=1`,
+medians of 47 world frame lines each:
+
+| the card's time a frame | `a881feb` | `7b4ffa4`, `VICTORY_CARD_HASH_LANES=1` |
+|---|---|---|
+| the title's dispatches | 41.8 ms in 1,373 | 41.4 ms in 1,343 |
+| **ours-sync** | **29.9 ms in 43 lists** | **9.4 ms in 41 lists** |
+| the title's indirect commands | 25.4 ms in 3,075 | 25.4 ms in 3,121 |
+| **ours-compare** | **15.5 ms in 31 lists** | **4.8 ms in 31 lists** |
+| the title's alias copies | 6.9 ms in 79 | 6.9 ms in 78 |
+| the rest of the title's commands | 4.3 ms | 4.2 ms |
+| all | 124.3 ms | 91.5 ms |
+
+The layer's own two lists were 45.4 ms of the card's time in a frame: more
+than the indirect draws after 2.6 and 2.7, and second only to the title's
+own compute.
+
+**Why.** The compare's shader hashed a piece with one thread, in 4,096
+steps one after the other, each step waiting for the loads of the one
+before it: about 0.45 ms a piece on this card, with next to nothing of the
+card in use. Passes recorded one after the other run side by side, so a
+group of them takes about as long as one piece. But the list that brings
+copies up to date has a state transition between one copy's passes and the
+next copy's, the card waits there, and so every copy with pieces to hash
+costs that time, and every compare list costs it once more. Joining the
+passes of a copy (`VICTORY_CARD_REHASH_RUNS=1`) leaves a quarter of them
+and changes nothing: 332 hash passes a frame and 4.60 fps, against 1,238
+and 4.70 fps, in two trial runs of a later build that differed in that
+switch only. The cost is per group, not per pass.
+
+**The change** (`VICTORY_CARD_HASH_LANES=1`, off by default). A piece gets a
+group of 64 threads. Thread `t` hashes the piece's 16-byte steps `t`,
+`t + 64`, `t + 128`... into a hash of its own, 64 steps deep, and stores or
+compares that hash: 64 hashes a piece, a KiB of hashes for 64 KiB of a copy
+(13 MB for the 945 MB of copies here). A thread whose hash differs writes 1
+to the piece's dword of the results and nothing else is written there, so
+the layer zeroes a compare's dwords when it plans it. fxceless/victory-fork
+`5557224` gives a piece a group too and folds the 64 hashes into one,
+through group-shared memory behind a group barrier; that form lost the
+device in two runs of five on RADV in this tree (3.17, the barrier
+suspected), so this one has no memory the threads share and no barrier.
+
+A benchmark of one frame's passes with both forms, no title needed
+(`cargo test -p victory-gpu --lib indirect::card_hash -- --ignored
+--nocapture`, `44f17e3`), the card's time on this RTX 5080:
+
+| a list of | a thread a piece | a group a piece |
+|---|---|---|
+| nothing | 0.00 ms | 0.00 ms |
+| 65 MB sent up in 520 ranges | 1.61 ms | 1.60 ms |
+| 520 hash passes of 2 pieces, one after the other | 3.6 ms | 0.40 ms |
+| the same passes as 40 copies' (a transition between them) | 17.8 ms | 1.95 ms |
+| 80 compare passes of 144 pieces each (737 MB) | 1.92 ms | 0.84 ms |
+| 768 MB hashed in one pass | 1.11 ms | 0.89 ms |
+
+The fourth row is the case of the list in front of a submission: 0.45 ms a
+group with a thread a piece, 0.05 ms with a group a piece. The last two are
+bound by how fast the card reads its memory (about 380 and 880 GB/s).
+
+**Six runs of `7b4ffa4`, the switch off and on in turn**, all with
+`VICTORY_INDIRECT_RUNS=1`, fitted against draws a frame as in 2.6:
+
+| | median fps | n | frame at 3,000 draws | wait for the card at 3,000 draws | card busy | removals |
+|---|---|---|---|---|---|---|
+| `VICTORY_INDIRECT_RUNS=1` | 4.40 / 4.60 / 4.65 | 47 / 48 / 48 | 213 ms | 100.1 ms | 58 / 58 / 57 % | 0 |
+| and `VICTORY_CARD_HASH_LANES=1` | **5.30 / 5.25 / 5.30** | 47 / 48 / 47 | **190 ms** | **75.5 ms** | 50 / 50 / 51 % | 0 |
+
+The wait for the card falls by 24.6 ms at 3,000 draws, and the frame by as
+much. Both forms compare the same pieces and flag as many: 995 to 1,088
+pieces a frame fetched (64.7 to 70.5 MB) with a thread a piece, 913 to
+1,039 (59.3 to 67.1 MB) with a group a piece. No device removal, no
+unhandled exception, no failed clamp and no compare that could not be made
+in the six, and the NVIDIA module logged nothing new.
+
+**Tests.** Each form finds every changed byte in the piece it is in and in
+no other, on the host GPU, with a copy that does not start on a piece
+boundary, with spans that do and do not start at piece 0, told to keep the
+hashes and told to store them
+(`indirect::card_hash::card_compare_finds_each_changed_byte_in_both_forms`).
+The older tests of the compare need the software adapter, which a Wine
+prefix does not give, so they never ran here.
+
+Picture, from 100 captures of each of the six runs (30 spread over the run,
+its first 42, and 28 around the car scene): the title cards, the street,
+the car, the interior and the video panels are drawn, and both leads have
+their face textures from their first shots, with the switch off and on. In
+the third run without the switch the man's face is black in the car
+interior, a defect seen before these changes that comes and goes from run
+to run; it is right in the other five. The woman's top in the shot with
+raised hands (2.6) is grey in the first run of each kind and white in the
+other four.
+
+**What is left.** At 3,000 draws the frame is 190 ms: 76 ms of waiting for
+the card, 70 ms of preparing, about 20 ms of copying back. The card is busy
+half of the time. The submitting thread still stops for the card about 20
+times a frame, so the two rarely work at the same time.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
