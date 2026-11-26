@@ -25,6 +25,57 @@ const TITLE: &str = "Nullifier";
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(91, 140, 255);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+
+fn apply_theme(ctx: &egui::Context) {
+    use egui::{Color32, FontFamily, FontId, Stroke, TextStyle};
+    let mut style = (*ctx.style()).clone();
+    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 7.0);
+    style.spacing.interact_size.y = 28.0;
+    style.text_styles = [
+        (TextStyle::Heading, FontId::new(20.0, FontFamily::Proportional)),
+        (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
+        (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
+        (TextStyle::Small, FontId::new(11.5, FontFamily::Proportional)),
+        (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
+    ]
+    .into();
+    let mut v = egui::Visuals::dark();
+    let panel = Color32::from_rgb(24, 26, 30);
+    let card = Color32::from_rgb(31, 33, 39);
+    let line = Color32::from_rgb(50, 53, 61);
+    let ink = Color32::from_rgb(233, 235, 241);
+    v.panel_fill = Color32::from_rgb(19, 20, 23);
+    v.window_fill = panel;
+    v.faint_bg_color = card;
+    v.extreme_bg_color = Color32::from_rgb(15, 16, 19);
+    v.override_text_color = Some(ink);
+    v.hyperlink_color = ACCENT;
+    v.selection.bg_fill = ACCENT;
+    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.corner_radius = 7.into();
+    }
+    v.widgets.noninteractive.bg_fill = card;
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, line);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(38, 41, 48);
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(38, 41, 48);
+    v.widgets.hovered.bg_fill = Color32::from_rgb(45, 49, 58);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(45, 49, 58);
+    v.widgets.active.bg_fill = ACCENT;
+    v.widgets.open.bg_fill = Color32::from_rgb(45, 49, 58);
+    v.window_corner_radius = 10.into();
+    v.menu_corner_radius = 8.into();
+    style.visuals = v;
+    ctx.set_style(style);
+}
+
 fn main() -> eframe::Result<()> {
     let root = find_root();
     let mut settings = Settings::load(root.as_deref());
@@ -47,7 +98,8 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         TITLE,
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
+            apply_theme(&cc.egui_ctx);
             settings.root = root.clone();
             let mut app = App::new(settings);
             app.tab = match start_tab.as_deref() {
@@ -521,6 +573,29 @@ struct App {
     new_value: String,
 }
 
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
+enum Preset {
+    Recommended,
+    LowMemory,
+    Safe,
+}
+
+fn current_preset(sets: &BTreeMap<String, String>, shipped: &BTreeMap<String, String>) -> Option<Preset> {
+    let safe = sets.get("VICTORY_LATE_WAIT").map(String::as_str) == Some("0")
+        && !sets.contains_key("VICTORY_JOIN_COPIES")
+        && !sets.contains_key("VICTORY_RELAY");
+    if safe {
+        return Some(Preset::Safe);
+    }
+    if sets.get("VICTORY_TEXTURE_BUDGET_MB").map(String::as_str) == Some("2048") {
+        return Some(Preset::LowMemory);
+    }
+    if sets == shipped {
+        return Some(Preset::Recommended);
+    }
+    None
+}
+
 #[derive(PartialEq, Eq, Clone, Copy)]
 enum Tab {
     Play,
@@ -802,9 +877,19 @@ impl App {
                     ),
                 );
                 ui.add_space(8.0);
-                let big = primary("Launch", ui.available_width(), 46.0);
-                if ui.add(big).clicked() && !self.running() {
-                    self.launch();
+                let big = if self.running() {
+                    egui::Button::new(egui::RichText::new("Stop").strong().color(egui::Color32::WHITE))
+                        .fill(egui::Color32::from_rgb(190, 70, 70))
+                        .min_size(egui::vec2(ui.available_width(), 46.0))
+                } else {
+                    primary("Launch", ui.available_width(), 46.0)
+                };
+                if ui.add(big).clicked() {
+                    if self.running() {
+                        self.stop();
+                    } else {
+                        self.launch();
+                    }
                 }
             });
 
@@ -853,47 +938,68 @@ impl App {
     }
 
     fn quick(&mut self, ui: &mut egui::Ui) {
+        let auto = auto_profile(&self.profiles, &self.hardware);
+        let shipped = self
+            .profiles
+            .iter()
+            .find(|p| p.name == auto)
+            .map(|p| p.sets.clone())
+            .unwrap_or_default();
+        let current = current_preset(&self.settings.sets, &shipped);
         card(ui, |ui| {
-            ui.strong("Quick settings");
+            ui.strong("How should it run?");
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new("The few a player touches; everything else is under Graphics and Advanced.")
+                    egui::RichText::new("Pick one. The numbers behind it are in Graphics if you want them.")
                         .small()
                         .color(egui::Color32::GRAY),
                 ),
             );
-            ui.add_space(4.0);
-            let sets = &mut self.settings.sets;
-            number(ui, sets, "VICTORY_TEXTURE_BUDGET_MB", "Texture budget", 0..=8192, 256, "MB");
-            number(ui, sets, "VICTORY_CARD_BUFFERS_MB", "Card buffers", 0..=4096, 64, "MB");
-            number(ui, sets, "VICTORY_LATE_WAIT", "Send-ahead", 0..=3, 1, "");
-            ui.horizontal(|ui| {
-                if ui.button("Shipped").clicked() {
-                    let name = auto_profile(&self.profiles, &self.hardware);
-                    self.load_profile(&name);
+            ui.add_space(2.0);
+            let mut chosen = None;
+            for (preset, title, desc) in [
+                (Preset::Recommended, "Recommended", "Measured on your GPU: the steady choice with the right picture."),
+                (Preset::LowMemory, "Low memory", "For an 8 GB card or a busy desktop. Textures stream more often."),
+                (Preset::Safe, "Safe", "If it crashes or loses the device. A little slower, the most cautious."),
+            ] {
+                let selected = current == Some(preset);
+                let response = ui.add(
+                    egui::Button::new(
+                        egui::RichText::new(format!("{title}\n{desc}"))
+                            .color(if selected { egui::Color32::WHITE } else { egui::Color32::from_rgb(200, 203, 212) }),
+                    )
+                    .fill(if selected { ACCENT } else { egui::Color32::from_rgb(38, 41, 48) })
+                    .min_size(egui::vec2(ui.available_width(), 46.0)),
+                );
+                if response.clicked() {
+                    chosen = Some(preset);
                 }
-                if ui.button("Safe").clicked() {
-                    let sets = &mut self.settings.sets;
-                    sets.insert("VICTORY_LATE_WAIT".into(), "0".into());
-                    sets.remove("VICTORY_JOIN_COPIES");
-                    sets.remove("VICTORY_RELAY");
-                    self.status = "safe".into();
-                }
-                if ui.button("Fast").clicked() {
-                    let sets = &mut self.settings.sets;
-                    for key in [
-                        "VICTORY_TEXTURE_NO_WAIT",
-                        "VICTORY_WIDE_BACK",
-                        "VICTORY_INDIRECT_WINDOW",
-                        "VICTORY_INDIRECT_RUNS",
-                        "VICTORY_CARD_REHASH_RUNS",
-                    ] {
-                        sets.insert(key.into(), "1".into());
+            }
+            if let Some(preset) = chosen {
+                let mut sets = shipped.clone();
+                match preset {
+                    Preset::Recommended => {}
+                    Preset::LowMemory => {
+                        sets.insert("VICTORY_TEXTURE_BUDGET_MB".into(), "2048".into());
+                        sets.insert("VICTORY_CARD_BUFFERS_MB".into(), "256".into());
                     }
-                    sets.insert("VICTORY_LATE_WAIT".into(), "1".into());
-                    self.status = "fast".into();
+                    Preset::Safe => {
+                        sets.insert("VICTORY_LATE_WAIT".into(), "0".into());
+                        sets.remove("VICTORY_JOIN_COPIES");
+                        sets.remove("VICTORY_RELAY");
+                    }
                 }
-            });
+                self.settings.profile = auto.clone();
+                self.settings.sets = sets;
+                self.status = format!("{preset:?} preset");
+            }
+            ui.add_space(2.0);
+            if ui
+                .link(egui::RichText::new("Fine tuning…").small())
+                .clicked()
+            {
+                self.tab = Tab::Graphics;
+            }
         });
     }
 
@@ -1168,7 +1274,7 @@ impl eframe::App for App {
                         if ui.add(egui::Button::new("Stop").min_size(egui::vec2(90.0, 32.0))).clicked() {
                             self.stop();
                         }
-                    } else if ui.add(primary("Launch", 96.0, 32.0)).clicked() {
+                    } else if self.tab != Tab::Play && ui.add(primary("Launch", 96.0, 32.0)).clicked() {
                         self.launch();
                     }
                 });

@@ -30,8 +30,8 @@ cargo build --manifest-path tools/launcher/Cargo.toml
 
 * **Play** — one big Launch, the game folder with an in-app folder picker, the
   profile picked from vendor + VRAM (with the full list behind the combo), the
-  three settings a player touches (texture budget, card buffers, send-ahead),
-  the last run's numbers, and runtime paths. It runs the same
+  three plain-language presets (Recommended, Low memory, Safe), the last run's
+  numbers, and runtime paths. The numbers behind a preset are in Graphics. It runs the same
   `nullifier-launch.sh`/`.ps1` as the command line, so there is one source of
   truth.
 * **Graphics** — everything measured, in plain words: memory and copies, the
