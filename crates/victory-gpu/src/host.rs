@@ -1863,6 +1863,10 @@ struct CardPlan {
     /// The lists of ours the plan recorded (whether the compare, the
     /// list), given back by `Host::card_done`.
     lists: Vec<(bool, Prelude)>,
+    /// Timing run: when the list that brought the copies up to date went
+    /// to the card (`Host::submit` waits for it on its own).
+    #[cfg(feature = "diagnostics")]
+    sync_sent: Option<std::time::Instant>,
 }
 
 /// One piece of submission-time work, in recorded order.
@@ -3358,6 +3362,8 @@ impl Host {
             }
         }
         let mut used: Vec<(bool, Prelude)> = Vec::new();
+        #[cfg(feature = "diagnostics")]
+        let mut sync_sent = None;
         if !dirty.is_empty() {
             let Some(sync) = work.sync.pop().or_else(|| self.make_prelude()) else {
                 fail(format_args!("no host list to bring host copies in the card's memory up to date"));
@@ -3423,6 +3429,10 @@ impl Host {
             if let Err(e) = recorded {
                 fail(format_args!("host copies in the card's memory could not be brought up to date ({e})"));
             }
+            #[cfg(feature = "diagnostics")]
+            if timing() {
+                sync_sent = Some(std::time::Instant::now());
+            }
             used.push((false, sync));
         }
         drop(order);
@@ -3431,6 +3441,8 @@ impl Host {
             check: None,
             _synced: dirty.into_iter().map(|(shadow, _)| shadow).collect(),
             lists: used,
+            #[cfg(feature = "diagnostics")]
+            sync_sent,
         };
         // Each byte once, as the copy-back joins the declared ranges. The
         // results go behind those of plans still in the air.
@@ -4314,6 +4326,35 @@ impl Host {
             lists.push(Some(check));
         }
         let prepared = std::time::Instant::now();
+        // Timing run: the list of ours that brought copies in the card's
+        // memory up to date is waited for on its own, as every list is. Its
+        // time from when it was sent goes to the sums by command, under
+        // "ours-sync" (what changed in the copies sent up, and the pieces
+        // sent hashed again). No log named these lists' time before. By
+        // the clock, which is about 0.05 ms more than the card's time for a
+        // list: a timestamp behind this list's passes was taken while they
+        // still ran.
+        #[cfg(feature = "diagnostics")]
+        if let Some(sent) = card.as_ref().and_then(|c| c.sync_sent) {
+            *submitted += 1;
+            // SAFETY: the fence and event are ours, under the submission lock.
+            unsafe {
+                let waited = self
+                    .queue
+                    .Signal(&self.fence, *submitted)
+                    .and_then(|()| self.fence.SetEventOnCompletion(*submitted, self.event));
+                if waited.is_ok() {
+                    working(false);
+                    WaitForSingleObject(self.event, INFINITE);
+                    stood(sent);
+                    working(true);
+                    crate::copystat::command_took(
+                        "ours-sync list",
+                        sent.elapsed().as_secs_f64() * 1e3,
+                    );
+                }
+            }
+        }
         if late {
             *submitted += 1;
             // SAFETY: closed lists; the fence is ours.
@@ -4343,10 +4384,15 @@ impl Host {
         // Diagnostics: each list on its own, timed (`VICTORY_GPU_TIMING`).
         #[cfg(feature = "diagnostics")]
         let groups: Vec<&[Option<ID3D12CommandList>]> = if timing() {
+            // The compare of copies in the card's memory is the last list:
+            // a group of its own, behind those of `runs`.
+            let ours = usize::from(card.as_ref().is_some_and(|c| c.check.is_some()));
+            let end = lists.len() - ours;
             firsts
                 .iter()
-                .zip(firsts.iter().skip(1).chain([&lists.len()]))
+                .zip(firsts.iter().skip(1).chain([&end]))
                 .map(|(&a, &b)| &lists[a..b])
+                .chain((ours != 0).then(|| &lists[end..]))
                 .collect()
         } else {
             vec![&lists[..]]
@@ -4375,22 +4421,32 @@ impl Host {
                     Err(e) => tracing::warn!(error = %e, "host submission not waited for"),
                 }
             }
-            // With timing on each group is one of `runs` (and the compare
-            // of copies in the card's memory, with the last): every
-            // command's time on the card goes to the sums by pipeline.
+            // With timing on each group is one of `runs`: every command's
+            // time on the card goes to the sums by pipeline. The group
+            // behind them is the compare of copies in the card's memory:
+            // its time by the clock goes there as "ours-compare" (the
+            // declared ranges hashed and compared).
             #[cfg(feature = "diagnostics")]
-            if timing() {
+            if timing() && i < runs.len() {
                 // SAFETY: a plain query.
                 let frequency = unsafe { self.queue.GetTimestampFrequency() }.unwrap_or(1);
                 for (ms, op) in runs[i].slowest(frequency, usize::MAX) {
                     crate::copystat::command_took(&op, ms);
                 }
+            } else if timing() {
+                crate::copystat::command_took(
+                    "ours-compare list",
+                    started.elapsed().as_secs_f64() * 1e3,
+                );
             }
             // A submission of one list was never named here (`groups.len()
             // > 1` was the test): the two 50 ms lists of the gameplay
             // frame, each a submission of its own, printed nothing.
             #[cfg(feature = "diagnostics")]
-            if timing() && started.elapsed() > std::time::Duration::from_millis(50) {
+            if timing()
+                && i < runs.len()
+                && started.elapsed() > std::time::Duration::from_millis(50)
+            {
                 // SAFETY: a plain query.
                 let frequency = unsafe { self.queue.GetTimestampFrequency() }.unwrap_or(1);
                 let commands = runs[i].notes.lock().unwrap_or_else(|e| e.into_inner()).len();
