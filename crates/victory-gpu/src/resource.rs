@@ -1616,6 +1616,7 @@ pub(crate) fn placed_textures() -> u64 {
 /// resource and the state it leaves, if that is a change.
 #[cfg(windows)]
 pub(crate) fn host_transition(this: This, wanted: u32) -> Option<(*mut c_void, u32)> {
+    use std::sync::atomic::Ordering::Relaxed;
     use windows::core::Interface;
     let (texture, before) = with_hosted(this, true, |(host, _)| {
         // (Written only when it changes.)
