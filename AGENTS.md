@@ -286,6 +286,18 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   title: `cargo test -p victory-gpu --lib indirect::bench -- --ignored
   --nocapture`. Compare runs at equal draws a frame, not by medians alone:
   the wait for the card grows with the draws (2.6).
+* **The layer's own hash passes were the next largest thing on the card
+  (2.8).** For copies of title buffers in the card's memory the layer hashes
+  64 KiB pieces on the card: after it sends changes up, and to find what a
+  submission's shaders wrote. One thread hashed a piece in 4,096 steps one
+  after the other, 0.45 ms on an RTX 5080, and every group of such passes
+  costs that: 45 ms of the card's time a frame. A timing run now shows
+  these lists ("ours-sync", "ours-compare"). `VICTORY_CARD_HASH_LANES=1`
+  (`7b4ffa4`) gives a piece a group of 64 threads with a hash each: 14 ms a
+  frame, and 5.25-5.30 fps against 4.40-4.65, both with
+  `VICTORY_INDIRECT_RUNS=1`. To compare the two forms without the title:
+  `cargo test -p victory-gpu --lib indirect::card_hash -- --ignored
+  --nocapture`.
 
 The next wins are on the copy lane — copy-back through the layer's own view,
 joined submission parts — measured in fxceless/victory-fork and not yet ported

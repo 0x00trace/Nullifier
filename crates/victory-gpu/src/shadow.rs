@@ -181,9 +181,15 @@ pub(crate) fn card_stats() -> [u64; 10] {
 
 /// The bytes of the hashes kept on the card for a copy of `size` bytes: 16
 /// for each 64 KiB piece (a copy that does not start on a piece boundary
-/// has one piece more).
+/// has one piece more), or 64 times 16 with a hash for each KiB of a piece
+/// (`crate::host::card_hash_lanes`).
 pub(crate) fn card_hash_bytes(size: u64) -> u64 {
-    (size / PIECE as u64 + 2) * 16
+    card_hash_bytes_as(size, crate::host::card_hash_lanes())
+}
+
+/// [`card_hash_bytes`], for either form of the compare.
+pub(crate) fn card_hash_bytes_as(size: u64, lanes: bool) -> u64 {
+    (size / PIECE as u64 + 2) * 16 * if lanes { 64 } else { 1 }
 }
 
 /// A buffer of `size` bytes in the card's memory for a title buffer's
