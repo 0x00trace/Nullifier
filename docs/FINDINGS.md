@@ -1142,6 +1142,33 @@ containers. The pause menu is reachable with scripted keys: `Esc` opens it,
 `Up` wraps to Settings, `E` (right bumper) moves tabs to DISPLAY. Settings are
 committed when the container reaches a new version, not when Back is pressed.
 
+### 3.29a The hash is joaat, and the boot path is not the newest version
+
+The container's section keys are **joaat** (Jenkins one-at-a-time, lowercased)
+of the menu category names, which confirms the hash family:
+
+| key | joaat of |
+|---|---|
+| `0x17d82a47` | `Display` |
+| `0x25584db6` | `Camera` |
+| `0xb80c6ae8` | `Audio` |
+| `0x1b2d32db` | `UI` |
+| `0x1723e64b` | `Gameplay` |
+
+The setting keys under them do **not** match simple labels or the XML names
+(tested `Motion Blur Strength`, `motionBlurScale`, `hitEffectsIntensity`, with
+spaces, underscores, camel case, path prefixes and UTF-16); they are probably
+localisation or widget ids, not the visible text.
+
+A copy of v3 as **v4** with one key changed (the Motion Blur key set to 5) was
+not loaded: the DISPLAY menu came up at defaults (5/5/5/3/On), while v3 held
+1/0/off. So the boot path is not "the newest version directory", and the
+settings the menu shows come from another store or another profile (the account
+pickers's player). Next: rename or remove each store in turn (settings.xml,
+the container version, `storage/cloudcache`, the Player container) and see
+which one the menu follows; then map keys by changing several menu values to
+distinct numbers per run.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
