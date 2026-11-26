@@ -1354,6 +1354,16 @@ pub(crate) fn host_made<'a>(
     Some(unsafe { &*std::ptr::from_ref(&host.texture) })
 }
 
+/// The bytes of the host copy of title texture `this`, if it is made
+/// (diagnostics).
+#[cfg(windows)]
+pub(crate) fn host_copy_bytes(this: This) -> Option<u64> {
+    if this.is_null() {
+        return None;
+    }
+    hosted(this, false).map(|(host, _)| host.bytes)
+}
+
 /// Whether more host copies of textures the title fills may be made for
 /// shaders that pick textures by index (`draw.rs` `heap_textures`): always
 /// up to `FLOOR` bytes of them, beyond that while the card's memory in use

@@ -352,6 +352,11 @@ pub(crate) static HEAP_TEXTURES_WAITING: AtomicU64 = AtomicU64::new(0);
 /// Passes that made no texture because the card had no room
 /// (`crate::resource::room`), for the memory line.
 pub(crate) static HEAP_TEXTURES_FULL: AtomicU64 = AtomicU64::new(0);
+/// Diagnostics: the placed textures the pass uploaded, by the first mip
+/// their view shows (0 to 15), four numbers each: how many, the bytes of
+/// title memory their description takes with every mip, the bytes from the
+/// first mip shown, and the bytes of their host copies.
+pub(crate) static HEAP_TEXTURES_SHOWN: [AtomicU64; 64] = [const { AtomicU64::new(0) }; 64];
 
 /// Looks at uploaded textures picked by index that found the memory as it
 /// was, that found it changed (uploaded again), since the start; and the
@@ -1579,11 +1584,17 @@ impl State {
             // page alone, one whose first page is the one missing counted
             // as not there.)
             let mut partly = None;
+            let mut shown = None;
             if let Some(View::Placed(false, resource, desc)) = heap.handle(index).and_then(crate::descriptor::view) {
                 let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
                 // Of the mips the view shows: what lies behind them is
                 // another texture's.
                 let len = crate::resource::placed_bytes_from(&resource, crate::resource::first_mip(&desc)).unwrap_or(1);
+                shown = Some((
+                    crate::resource::first_mip(&desc),
+                    crate::resource::placed_bytes(&resource).unwrap_or(len),
+                    len,
+                ));
                 let mapped = crate::texture::mapped_bytes(address as *const u8, len as usize);
                 if mapped == 0 {
                     HEAP_TEXTURES_AWAY.fetch_add(1, Ordering::Relaxed);
@@ -1695,6 +1706,13 @@ impl State {
             SPENT.fetch_add(bytes, Ordering::Relaxed);
             HEAP_TEXTURE_BYTES.fetch_add(bytes, Ordering::Relaxed);
             HEAP_TEXTURES.fetch_add(1, Ordering::Relaxed);
+            if let Some((first, whole, from)) = shown {
+                let at = first.min(15) as usize * 4;
+                let copy = crate::resource::host_copy_bytes(resource).unwrap_or(0);
+                for (count, more) in HEAP_TEXTURES_SHOWN[at..at + 4].iter().zip([1, whole, from, copy]) {
+                    count.fetch_add(more, Ordering::Relaxed);
+                }
+            }
             host.texture_slot_done(index, write, again);
             // Whole and uploaded: looked at again (`texture_slots_rechecked`).
             if let Some((at, len)) = memory {

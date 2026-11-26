@@ -703,6 +703,35 @@ fn log_memory() {
             WALKING.store(false, Relaxed);
         }
     }
+    {
+        let shown = &crate::draw::HEAP_TEXTURES_SHOWN;
+        let mut parts = String::new();
+        let mut all = [0u64; 4];
+        for first in 0..16 {
+            let of: [u64; 4] = std::array::from_fn(|i| shown[first * 4 + i].load(Relaxed));
+            if of[0] == 0 {
+                continue;
+            }
+            for (sum, v) in all.iter_mut().zip(of) {
+                *sum += v;
+            }
+            parts.push_str(&format!(
+                " from mip {first}: {} ({:.0} MB shown of {:.0} MB described, host copies {:.0} MB);",
+                of[0],
+                mb(of[2]),
+                mb(of[1]),
+                mb(of[3]),
+            ));
+        }
+        tracing::info!(
+            "placed textures uploaded for views by index, by the first mip the view shows:{parts} \
+             in all {} ({:.0} MB shown of {:.0} MB described, host copies {:.0} MB)",
+            all[0],
+            mb(all[2]),
+            mb(all[1]),
+            mb(all[3]),
+        );
+    }
     let kept = crate::pipeline::kept();
     tracing::info!(
         "memory kept beside the lines below: {} shader containers {:.0} MB, {} translations \
