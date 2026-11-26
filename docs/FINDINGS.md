@@ -1142,6 +1142,46 @@ containers. The pause menu is reachable with scripted keys: `Esc` opens it,
 `Up` wraps to Settings, `E` (right bumper) moves tabs to DISPLAY. Settings are
 committed when the container reaches a new version, not when Back is pressed.
 
+### 3.29b What the LOAD ERROR means, and the ASAV header
+
+The title's own banner — "Some settings changes couldn't be loaded and may have
+been reverted. Your saved games haven't been affected." — appeared after an
+edited container version was tried. It then wrote a fresh version (v5) itself.
+
+The blob is an **ASAV** container, not bare JSON:
+
+```
+offset  size  field
+0       4     "ASAV"
+4       4     version (2)
+8       4     2
+12      4     1
+16      4     0
+20      4     0x170   JSON offset
+24      4     0x1cb0  file size
+32      4     Unix time of the save (e.g. 0x6b082ed2 = 13:06:26)
+36      4     0
+40      ...   UTF-16 "Profile Settings", zero padding
+```
+
+and blob `1` is its metadata: a count (6), the file size, a **64-bit value that
+changes with every save** (`0x19f3e566cebaddbf` at 03:59, `0x603a43fd289d0b92`
+at 13:06), the same Unix time, the size again and the name.
+
+Tests: an **identical copy** of the newest version as a new version loaded with
+no error; a copy with one value changed was rejected and reverted. So there is a
+content or revision check we have not reproduced yet. The 64-bit value is not
+xxHash64, FNV-1a-64, MD5/SHA-1/SHA-256/BLAKE2b (first 8 bytes) of the JSON or of
+the file, nor CRC32/CRC32C/Adler-32/Jenkins lookup3-32 (also 64 not found). It
+may be a revision id generated per save rather than a digest, with the loader
+matching it against an index elsewhere (`storage/cloudcache`, the `Player`
+container, or the save index).
+
+Next: (1) test an XML-only advanced setting with a visible effect (e.g.
+`lodScale` 0.05) to see whether the XML store is honoured for graphics; (2) find
+which file records the current version/revision (rename one at a time and see
+whether the identical copy is accepted); (3) only then write the container.
+
 ### 3.29a The hash is joaat, and the boot path is not the newest version
 
 The container's section keys are **joaat** (Jenkins one-at-a-time, lowercased)
