@@ -64,6 +64,9 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every
   number shows examples (`2048, 3072 or 4096 (MB)`) under its description.
+  **Display output** (experimental) picks a smaller output size and/or a
+  native render scale; the active choice is repeated in amber on Play, because
+  it is easy to forget and it changes how the picture looks.
 * **Warnings** — values that cannot work on this machine are called out in a
   yellow panel: a texture budget above the card's VRAM, world memory over half
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
@@ -210,6 +213,29 @@ it got.
 
 Measured on an RTX 5080, six runs in turn: 3.55 / 3.45 / 3.50 fps with the
 built server, 0.60 / 0.65 / 0.70 with Proton's own.
+
+## Display output and render scale (experimental)
+
+`VICTORY_OUTPUT=1920x1080|2560x1440` patches the title's own screen-size block
+(byte-checked; another build is left alone) and `VICTORY_RENDER_SCALE=1` uses
+the title's own upscaler at 1.0 instead of its 2/3. The title still applies
+its own scale, so output 1920x1080 with the default scale renders at 1280x720.
+
+Measured on the opening scene here, 1024 MB card buffers:
+
+| output | render scale | render size | median |
+|---|---|---|---|
+| 3840x2160 | 2/3 (default) | 2560x1440 | 5.5 fps |
+| 2560x1440 | 2/3 | 1707x960 | 6.7 fps |
+| 1920x1080 | 2/3 | 1280x720 | 7.1–7.4 fps |
+| 1920x1080 | 1.0 | 1920x1080 | 6.1 fps |
+
+The 1080p/720p combination is softer and its materials looked worse in play;
+the title's HUD and menus are authored for 4K and were reported wrong at a
+smaller output, so **native output stays the default**. The 1080p pause menu
+and a native-scale 1080p prologue looked correct in captures here; the in-game
+HUD at a smaller output has not been checked yet. Do not ship this on by
+default until that is answered.
 
 ## Shaders and pipelines
 

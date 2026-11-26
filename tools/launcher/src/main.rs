@@ -215,6 +215,12 @@ struct Settings {
     mouse_sensitivity: f32,
     #[serde(default)]
     mouse_invert: bool,
+    /// `VICTORY_OUTPUT`: "", "2560x1440" or "1920x1080".
+    #[serde(default)]
+    output: String,
+    /// `VICTORY_RENDER_SCALE`: 0.0 leaves the title's own 2/3.
+    #[serde(default)]
+    render_scale: f32,
     /// The one-time experimental warning on the Graphics page was acknowledged.
     #[serde(default)]
     game_warning_seen: bool,
@@ -262,6 +268,8 @@ impl Default for Settings {
             mouse_look: false,
             mouse_sensitivity: 0.02,
             mouse_invert: false,
+            output: String::new(),
+            render_scale: 0.0,
             game_warning_seen: false,
             root: None,
             reloaded_profile: false,
@@ -934,6 +942,12 @@ fn launch_command(root: &Path, settings: &Settings, profile_file: &Path) -> Comm
     }
     if !settings.keyboard.trim().is_empty() {
         cmd.env("VICTORY_KEYBOARD", settings.keyboard.trim());
+    }
+    if !settings.output.trim().is_empty() {
+        cmd.env("VICTORY_OUTPUT", settings.output.trim());
+    }
+    if settings.render_scale > 0.0 {
+        cmd.env("VICTORY_RENDER_SCALE", format!("{:.2}", settings.render_scale));
     }
     if settings.mouse_look {
         cmd.env("VICTORY_MOUSE_LOOK", "1");
@@ -1833,10 +1847,27 @@ impl App {
                             .color(egui::Color32::from_rgb(87, 199, 133)),
                     );
                 } else {
+                    let display = if self.settings.output.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " · {} output{}",
+                            self.settings.output,
+                            if self.settings.render_scale > 0.0 {
+                                ", scale 1.0"
+                            } else {
+                                ""
+                            }
+                        )
+                    };
                     ui.label(
-                        egui::RichText::new(format!("Measured settings for {vendor}"))
+                        egui::RichText::new(format!("Measured settings for {vendor}{display}"))
                             .small()
-                            .color(egui::Color32::GRAY),
+                            .color(if display.is_empty() {
+                                egui::Color32::GRAY
+                            } else {
+                                egui::Color32::from_rgb(232, 179, 74)
+                            }),
                     );
                     if chip_button(ui, "Settings…").clicked() {
                         self.settings.show_advanced = true;
@@ -2470,6 +2501,9 @@ impl App {
         let warn = warnings(&self.settings, &self.hardware);
         warnings_card(ui, &warn);
         let mut info = None;
+        let mut output = self.settings.output.clone();
+        let mut render_scale = self.settings.render_scale;
+        let mut display_changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
             let sets = &mut self.settings.sets;
             card(ui, |ui| {
@@ -2481,6 +2515,84 @@ impl App {
                 let asked = number_info(ui, sets, "VICTORY_FPS_CAP", 0..=240, 30);
                 if info.is_none() {
                     info = asked;
+                }
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Display output (experimental): the title renders at this size and upscales. The HUD and some effects can look wrong away from native.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Output");
+                    let current = match output.as_str() {
+                        "2560x1440" => "2560 x 1440",
+                        "1920x1080" => "1920 x 1080",
+                        _ => "Native (3840 x 2160)",
+                    };
+                    egui::ComboBox::from_id_salt("output resolution")
+                        .selected_text(current)
+                        .width(190.0)
+                        .show_ui(ui, |ui| {
+                            for (label, value) in [
+                                ("Native (3840 x 2160)", ""),
+                                ("2560 x 1440 (experimental)", "2560x1440"),
+                                ("1920 x 1080 (experimental)", "1920x1080"),
+                            ] {
+                                if ui
+                                    .selectable_label(output == value, label)
+                                    .clicked()
+                                {
+                                    output = value.to_string();
+                                    display_changed = true;
+                                }
+                            }
+                        });
+                    ui.label("Render scale");
+                    let current = if render_scale > 0.0 {
+                        "1.0 (native)"
+                    } else {
+                        "Title default (2/3)"
+                    };
+                    egui::ComboBox::from_id_salt("render scale")
+                        .selected_text(current)
+                        .width(160.0)
+                        .show_ui(ui, |ui| {
+                            for (label, value) in
+                                [("Title default (2/3)", 0.0_f32), ("1.0 (native)", 1.0)]
+                            {
+                                if ui
+                                    .selectable_label(
+                                        (render_scale - value).abs() < 0.001,
+                                        label,
+                                    )
+                                    .clicked()
+                                {
+                                    render_scale = value;
+                                    display_changed = true;
+                                }
+                            }
+                        });
+                });
+                if !output.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Active: {} output{} · the picture may look softer or the HUD wrong",
+                            output,
+                            if render_scale > 0.0 {
+                                ", render scale 1.0"
+                            } else {
+                                ""
+                            }
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(232, 179, 74)),
+                    );
                 }
             });
             ui.add_space(4.0);
@@ -2520,6 +2632,11 @@ impl App {
                 if info.is_none() { info = asked; }
             });
         });
+        if display_changed {
+            self.settings.output = output;
+            self.settings.render_scale = render_scale;
+            self.settings.save();
+        }
         if let Some(key) = info {
             self.info = Some(key);
         }
