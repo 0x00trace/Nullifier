@@ -601,6 +601,128 @@ defect was seen before that switch existed, and three runs without it are
 too few to say that the switch makes it more frequent; it is the first thing
 to look at if it does.
 
+## 2.10 Where a frame goes, thread by thread: the thread that submits is never idle (2026-11-26)
+
+Same machine as 2.6 to 2.9, with the built wineserver. Build `ecd008e`
+(`main` at `b91fd2e` and the `linux-nvidia-16gb` profile, which the launcher
+chose), a diagnostics build. Two runs of the opening: one with `perf`
+(5.70 fps, n=47, no removal), one timing run (`VICTORY_GPU_TIMING=1
+VICTORY_D3D12_DRED=1`, 3.70 fps in that mode, n=47, no removal).
+
+**How it was taken.** One `perf record -a -g` session of 10 s from second
+100 of the run (3,000 to 4,500 draws a frame, 49 frames) held processor
+samples, every scheduler switch and wake-up, and a mark at every present: a
+uprobe on `thunk64_vkQueuePresentKHR` in Proton's `winevulkan.so`, which
+keeps its symbols. With the marks a frame can be cut out of the scheduler
+data, and with the wake-ups it can be said for whom a thread slept. A second
+window had a uprobe on Wine's `__wine_syscall_dispatcher` with the call
+number, which counts every Wine system call by thread and, from the frame
+pointer chain, by the layer function that made it. A third took samples
+with the registers and 16 KiB of stack each (`--call-graph dwarf`); the
+Windows side of those stacks unwinds with the unwind tables of the PE
+images (the layer's, the title's, Wine's), which `perf` itself cannot read.
+The frames under the first window took 191 to 197 ms, the frame lines
+beside it 175 to 232 ms; the window with the dispatcher probe slows the
+frame to about 310 ms, so of its counts only those that follow the work are
+used.
+
+**The frame in three parts** (medians of the 49 frames, in ms):
+
+| | from a present to the first list call | recording | from the end of recording to the present |
+|---|---|---|---|
+| length | 74 | 65 | 52 |
+| the thread that submits: running | 39 | 39 | 30 |
+| waiting for the card | 29 | 8 | 21 |
+| other waits | 3 | 14 | 1 |
+| the title's main render thread | spins 67 | asleep 64 | asleep 51 |
+| the five recording threads, in sum | 1 | run 161 | 0 |
+| host queue submits | 22 | 97 | 26 |
+
+* **The thread that submits never waits for work.** Per frame it runs 109
+  to 114 ms, sleeps 58 to 62 ms woken by `vkd3d_fence` (the card: about 40
+  sleeps, 53 ms of it in sleeps over 2 ms) and about 17 ms in short sleeps
+  (locks it shares with the recording threads, Wine's server). No sleep of
+  it ends with a wake-up from the title's main thread that hands it work.
+  It is what the frame's length is made of.
+* **The title's main render thread does about 10 ms of work a frame.** After
+  each present it loops on `Sleep(0)` for a median of 67 ms (image offset
+  `+0x4fb0c03` to `+0x4fb0c27`; under Proton each call is two `getrusage`
+  and a `sched_yield`, and 30 ms of the 73 ms it runs are in Wine's
+  dispatcher). In most frames the loop ends 10 to 15 ms after the first long
+  wait for the card of the thread that submits. My reading, from the timing
+  alone: the title waits for the card to finish the last frame before it
+  records the next.
+* **The five recording threads run 169 ms a frame in sum, 10 ms of it title
+  code.** By the unwound stacks 100 ms are under `draw::State::bind` (78
+  under `tables`: making the slots of tables made afresh 25, table entries
+  21, `readable` 12), nearly all of it from `execute_indirect` (75) and
+  `dispatch` (21). By kind: mutex lock and unlock 40 ms and the waits in the
+  kernel 14, shared reference counts and other atomics 23, the NVIDIA driver
+  16. Each of the five sleeps about 14 ms a frame woken by another of them.
+  The locks they spin for, by caller: the slots' kept resources 4.7 ms, the
+  slots' records (`mirror`) 1.8, the buffer table 1.8, the views table 1.7.
+
+**The processor time of the thread that submits** (113.9 ms a frame, by
+samples):
+
+| | ms a frame |
+|---|---|
+| changes of page protection (`VirtualProtect`: `mprotect` in the kernel 16.6) | 19.8 |
+| copying title memory (`victory_try_copy_op`, `copy_mapped`, their page faults) | 19.5 |
+| `BTreeMap` and `BTreeSet` lookups | 6.0 |
+| `memcpy`, `memset`, `memcmp` in Wine's DLLs | 5.9 |
+| BLAKE3 | 5.2 |
+| the NVIDIA driver | 4.9 |
+| `GetWriteWatch` | 4.4 |
+| entering and leaving Wine system calls, not attributed to a call | 4.2 |
+| mutex lock and unlock | 4.2 |
+| reading the clock | 3.4 |
+| the rest, each under 3.5 | 36.4 |
+
+Its Wine system calls a frame, with the layer function that makes them:
+140,000 `NtQueryPerformanceCounter` from `Instant::now` (62,000 more on
+each recording thread: `QueryPerformanceCounter` is a system call under
+Wine here, and the layer's accounting reads the clock around nearly
+everything it does); 10,600 `NtQueryVirtualMemory` from
+`watch::uncommitted_end` (a question for every run of blocks noted
+uncommitted, at every asking); 7,300 `NtGetWriteWatch`; about 11,000
+`NtProtectVirtualMemory`, of which about 3,000 reach `mprotect` (5.8 µs
+each: the kernel flushes the page tables of every processor that runs a
+thread of the process, and the main thread spins on one). The title's main
+thread makes 61,000 `NtDelayExecution` a frame in its loop.
+
+**The card** (timing run, medians of 47 world lines at 3,331 draws): 97.4 ms
+of commands a frame.
+
+| | ms a frame | commands |
+|---|---|---|
+| dispatches (the title's compute) | 42.8 | 1,355 |
+| indirect draws | 27.5 | 3,054 (9.0 µs each; 25 before 2.6 and 2.7) |
+| the layer's own lists (2.8) | 15.2 | 73 |
+| alias copies | 7.4 | 78 |
+| all other draws and copies | 4.5 | |
+
+Two single commands take about 10.5 ms each: a dispatch of compute program
+`5cf00dc39042edaf` (the shadow masks) and an indirect dispatch of
+`982f3cccd5c04294` (a ray-march of the scattering); the next is
+`cb6adcc6da2613ff` (screen probes, 3.7 ms). `nullifier translate
+<shaders> --list` with `VICTORY_TRANSLATE_ONLY=<hash>` names a program
+and makes its pipeline without the title. A timestamp can be taken while the dispatch
+before it still runs (2.8), so the split by command is approximate and the
+sum is the better number. `nvidia-smi` shows the card 58 % busy in the
+window above and 77 % in a later scene of 1,100 to 1,600 draws, where the
+thread that submits waits 80 ms a frame for it and runs 70.
+
+**What follows.** Three amounts each take several times the 33 ms of 30
+fps: the processor work of the thread that submits (about 110 ms), the
+card's work (about 97 ms), and recording (65 ms). The first two run mostly
+in turn (114 ms running and 62 ms waiting for the card make the frame), so
+a millisecond less of the submitting thread's work is a millisecond less of
+the frame until the card's 97 ms are the limit. A millisecond less of
+recording is not: a build in which the recording threads spend 105 ms a
+frame in list calls, where they spent 170, gives the same frame rate. No
+single item is larger than 20 ms.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask

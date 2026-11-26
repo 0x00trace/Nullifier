@@ -321,6 +321,21 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   title's main thread spins on `SwitchToThread`. Profile the processor side
   before the card side from here on.
 
+* **Thread by thread, the frame is the thread that submits (2.10).** At
+  5.7 fps with the `linux-nvidia-16gb` profile that thread is never idle:
+  it runs 109-114 ms a frame and waits 58-62 ms for the card, and never
+  for work. Of its running, changes of page protection are 20 ms and
+  copying title memory 20; it makes 140,000 clock reads, 10,600
+  `VirtualQuery` and 7,300 `GetWriteWatch` calls a frame, each a Wine
+  system call. The title's main render thread loops on `Sleep(0)` for 67 ms
+  after each present and does 10 ms of work. The five recording threads run
+  169 ms in sum, 10 ms of it title code, and what is saved there does not
+  shorten the frame. The card runs 97 ms of commands a frame (43 the
+  title's compute, 27 indirect draws, 15 the layer's own lists). So work on
+  the submitting thread first, then the card. 2.10 also says how such a
+  profile is taken: `perf` with a uprobe at each present, the scheduler's
+  wake-ups, and stacks unwound with the PE images' unwind tables.
+
 The next wins are on the copy lane — copy-back through the layer's own view,
 joined submission parts — measured in fxceless/victory-fork and not yet ported
 here; the draw lane's barrier and runs are in (2.6, 2.7). See
