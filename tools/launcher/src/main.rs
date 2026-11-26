@@ -112,6 +112,9 @@ fn main() -> eframe::Result<()> {
                 _ => Tab::Play,
             };
             app.info = start_info;
+            if std::env::args().any(|a| a == "--bench") {
+                app.bench_now();
+            }
             Ok(Box::new(app))
         }),
     )
@@ -500,26 +503,6 @@ fn launch_command(root: &Path, settings: &Settings, profile_file: &Path) -> Comm
     cmd
 }
 
-fn bench_command(root: &Path, settings: &Settings, profile_file: &Path) -> Command {
-    let mut cmd = if cfg!(windows) {
-        let mut c = Command::new("powershell");
-        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
-            .arg(root.join("tools/bench_scene.ps1"));
-        c
-    } else {
-        let mut c = Command::new("sh");
-        c.arg(root.join("tools/bench_scene.sh")).arg("launcher");
-        c
-    };
-    cmd.env("VICTORY_PROFILES", profile_file);
-    cmd.env("VICTORY_WINDOW", "20");
-    cmd.env("VICTORY_WARMUP", "8");
-    for (k, v) in extra_env(settings) {
-        cmd.env(k, v);
-    }
-    cmd
-}
-
 /// The title sees Windows paths; a Linux path becomes `Z:\...`.
 fn capture_path(dir: &str) -> String {
     if cfg!(windows) {
@@ -577,6 +560,9 @@ struct App {
     new_value: String,
     info: Option<String>,
     bench_start: Option<std::time::Instant>,
+    bench_world: Option<std::time::Instant>,
+    bench_measure: Option<std::time::Instant>,
+    bench_offset: usize,
     bench_phase: String,
     bench_progress: f32,
     bench_result: String,
@@ -622,11 +608,82 @@ enum Tab {
 
 #[derive(Default)]
 struct LastRun {
-    fps: String,
-    frame: String,
-    phases: String,
+    fps: Option<f32>,
+    frame: Option<f32>,
+    copies_ms: Option<f32>,
+    copies_mb: Option<f32>,
+    textures_ms: Option<f32>,
+    textures_mb: Option<f32>,
+    gpu_ms: Option<f32>,
+    back_ms: Option<f32>,
+    heap_ms: Option<f32>,
+    draws: Option<u32>,
     removals: u32,
-    heap: String,
+}
+
+fn before<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
+    text.split_once(marker).map(|(left, _)| left)
+}
+
+fn after<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
+    text.split_once(marker).map(|(_, right)| right)
+}
+
+fn first_num(text: &str) -> Option<f32> {
+    text.split_whitespace()
+        .next()?
+        .trim_end_matches(',')
+        .parse()
+        .ok()
+}
+
+fn last_num(text: &str) -> Option<f32> {
+    let token = text.split_whitespace().last()?;
+    token
+        .trim_matches(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+        .parse()
+        .ok()
+}
+
+fn megabytes(text: &str) -> Option<f32> {
+    let first = text.split(';').next()?;
+    let at = first.find(" MB")?;
+    first[..at].split_whitespace().last()?.parse().ok()
+}
+
+fn frame_fps(text: &str) -> Vec<f32> {
+    text.lines()
+        .filter_map(|line| {
+            let clean = strip_ansi(line);
+            let rest = after(&clean, "host: ")?;
+            let value = before(rest, " fps,")?;
+            value.trim().parse::<f32>().ok()
+        })
+        .filter(|v| *v < 10.0)
+        .collect()
+}
+
+fn median(values: &mut [f32]) -> f32 {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let n = values.len();
+    if n == 0 {
+        return 0.0;
+    }
+    if n % 2 == 0 {
+        (values[n / 2 - 1] + values[n / 2]) / 2.0
+    } else {
+        values[n / 2]
+    }
+}
+
+fn percentile(values: &[f32], share: f32) -> f32 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let at = ((sorted.len() as f32 * share) as usize).max(1) - 1;
+    sorted[at.min(sorted.len() - 1)]
 }
 
 impl App {
@@ -637,6 +694,14 @@ impl App {
             .as_deref()
             .map(hardware)
             .unwrap_or_default();
+        let log_path = cache_dir()
+            .map(|d| d.join("launcher-last.log"))
+            .filter(|p| p.is_file());
+        let log_shown = log_path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| tail(&t, 160))
+            .unwrap_or_default();
         Self {
             settings,
             profiles,
@@ -645,8 +710,8 @@ impl App {
             detect_output: String::new(),
             child: None,
             bench: None,
-            log_path: None,
-            log_shown: String::new(),
+            log_path,
+            log_shown,
             status: "ready".into(),
             picking: false,
             pick_dir: home_dir().unwrap_or_else(|| PathBuf::from(".")),
@@ -654,6 +719,9 @@ impl App {
             new_value: String::new(),
             info: None,
             bench_start: None,
+            bench_world: None,
+            bench_measure: None,
+            bench_offset: 0,
             bench_phase: String::new(),
             bench_progress: 0.0,
             bench_result: String::new(),
@@ -715,14 +783,19 @@ impl App {
     }
 
     fn bench_now(&mut self) {
-        let Some(root) = self.settings.root.clone() else { return };
-        if cfg!(windows) && !root.join("tools/bench_scene.ps1").exists() {
-            self.status = "the benchmark is Linux-only in this build".into();
+        if self.running() {
+            self.status = "close the game before measuring".into();
             return;
         }
+        let Some(root) = self.settings.root.clone() else { return };
         let Some(profile) = custom_profile(&self.settings) else { return };
         let log = cache_dir().map(|d| d.join("bench-last.log"));
-        let mut cmd = bench_command(&root, &self.settings, &profile);
+        // No screenshots or scripted keys during a measurement: they would
+        // change the number it reports.
+        let mut quiet = self.settings.clone();
+        quiet.capture_dir.clear();
+        quiet.keys.clear();
+        let mut cmd = launch_command(&root, &quiet, &profile);
         if let Some(path) = &log {
             if let Some(dir) = path.parent() {
                 let _ = std::fs::create_dir_all(dir);
@@ -739,6 +812,9 @@ impl App {
                 self.bench = Some(child);
                 self.log_path = log;
                 self.bench_start = Some(std::time::Instant::now());
+                self.bench_world = None;
+                self.bench_measure = None;
+                self.bench_offset = 0;
                 self.bench_progress = 0.02;
                 self.bench_phase = "Starting".into();
                 self.bench_result.clear();
@@ -757,19 +833,10 @@ impl App {
         }
         self.child = None;
         self.bench = None;
-        if cfg!(windows) {
-            let _ = Command::new("taskkill")
-                .args(["/F", "/IM", "nullifier.exe"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        } else {
-            let _ = Command::new("pkill")
-                .args(["-f", "nullifier[.]exe run"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-        }
+        kill_game();
+        self.bench_start = None;
+        self.bench_world = None;
+        self.bench_measure = None;
         self.status = "stopped".into();
     }
 
@@ -781,24 +848,67 @@ impl App {
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
-        if text.contains("median") {
-            self.bench_progress = 1.0;
-            self.bench_phase = "Done".into();
-            if let Some(line) = text.lines().find(|l| l.contains("median")) {
-                self.bench_result = line.trim().to_string();
+        let seen = frame_fps(&text);
+        if self.bench_world.is_none() {
+            if seen.len() >= 2 && seen[seen.len() - 1] < 10.0 && seen[seen.len() - 2] < 10.0 {
+                self.bench_world = Some(std::time::Instant::now());
+                self.bench_phase = "Warming up".into();
+                self.bench_progress = 0.5;
+            } else {
+                self.bench_progress = (0.02 + elapsed / 150.0 * 0.45).min(0.45);
+                self.bench_phase = format!("Loading the game ({elapsed:.0} s)");
             }
-            if !self.bench_running() {
+        }
+        if let Some(world) = self.bench_world {
+            if self.bench_measure.is_none() {
+                if world.elapsed().as_secs_f32() >= 6.0 {
+                    self.bench_measure = Some(std::time::Instant::now());
+                    self.bench_offset = text.len();
+                    self.bench_phase = "Measuring the frame rate".into();
+                    self.bench_progress = 0.65;
+                } else {
+                    self.bench_progress = 0.5 + 0.15 * (world.elapsed().as_secs_f32() / 6.0);
+                    self.bench_phase = "Warming up".into();
+                }
+            }
+        }
+        if let Some(measure) = self.bench_measure {
+            let into = measure.elapsed().as_secs_f32();
+            if into >= 20.0 {
+                let from = self.bench_offset.min(text.len());
+                let slice = &text[from..];
+                let mut values = frame_fps(slice);
+                if values.is_empty() {
+                    values = seen.clone();
+                }
+                let mut sorted = values.clone();
+                let med = median(&mut sorted);
+                let p10 = percentile(&values, 0.1);
+                let crashes = slice.matches("device removed").count();
+                let outcome = if crashes == 0 {
+                    "no crashes".to_string()
+                } else {
+                    format!("{crashes} crashes")
+                };
+                self.bench_result = format!(
+                    "{med:.2} fps · p10 {p10:.2} · {} frames · {outcome}",
+                    values.len()
+                );
+                if let Some(child) = self.bench.as_mut() {
+                    let _ = child.kill();
+                }
+                self.bench = None;
+                kill_game();
                 self.bench_start = None;
+                self.bench_world = None;
+                self.bench_measure = None;
+                self.bench_progress = 1.0;
+                self.bench_phase = "Done".into();
+                self.status = "benchmark done".into();
+            } else {
+                self.bench_progress = 0.65 + 0.3 * (into / 20.0);
+                self.bench_phase = "Measuring the frame rate".into();
             }
-        } else if text.contains("world reached") {
-            self.bench_progress = 0.8;
-            self.bench_phase = "Measuring the frame rate".into();
-        } else if text.contains("bench_scene:") {
-            self.bench_progress = (0.1 + elapsed / 150.0).min(0.6);
-            self.bench_phase = format!("Loading the game ({elapsed:.0} s)");
-        } else {
-            self.bench_progress = 0.05;
-            self.bench_phase = "Starting".into();
         }
     }
 
@@ -816,25 +926,32 @@ impl App {
         run.removals = text.matches("device removed").count() as u32;
         for line in text.lines() {
             let clean = strip_ansi(line);
-            if let Some(rest) = clean.split("host: ").nth(1) {
-                if let Some((fps, tail)) = rest.split_once(" fps, ") {
-                    run.fps = fps.trim().to_string();
-                    if let Some((ms, _)) = tail.split_once(" ms/frame") {
-                        run.frame = ms.trim().to_string();
-                    }
-                    if let Some(phases) = rest.split("preparing: ").nth(1) {
-                        let short: Vec<&str> = phases
-                            .split("; ")
-                            .filter(|p| p.starts_with("copies") || p.starts_with("textures"))
-                            .collect();
-                        run.phases = short.join(" · ");
-                    }
-                }
-                if let Some(heap) = rest.split("heap buffers ").nth(1) {
-                    if let Some(passes) = heap.split("passes ").nth(1) {
-                        run.heap = passes.split(" ms").next().unwrap_or("").to_string();
-                    }
-                }
+            let Some(rest) = after(&clean, "host: ") else { continue };
+            if let Some(v) = before(rest, " fps,") {
+                run.fps = v.trim().parse().ok();
+            }
+            if let Some(v) = before(rest, " ms/frame") {
+                run.frame = last_num(v);
+            }
+            if let Some(part) = after(rest, "copies ") {
+                run.copies_ms = first_num(part);
+                run.copies_mb = megabytes(part);
+            }
+            if let Some(part) = after(rest, "textures ") {
+                run.textures_ms = first_num(part);
+                run.textures_mb = megabytes(part);
+            }
+            if let Some(v) = before(rest, " on the GPU") {
+                run.gpu_ms = last_num(v);
+            }
+            if let Some(v) = before(rest, " copying back") {
+                run.back_ms = last_num(v);
+            }
+            if let Some(part) = after(rest, "passes ") {
+                run.heap_ms = before(part, " ms").and_then(|v| v.trim().parse().ok());
+            }
+            if let Some(v) = before(rest, " draws/frame") {
+                run.draws = last_num(v).map(|v| v as u32);
             }
         }
         run
@@ -960,27 +1077,31 @@ impl App {
     }
 
     fn runtime_card(&mut self, ui: &mut egui::Ui) {
-        let base = data_dir().unwrap_or_default();
-        let prefix = base.join("prefix");
         let cache = cache_dir().unwrap_or_default();
-        let tree = base.join("wineserver/bin/wineserver").is_file();
         card(ui, |ui| {
             ui.strong("Installation");
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Graphics service").small());
-                ui.label(
-                    egui::RichText::new(if tree { "optimised" } else { "standard" })
-                        .small()
-                        .color(if tree { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::from_rgb(232, 179, 74) }),
-                );
-                ui.add_space(12.0);
-                ui.label(egui::RichText::new("Game data").small());
-                ui.label(egui::RichText::new(prefix.display().to_string()).small().color(egui::Color32::GRAY));
-            });
-            ui.horizontal(|ui| {
+            if cfg!(windows) {
+                ui.label("Runs natively on Windows; no Wine or prefix is used.");
+            } else {
+                let base = data_dir().unwrap_or_default();
+                let prefix = base.join("prefix");
+                let tree = base.join("wineserver/bin/wineserver").is_file();
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Graphics service").small());
+                    ui.label(
+                        egui::RichText::new(if tree { "optimised" } else { "standard" })
+                            .small()
+                            .color(if tree { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::from_rgb(232, 179, 74) }),
+                    );
+                    ui.add_space(12.0);
+                    ui.label(egui::RichText::new("Game data").small());
+                    ui.label(egui::RichText::new(prefix.display().to_string()).small().color(egui::Color32::GRAY));
+                });
                 if ui.small_button("Open game data").clicked() {
                     open_path(&prefix);
                 }
+            }
+            ui.horizontal(|ui| {
                 if ui.small_button("Open cache").clicked() {
                     open_path(&cache);
                 }
@@ -1051,7 +1172,7 @@ impl App {
             }
             ui.add_space(2.0);
             if ui
-                .link(egui::RichText::new("Fine-tune…").small())
+                .link(egui::RichText::new("Customise…").small())
                 .clicked()
             {
                 self.tab = Tab::Graphics;
@@ -1065,41 +1186,51 @@ impl App {
             ui.horizontal(|ui| {
                 ui.strong("Last run");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Measure…").on_hover_text("Run a 20-second benchmark with these settings.").clicked() {
+                    let idle = !self.running() && !self.bench_running();
+                    if ui
+                        .add_enabled(idle, egui::Button::new("Measure…"))
+                        .on_hover_text("Run a 20-second benchmark with these settings.")
+                        .clicked()
+                    {
+                        self.tab = Tab::Debug;
                         self.bench_now();
                     }
                 });
             });
-            if run.fps.is_empty() && run.removals == 0 {
+            if run.fps.is_none() {
                 ui.label(egui::RichText::new("No run yet.").color(egui::Color32::GRAY));
                 return;
             }
             ui.horizontal(|ui| {
-                ui.heading(if run.fps.is_empty() { "—" } else { &run.fps });
+                ui.heading(format!("{:.1}", run.fps.unwrap_or(0.0)));
                 ui.label("fps");
-                ui.add_space(12.0);
-                ui.label(format!("{} ms/frame", run.frame));
-                if !run.heap.is_empty() {
-                    ui.add_space(12.0);
-                    ui.label(format!("heap {} ms", run.heap));
+                if let Some(draws) = run.draws {
+                    ui.add_space(10.0);
+                    ui.label(egui::RichText::new(format!("{draws} draws a frame")).small().color(egui::Color32::GRAY));
                 }
             });
-            if !run.phases.is_empty() {
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&run.phases).small().color(egui::Color32::GRAY)),
-                );
-            }
+            egui::Grid::new("last run")
+                .num_columns(3)
+                .spacing([22.0, 6.0])
+                .show(ui, |ui| {
+                    stat(ui, "Frame time", run.frame.map(|v| format!("{v:.1} ms")));
+                    stat(ui, "Graphics card", run.gpu_ms.map(|v| format!("{v:.1} ms")));
+                    stat(ui, "Copy back", run.back_ms.map(|v| format!("{v:.1} ms")));
+                    ui.end_row();
+                    stat(ui, "Copies", pair(run.copies_ms, run.copies_mb));
+                    stat(ui, "Textures", pair(run.textures_ms, run.textures_mb));
+                    stat(ui, "Card check", run.heap_ms.map(|v| format!("{v:.1} ms")));
+                    ui.end_row();
+                });
             ui.horizontal(|ui| {
                 if run.removals == 0 {
-                    ui.label(egui::RichText::new("no device removals").small().color(egui::Color32::from_rgb(87, 199, 133)));
+                    ui.label(egui::RichText::new("No crashes").small().color(egui::Color32::from_rgb(87, 199, 133)));
                 } else {
-                    ui.label(egui::RichText::new(format!("{} device removals", run.removals)).small().color(egui::Color32::from_rgb(232, 106, 106)));
+                    ui.label(egui::RichText::new(format!("{} crashes", run.removals)).small().color(egui::Color32::from_rgb(232, 106, 106)));
                 }
-                if ui.button("Open log").clicked() {
+                if ui.small_button("Open log").clicked() {
                     if let Some(path) = &self.log_path {
-                        let _ = Command::new(if cfg!(windows) { "notepad" } else { "xdg-open" })
-                            .arg(path)
-                            .spawn();
+                        open_path(path);
                     }
                 }
             });
@@ -1300,6 +1431,48 @@ impl App {
             });
 
             ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.strong("Benchmark");
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new("Runs the game for 20 seconds with these settings and reports the frame rate. Takes about two minutes.")
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+                ui.horizontal(|ui| {
+                    let busy = self.bench_running();
+                    let playing = self.running();
+                    if ui
+                        .add_enabled(!busy && !playing, egui::Button::new("Run benchmark"))
+                        .clicked()
+                    {
+                        self.bench_now();
+                    }
+                    if busy {
+                        ui.label(egui::RichText::new("Running…").small());
+                    } else if playing {
+                        ui.label(egui::RichText::new("Close the game first.").small().color(egui::Color32::GRAY));
+                    }
+                });
+                if self.bench_progress > 0.0 {
+                    ui.add(
+                        egui::ProgressBar::new(self.bench_progress)
+                            .text(&self.bench_phase)
+                            .animate(self.bench_running()),
+                    );
+                }
+                if !self.bench_result.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.bench_result)
+                            .small()
+                            .color(egui::Color32::from_rgb(87, 199, 133)),
+                    );
+                }
+            });
+
+            ui.add_space(4.0);
             self.runtime_card(ui);
 
             ui.add_space(4.0);
@@ -1345,7 +1518,7 @@ impl App {
             card(ui, |ui| {
                 ui.strong("Screenshots");
                 let mut save = !self.settings.capture_dir.trim().is_empty();
-                if ui.checkbox(&mut save, "Save pictures of frames").changed() {
+                if ui.checkbox(&mut save, "Take screenshots").changed() {
                     if save {
                         if self.settings.capture_dir.trim().is_empty() {
                             self.settings.capture_dir = home_dir()
@@ -1357,6 +1530,14 @@ impl App {
                     }
                 }
                 if save {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new("A still picture at each frame number below — one PNG each, not a video.")
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        )
+                        .wrap(),
+                    );
                     ui.horizontal(|ui| {
                         ui.label("Folder");
                         ui.text_edit_singleline(&mut self.settings.capture_dir);
@@ -1369,71 +1550,18 @@ impl App {
                             self.picking = true;
                         }
                     });
-                    egui::CollapsingHeader::new("Which frames")
-                        .default_open(false)
-                        .show(ui, |ui| {
-                            ui.label("Frame numbers, separated by commas.");
-                            ui.text_edit_singleline(&mut self.settings.capture_frames);
-                        });
-                }
-            });
-
-            ui.add_space(4.0);
-            card(ui, |ui| {
-                ui.strong("Automation");
-                egui::CollapsingHeader::new("Press keys by itself")
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new("Reaches a scene without playing: seconds:key, e.g. 15:Enter,22:Enter.")
-                                    .small()
-                                    .color(egui::Color32::GRAY),
-                            )
-                            .wrap(),
-                        );
-                        ui.text_edit_singleline(&mut self.settings.keys);
+                    ui.horizontal(|ui| {
+                        ui.label("Frame numbers");
+                        ui.add_sized(
+                            [140.0, 22.0],
+                            egui::TextEdit::singleline(&mut self.settings.capture_frames),
+                        )
+                        .on_hover_text("Counted from the first frame the game draws. 1024 is about a minute in.");
                     });
+                }
             });
 
             ui.add_space(4.0);
-            card(ui, |ui| {
-                ui.strong("Benchmark");
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new("Runs the game for 20 seconds with these settings and reports the frame rate. Takes about two minutes.")
-                            .small()
-                            .color(egui::Color32::GRAY),
-                    )
-                    .wrap(),
-                );
-                ui.horizontal(|ui| {
-                    let busy = self.bench_running();
-                    if ui
-                        .add_enabled(!busy, egui::Button::new("Run benchmark"))
-                        .clicked()
-                    {
-                        self.bench_now();
-                    }
-                    if busy {
-                        ui.label(egui::RichText::new("Running…").small());
-                    }
-                });
-                if self.bench_progress > 0.0 {
-                    ui.add(
-                        egui::ProgressBar::new(self.bench_progress)
-                            .text(&self.bench_phase)
-                            .animate(self.bench_running()),
-                    );
-                }
-                if !self.bench_result.is_empty() {
-                    ui.label(
-                        egui::RichText::new(&self.bench_result)
-                            .small()
-                            .color(egui::Color32::from_rgb(87, 199, 133)),
-                    );
-                }
-            });
         });
     }
 }
@@ -1725,6 +1853,21 @@ fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
 
 // ---------------------------------------------------------------- widgets
 
+fn pair(ms: Option<f32>, mb: Option<f32>) -> Option<String> {
+    match (ms, mb) {
+        (Some(ms), Some(mb)) => Some(format!("{ms:.1} ms · {mb:.0} MB")),
+        (Some(ms), None) => Some(format!("{ms:.1} ms")),
+        _ => None,
+    }
+}
+
+fn stat(ui: &mut egui::Ui, label: &str, value: Option<String>) {
+    ui.vertical(|ui| {
+        ui.label(egui::RichText::new(label).small().color(egui::Color32::GRAY));
+        ui.label(value.unwrap_or_else(|| "—".into()));
+    });
+}
+
 fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).strong().color(egui::Color32::WHITE))
         .fill(ACCENT)
@@ -1873,12 +2016,33 @@ fn capitalise(text: &str) -> String {
     }
 }
 
+fn kill_game() {
+    if cfg!(windows) {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", "nullifier.exe"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    } else {
+        let _ = Command::new("pkill")
+            .args(["-f", "nullifier[.]exe run"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+}
+
 fn open_path(path: &Path) {
-    let _ = Command::new(if cfg!(windows) { "explorer" } else { "xdg-open" })
-        .arg(path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("cmd");
+        c.arg("/C").arg("start").arg("").arg(path);
+        c
+    } else {
+        let mut c = Command::new("xdg-open");
+        c.arg(path);
+        c
+    };
+    let _ = cmd.stdout(Stdio::null()).stderr(Stdio::null()).spawn();
 }
 
 fn home_dir() -> Option<PathBuf> {

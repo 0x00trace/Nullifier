@@ -43,8 +43,11 @@ cargo build --manifest-path tools/launcher/Cargo.toml
 * **Advanced** — the exact set as editable `KEY=VALUE` rows, free-form
   environment, profile notes, and the disabled list of what needs engine work
   (FSR, ray tracing, render scale, V-Sync, FPS cap, LOD distance).
-* **Debug** — `--detect`, log level, frame captures, scripted keys, and a
-  20-second benchmark that runs `tools/bench_scene.sh` with this profile.
+* **Tools** — scan the hardware, choose how much the log says, take still
+  screenshots at chosen frame numbers, and a 20-second benchmark run by the
+  launcher itself (the same code on Windows and Linux): it loads the game,
+  warms up 6 s, measures 20 s, and reports median, p10, frames and crashes
+  with a progress bar. `Measure…` on Play runs it too.
 
 The GUI writes an exact profile to `~/.cache/nullifier/launcher-profile.json`
 and passes it with `VICTORY_PROFILES`, forcing it by name. That is why the
