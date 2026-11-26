@@ -34,15 +34,15 @@ cargo build --manifest-path tools/launcher/Cargo.toml
   numbers, and runtime paths. The numbers behind a preset are in Graphics. It runs the same
   `nullifier-launch.sh`/`.ps1` as the command line, so there is one source of
   truth.
-* **Graphics** — everything measured, in plain words: memory and copies, the
-  draw path, and the timing switches with their history. Every switch has a
-  `?` that explains it and a safe value.
+* **Graphics** — display first (V-Sync, a frame rate limit), then memory and
+  copies, the draw path, and timing — in plain words. Every switch has a `?`
+  that explains it and a safe value.
 * **Warnings** — values that cannot work on this machine are called out in a
   yellow panel: a texture budget above the card's VRAM, world memory over half
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
 * **Advanced** — the exact set as editable `KEY=VALUE` rows, free-form
   environment, profile notes, and the disabled list of what needs engine work
-  (FSR, ray tracing, render scale, V-Sync, FPS cap, LOD distance).
+  (FSR, ray tracing, render scale, LOD distance).
 * **Tools** — scan the hardware, choose how much the log says, take still
   screenshots at chosen frame numbers, and a 20-second benchmark run by the
   launcher itself (the same code on Windows and Linux): it loads the game,

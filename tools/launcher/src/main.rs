@@ -147,8 +147,6 @@ struct Planned {
     fsr: bool,
     ray_tracing: bool,
     render_scale: f32,
-    vsync: bool,
-    fps_cap: u32,
     lod: f32,
 }
 
@@ -158,8 +156,6 @@ impl Default for Planned {
             fsr: false,
             ray_tracing: false,
             render_scale: 1.0,
-            vsync: false,
-            fps_cap: 0,
             lod: 1.0,
         }
     }
@@ -1268,6 +1264,18 @@ impl App {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let sets = &mut self.settings.sets;
             card(ui, |ui| {
+                ui.strong("Display");
+                let asked = switch_info(ui, sets, "VICTORY_VSYNC");
+                if info.is_none() {
+                    info = asked;
+                }
+                let asked = number_info(ui, sets, "VICTORY_FPS_CAP", 0..=240, 30);
+                if info.is_none() {
+                    info = asked;
+                }
+            });
+            ui.add_space(4.0);
+            card(ui, |ui| {
                 ui.strong("Memory and copies");
                 let asked = number_info(ui, sets, "VICTORY_TEXTURE_BUDGET_MB", 0..=8192, 256);
                 if info.is_none() { info = asked; }
@@ -1392,8 +1400,6 @@ impl App {
                 ui.add_enabled(false, egui::Checkbox::new(&mut self.settings.planned.fsr, "FSR upscaling"));
                 ui.add_enabled(false, egui::Checkbox::new(&mut self.settings.planned.ray_tracing, "Ray-traced light"));
                 ui.add_enabled(false, egui::Slider::new(&mut self.settings.planned.render_scale, 0.5..=1.0).text("Render scale"));
-                ui.add_enabled(false, egui::Checkbox::new(&mut self.settings.planned.vsync, "V-Sync"));
-                ui.add_enabled(false, egui::Slider::new(&mut self.settings.planned.fps_cap, 0..=120).text("FPS cap"));
                 ui.add_enabled(false, egui::Slider::new(&mut self.settings.planned.lod, 0.5..=2.0).text("LOD distance"));
             });
 
@@ -1811,6 +1817,16 @@ fn describe(key: &str) -> Option<Desc> {
             "Hand results back beside writes",
             "Copy what shaders wrote back into the game's memory next to the write guards. 2 is faster but has crashed before; 0 turns it off.",
             "0, or 2 if your machine stays stable with it.",
+        ),
+        "VICTORY_VSYNC" => d(
+            "V-Sync",
+            "Wait for the display between frames. Removes tearing, at the cost of a little delay.",
+            "Off unless you see tearing; it matters most above 30 fps.",
+        ),
+        "VICTORY_FPS_CAP" => d(
+            "Frame rate limit",
+            "Hold the game under this rate. 0 leaves it unlimited. A low limit steadies heat and fan noise.",
+            "0 (off), 60, 120 or 144. Below 30 the picture feels heavy.",
         ),
         "VICTORY_LOG" => d(
             "Log detail",

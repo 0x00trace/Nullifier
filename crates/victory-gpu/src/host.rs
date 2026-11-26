@@ -6672,7 +6672,8 @@ impl Host {
             if let Some((buffer, footprint)) = capture {
                 crate::capture::save_read_back(frame, &buffer, &footprint);
             }
-            let _ = p.swap_chain.Present(0, DXGI_PRESENT(0));
+            pace_frame();
+            let _ = p.swap_chain.Present(present_interval(), DXGI_PRESENT(0));
             p.meter.frame(p.hwnd);
             #[cfg(feature = "diagnostics")]
             return Some(probe.is_some_and(|b| crate::capture::black(&b)));
@@ -7011,6 +7012,40 @@ extern "system" fn window_proc(
 ) -> LRESULT {
     // SAFETY: the default handling for our window.
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+/// `VICTORY_VSYNC=1`: present once per display refresh instead of at once.
+fn present_interval() -> u32 {
+    match std::env::var("VICTORY_VSYNC") {
+        Ok(v) if v != "0" && !v.eq_ignore_ascii_case("off") => 1,
+        _ => 0,
+    }
+}
+
+/// `VICTORY_FPS_CAP=N`: wait between presents so the frame rate stays under
+/// N. 0 or unset leaves the title's own pacing.
+fn fps_cap() -> Option<f64> {
+    std::env::var("VICTORY_FPS_CAP")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite() && *v > 0.0)
+}
+
+/// Sleep until this frame's slot, if a cap is set. The next slot follows the
+/// last one, not "now", so a slow frame does not let the next two through.
+fn pace_frame() {
+    let Some(cap) = fps_cap() else { return };
+    static NEXT: std::sync::OnceLock<std::sync::Mutex<std::time::Instant>> =
+        std::sync::OnceLock::new();
+    let next = NEXT.get_or_init(|| std::sync::Mutex::new(std::time::Instant::now()));
+    let mut next = next.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    if *next > now {
+        std::thread::sleep(*next - now);
+    }
+    let now = std::time::Instant::now();
+    let period = std::time::Duration::from_secs_f64(1.0 / cap);
+    *next = if *next > now { *next + period } else { now + period };
 }
 
 fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
