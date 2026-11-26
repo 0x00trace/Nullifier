@@ -60,18 +60,17 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   the game has focus and no pad is connected, the cursor is kept in the window
   and its movement turns the right stick; sensitivity and inversion are on the
   same page. Menu navigation with the mouse is not included.
-* **Community** — a nickname, **Share last run** (adds a local entry and puts
-  a Markdown block on the clipboard), and a filterable list of shared runs:
-  name, Nullifier version, fps, title build, profile and date, newest or
-  fastest first, with a log viewer. The log is filtered to frame lines and
-  failures, and home paths, the game folder, emails and IP addresses are
-  replaced before it is stored or copied. Entries stay on this PC in
-  `~/.local/share/nullifier/community.json`; **Refresh board** reads the
-  published `community/leaderboard.json` from the repository's `main` branch
-  (raw GitHub, no token or server), marks those rows **GitHub**, and
-  **Post to GitHub** opens the share form with the block ready to paste. The
-  board file is the format a hosted server would also read; `NULLIFIER_BOARD_URL`
-  points the launcher at another copy (a fork, or a local file for testing).
+* **Community** — a nickname, **where** in the game the run was and **notes**
+  (pop-in, flicker, HUD, crashes), then **Share last run**: it adds a local
+  entry and copies a JSON block. Each entry keeps the Nullifier version, title
+  build, profile, fps, frame and GPU time, draws, the full set of active
+  settings, the GPU/OS and the sanitized log. The list has two-line rows and
+  filters for name/area/note text, game build and area, "with notes only", and
+  newest/fastest sorting; the log window shows the settings and hardware too.
+  **Refresh board** reads the published `community/leaderboard.json` from
+  `main` (raw GitHub, no token or server) and marks those rows **GitHub**;
+  local entries stay in `~/.local/share/nullifier/community.json`.
+  `NULLIFIER_BOARD_URL` points at another copy for testing.
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every

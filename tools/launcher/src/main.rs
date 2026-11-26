@@ -219,6 +219,12 @@ struct Settings {
     /// The name shown next to shared runs.
     #[serde(default)]
     community_name: String,
+    /// Where the run was (a world section, a mission, a menu).
+    #[serde(default)]
+    community_area: String,
+    /// What looked wrong or different.
+    #[serde(default)]
+    community_notes: String,
     /// `VICTORY_OUTPUT`: "", "2560x1440" or "1920x1080".
     #[serde(default)]
     output: String,
@@ -273,6 +279,8 @@ impl Default for Settings {
             mouse_sensitivity: 0.02,
             mouse_invert: false,
             community_name: String::new(),
+            community_area: String::new(),
+            community_notes: String::new(),
             output: String::new(),
             render_scale: 0.0,
             game_warning_seen: false,
@@ -337,11 +345,49 @@ struct CommunityEntry {
     frame_ms: f32,
     gpu_ms: f32,
     draws: u32,
+    #[serde(default)]
+    area: String,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    settings: String,
+    #[serde(default)]
+    hardware: String,
     when: u64,
     log: String,
     /// From the published board rather than this PC.
     #[serde(default)]
     remote: bool,
+}
+
+fn settings_summary(settings: &Settings, hardware: &Hardware) -> String {
+    let mut parts: Vec<String> = settings
+        .sets
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    parts.push(format!(
+        "output={}",
+        if settings.output.is_empty() {
+            "native"
+        } else {
+            &settings.output
+        }
+    ));
+    if settings.render_scale > 0.0 {
+        parts.push(format!("render_scale={:.2}", settings.render_scale));
+    }
+    if settings.mouse_look {
+        parts.push("mouse_look=1".into());
+    }
+    parts.push(format!("profile={}", settings.profile));
+    format!(
+        "{} | {} {:.0} GB VRAM, {}",
+        parts.join(" "),
+        hardware.vendor.to_uppercase(),
+        hardware.vram_mb as f32 / 1024.0,
+        std::env::consts::OS
+    )
 }
 
 fn community_path() -> Option<PathBuf> {
@@ -1255,6 +1301,9 @@ struct App {
     bench: Option<Child>,
     log_path: Option<PathBuf>,
     log_shown: String,
+    log_refreshed: Option<std::time::Instant>,
+    last_run_cache: LastRun,
+    last_run_at: Option<std::time::Instant>,
     status: String,
     picking: bool,
     pick_dir: PathBuf,
@@ -1289,7 +1338,9 @@ struct App {
     community_open: Option<usize>,
     community_filter: String,
     community_game: String,
+    community_area_filter: String,
     community_sort: u8,
+    community_notes_only: bool,
     community_status: String,
     community_rx: Option<std::sync::mpsc::Receiver<Option<Vec<CommunityEntry>>>>,
     community_fetching: bool,
@@ -1349,7 +1400,7 @@ enum Tab {
     Debug,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct LastRun {
     fps: Option<f32>,
     frame: Option<f32>,
@@ -1463,6 +1514,9 @@ impl App {
             bench: None,
             log_path,
             log_shown,
+            log_refreshed: None,
+            last_run_cache: LastRun::default(),
+            last_run_at: None,
             status: status.into(),
             picking: false,
             pick_dir: home_dir().unwrap_or_else(|| PathBuf::from(".")),
@@ -1497,7 +1551,9 @@ impl App {
             community_open: None,
             community_filter: String::new(),
             community_game: String::new(),
+            community_area_filter: String::new(),
             community_sort: 0,
+            community_notes_only: false,
             community_status: String::new(),
             community_rx: None,
             community_fetching: false,
@@ -1793,21 +1849,41 @@ impl App {
     }
 
     fn refresh_log(&mut self) {
-        let Some(path) = &self.log_path else { return };
-        if let Ok(text) = std::fs::read_to_string(path) {
-            let clean: String = text
-                .lines()
-                .map(strip_ansi)
-                .collect::<Vec<_>>()
-                .join("\n");
-            self.log_shown = tail(&clean, 160);
+        // A 6 MB log read and stripped every frame made the window crawl.
+        // Twice a second at most, and only the tail of the file.
+        if let Some(at) = self.log_refreshed {
+            if at.elapsed() < Duration::from_millis(500) {
+                return;
+            }
         }
+        self.log_refreshed = Some(std::time::Instant::now());
+        let Some(path) = &self.log_path else { return };
+        let Some(text) = read_tail(path, 96 * 1024) else {
+            return;
+        };
+        let clean: String = text.lines().map(strip_ansi).collect::<Vec<_>>().join("\n");
+        self.log_shown = tail(&clean, 160);
     }
 
-    fn last_run(&self) -> LastRun {
+    fn last_run(&mut self) -> LastRun {
+        // Parsing the whole log every frame is also expensive; a change of the
+        // file's bytes is the reason to do it, checked at most every two
+        // seconds.
+        if let Some(at) = self.last_run_at {
+            if at.elapsed() < Duration::from_secs(2) {
+                return self.last_run_cache.clone();
+            }
+        }
+        let run = self.read_last_run();
+        self.last_run_cache = run.clone();
+        self.last_run_at = Some(std::time::Instant::now());
+        run
+    }
+
+    fn read_last_run(&self) -> LastRun {
         let mut run = LastRun::default();
         let Some(path) = &self.log_path else { return run };
-        let Ok(text) = std::fs::read_to_string(path) else { return run };
+        let Some(text) = read_tail(path, 2 * 1024 * 1024) else { return run };
         run.removals = text.matches("device removed").count() as u32;
         for line in text.lines() {
             let clean = strip_ansi(line);
@@ -2799,6 +2875,15 @@ impl App {
             frame_ms: frame.unwrap_or(0.0),
             gpu_ms: gpu.unwrap_or(0.0),
             draws: draws.unwrap_or(0),
+            area: self.settings.community_area.trim().to_string(),
+            notes: self.settings.community_notes.trim().to_string(),
+            settings: settings_summary(&self.settings, &self.hardware),
+            hardware: format!(
+                "{} {:.0} GB VRAM, {}",
+                self.hardware.vendor.to_uppercase(),
+                self.hardware.vram_mb as f32 / 1024.0,
+                std::env::consts::OS
+            ),
             when,
             log: log.clone(),
             remote: false,
@@ -2808,6 +2893,10 @@ impl App {
         let frame_ms = entry.frame_ms;
         let gpu_ms = entry.gpu_ms;
         let draws = entry.draws;
+        let area = entry.area.clone();
+        let notes = entry.notes.clone();
+        let settings_line = entry.settings.clone();
+        let hardware = entry.hardware.clone();
         self.community.insert(0, entry);
         save_community(&self.community);
         self.community_status = format!("Added {name}'s run; a share block is on the clipboard.");
@@ -2820,6 +2909,10 @@ impl App {
             frame_ms,
             gpu_ms,
             draws,
+            area,
+            notes,
+            settings: settings_line,
+            hardware,
             when,
             log,
             remote: false,
@@ -2877,6 +2970,28 @@ impl App {
             ui.add_space(4.0);
             card(ui, |ui| {
                 ui.strong("Share the last run");
+                let mut changed = false;
+                ui.horizontal(|ui| {
+                    ui.label("Where");
+                    changed |= ui
+                        .add_sized(
+                            [300.0, 24.0],
+                            egui::TextEdit::singleline(&mut self.settings.community_area)
+                                .hint_text("prologue cell, boat mission, city street…"),
+                        )
+                        .changed();
+                    ui.label("Notes");
+                    changed |= ui
+                        .add_sized(
+                            [300.0, 24.0],
+                            egui::TextEdit::singleline(&mut self.settings.community_notes)
+                                .hint_text("pop-in, flicker, HUD, crashes…"),
+                        )
+                        .changed();
+                });
+                if changed {
+                    self.settings.save();
+                }
                 let run = self.last_run();
                 if let Some(fps) = run.fps {
                     ui.label(format!(
@@ -2914,13 +3029,11 @@ impl App {
                             ui.ctx().copy_text(markdown);
                         }
                     }
-                    if chip_button(ui, "Post to GitHub").clicked() {
-                        open_url(
-                            "https://github.com/iNiKKo/Nullifier/issues/new?template=share-run.yml",
-                        );
-                    }
-                    if chip_button(ui, "Discussions").clicked() {
-                        open_url("https://github.com/iNiKKo/Nullifier/discussions");
+                    if chip_button(ui, "Copy settings").clicked() {
+                        ui.ctx().copy_text(settings_summary(
+                            &self.settings,
+                            &self.hardware,
+                        ));
                     }
                     if !self.community_status.is_empty() {
                         ui.label(
@@ -2970,9 +3083,9 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("Filter");
                     ui.add_sized(
-                        [190.0, 24.0],
+                        [170.0, 24.0],
                         egui::TextEdit::singleline(&mut self.community_filter)
-                            .hint_text("name or game"),
+                            .hint_text("name, area or note"),
                     );
                     ui.label("Game");
                     let current = if self.community_game.is_empty() {
@@ -2999,6 +3112,40 @@ impl App {
                                 }
                             }
                         });
+                    let mut areas: Vec<String> = self
+                        .community
+                        .iter()
+                        .map(|entry| entry.area.clone())
+                        .filter(|area| !area.is_empty())
+                        .collect();
+                    areas.sort();
+                    areas.dedup();
+                    ui.label("Area");
+                    let current = if self.community_area_filter.is_empty() {
+                        "All".to_string()
+                    } else {
+                        self.community_area_filter.clone()
+                    };
+                    egui::ComboBox::from_id_salt("community area")
+                        .selected_text(current)
+                        .width(140.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(self.community_area_filter.is_empty(), "All")
+                                .clicked()
+                            {
+                                self.community_area_filter.clear();
+                            }
+                            for area in &areas {
+                                if ui
+                                    .selectable_label(self.community_area_filter == *area, area)
+                                    .clicked()
+                                {
+                                    self.community_area_filter = area.clone();
+                                }
+                            }
+                        });
+                    ui.checkbox(&mut self.community_notes_only, "With notes");
                 });
                 ui.add_space(4.0);
                 let needle = self.community_filter.to_lowercase();
@@ -3008,10 +3155,16 @@ impl App {
                     .enumerate()
                     .filter(|(_, e)| {
                         (self.community_game.is_empty() || e.game == self.community_game)
+                            && (self.community_area_filter.is_empty()
+                                || e.area == self.community_area_filter)
+                            && (!self.community_notes_only || !e.notes.is_empty())
                             && (needle.is_empty()
                                 || e.name.to_lowercase().contains(&needle)
                                 || e.game.to_lowercase().contains(&needle)
-                                || e.profile.to_lowercase().contains(&needle))
+                                || e.profile.to_lowercase().contains(&needle)
+                                || e.area.to_lowercase().contains(&needle)
+                                || e.notes.to_lowercase().contains(&needle)
+                                || e.settings.to_lowercase().contains(&needle))
                     })
                     .map(|(index, _)| index)
                     .collect();
@@ -3043,7 +3196,7 @@ impl App {
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.add_sized(
-                                        [120.0, 20.0],
+                                        [110.0, 20.0],
                                         egui::Label::new(
                                             egui::RichText::new(&entry.name).strong(),
                                         ),
@@ -3054,7 +3207,7 @@ impl App {
                                             .color(egui::Color32::GRAY),
                                     );
                                     ui.add_sized(
-                                        [72.0, 20.0],
+                                        [66.0, 20.0],
                                         egui::Label::new(
                                             egui::RichText::new(format!("{:.1} fps", entry.fps))
                                                 .strong()
@@ -3063,11 +3216,7 @@ impl App {
                                     );
                                     ui.add(
                                         egui::Label::new(
-                                            egui::RichText::new(format!(
-                                                "{} · {}",
-                                                entry.game, entry.profile
-                                            ))
-                                            .small(),
+                                            egui::RichText::new(&entry.game).small(),
                                         ),
                                     );
                                     ui.with_layout(
@@ -3090,6 +3239,38 @@ impl App {
                                             }
                                         },
                                     );
+                                });
+                                ui.horizontal(|ui| {
+                                    ui.add_sized(
+                                        [110.0, 16.0],
+                                        egui::Label::new(
+                                            egui::RichText::new(&entry.profile)
+                                                .small()
+                                                .color(egui::Color32::GRAY),
+                                        ),
+                                    );
+                                    if !entry.area.is_empty() {
+                                        ui.label(
+                                            egui::RichText::new(&entry.area)
+                                                .small()
+                                                .color(egui::Color32::from_rgb(178, 183, 194)),
+                                        );
+                                    }
+                                    if !entry.notes.is_empty() {
+                                        let notes: String = if entry.notes.chars().count() > 90 {
+                                            format!(
+                                                "{}…",
+                                                entry.notes.chars().take(90).collect::<String>()
+                                            )
+                                        } else {
+                                            entry.notes.clone()
+                                        };
+                                        ui.label(
+                                            egui::RichText::new(notes)
+                                                .small()
+                                                .color(egui::Color32::from_rgb(232, 179, 74)),
+                                        );
+                                    }
                                 });
                             });
                     }
@@ -3128,6 +3309,31 @@ impl App {
                                 .color(egui::Color32::GRAY),
                             );
                         });
+                        if !entry.area.is_empty() {
+                            ui.label(format!("Where: {}", entry.area));
+                        }
+                        if !entry.notes.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!("Notes: {}", entry.notes))
+                                    .color(egui::Color32::from_rgb(232, 179, 74)),
+                            );
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("Hardware: {}", entry.hardware))
+                                    .small()
+                                    .color(egui::Color32::GRAY),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("Settings: {}", entry.settings))
+                                    .small()
+                                    .color(egui::Color32::GRAY),
+                            )
+                            .wrap(),
+                        );
                         ui.separator();
                         egui::ScrollArea::vertical().show(ui, |ui| {
                             ui.monospace(&entry.log);
@@ -4720,6 +4926,23 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
+}
+
+fn read_tail(path: &Path, max: usize) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(max as u64);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if start > 0 {
+        // The first line is cut: drop it.
+        Some(text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or(text))
+    } else {
+        Some(text)
+    }
 }
 
 fn tail(text: &str, lines: usize) -> String {
