@@ -88,6 +88,12 @@ profiles until someone measures it.
 `--detect` prints the profile, every variable it set, the confidence level and
 the note explaining *why* those numbers.
 
+On Linux the vendor is that of the first display card `lspci` lists. The video
+memory is the largest among cards of that vendor: from `nvidia-smi` for
+NVIDIA, whose driver has no `mem_info_vram_total`, and from that file under
+`/sys/class/drm` for the others. `./tools/check-detect.sh` checks this
+against stand-ins for both commands.
+
 ## Adding or changing a profile
 
 A profile is only allowed in if it has evidence:

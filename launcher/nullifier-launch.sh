@@ -62,8 +62,28 @@ if [ "$OS" = linux ]; then
     *[Ii][Nn][Tt][Ee][Ll]*) VENDOR=intel ;;
     *) VENDOR=unknown ;;
   esac
-  f=$(ls /sys/class/drm/card*/device/mem_info_vram_total 2>/dev/null | head -1)
-  if [ -n "$f" ]; then VRAM=$(( $(cat "$f") / 1048576 )); else VRAM=0; fi
+  # Video memory of a card of that vendor, the largest if there are several.
+  # The NVIDIA driver has no mem_info_vram_total, so it is asked through
+  # nvidia-smi; the first such file belonged to another card (512 MB of an
+  # integrated one beside an RTX 5080), and with no such file the answer was
+  # 0, so no profile with vram_min_mb matched an NVIDIA card.
+  VRAM=0
+  if [ "$VENDOR" = nvidia ]; then
+    if command -v nvidia-smi >/dev/null 2>&1; then
+      for v in $(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null); do
+        case "$v" in ''|*[!0-9]*) continue ;; esac
+        if [ "$v" -gt "$VRAM" ]; then VRAM=$v; fi
+      done
+    fi
+  else
+    case "$VENDOR" in amd) id=0x1002 ;; intel) id=0x8086 ;; *) id= ;; esac
+    for f in /sys/class/drm/card*/device/mem_info_vram_total; do
+      [ -r "$f" ] || continue
+      if [ -n "$id" ] && [ "$(cat "${f%/*}/vendor" 2>/dev/null)" != "$id" ]; then continue; fi
+      v=$(( $(cat "$f") / 1048576 ))
+      if [ "$v" -gt "$VRAM" ]; then VRAM=$v; fi
+    done
+  fi
 else
   VENDOR=apple; VRAM=0
 fi
