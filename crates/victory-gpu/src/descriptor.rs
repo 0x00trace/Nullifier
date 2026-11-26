@@ -1037,7 +1037,7 @@ mod tests {
         let of_resource =
             |n: u32| View::Shader(0x7e57_0000_0000 + (n as usize % 50) * 16, Some([n % 3; 10]));
         let name = |n: u32| {
-            if n % 2 == 0 {
+            if n.is_multiple_of(2) {
                 placed(n)
             } else {
                 of_resource(n)
