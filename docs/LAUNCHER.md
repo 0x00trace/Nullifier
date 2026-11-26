@@ -31,25 +31,29 @@ cargo build --manifest-path tools/launcher/Cargo.toml
 * **Play** — one big Launch, the game folder with an in-app folder picker, the
   profile picked from vendor + VRAM (with the full list behind the combo), the
   three plain-language presets (Recommended, Low memory, Safe), the last run's
-  numbers, and runtime paths. The numbers behind a preset are in Graphics. It runs the same
+  numbers, and runtime paths. The numbers behind a preset are in Rendering. It runs the same
   `nullifier-launch.sh`/`.ps1` as the command line, so there is one source of
   truth.
-* **Graphics** — display first (V-Sync, a frame rate limit), then memory and
-  copies, the draw path, and timing — in plain words. Every switch has a `?`
-  that explains it and a safe value.
+* **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
+  frame rate limit), then memory and copies, the draw path, and timing — in
+  plain words. Every switch has a `?` that explains it and a safe value.
 * **Warnings** — values that cannot work on this machine are called out in a
   yellow panel: a texture budget above the card's VRAM, world memory over half
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
-* **Game** — the title's own settings, parsed from its `settings.xml` (88
+* **Graphics** — the title's own graphics settings, parsed from its
+  `settings.xml` (88
   values: HDR, gamma, anisotropic filtering, FSR quality/sharpen, LOD scales,
   shadows, motion blur, water reflections, resolution, frame cap). **Experimental:**
   only `gamma` is verified; fullscreen resolution, the frame-rate limit, motion
   blur and ray-traced shadows were tested and are ignored by this build. Apply
   writes the file with `settings.xml.bak` beside it; the game must be closed.
-  The title writes this file itself on exit, so reload after playing.
+  The title writes this file itself on exit, so reload after playing. A modal
+  on first open and a banner on the page repeat the warning.
 * **Advanced** — the exact set as editable `KEY=VALUE` rows, free-form
   environment, profile notes, and the disabled list of what needs engine work
   (FSR, ray tracing, render scale, LOD distance).
+* **Log** — the footer shows the last lines and `Show log`/`Hide log` folds it
+  away; while open it also has `Clear`, `Open log` and the detail level.
 * **Tools** — scan the hardware, choose how much the log says, take still
   screenshots at chosen frame numbers, and a 20-second benchmark run by the
   launcher itself (the same code on Windows and Linux): it loads the game,

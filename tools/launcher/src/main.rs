@@ -163,8 +163,9 @@ fn main() -> eframe::Result<()> {
             settings.root = root.clone();
             let mut app = App::new(settings);
             app.tab = match start_tab.as_deref() {
-                Some("game") => Tab::Game,
+                Some("game") => Tab::Graphics,
                 Some("graphics") => Tab::Graphics,
+                Some("rendering") => Tab::Rendering,
                 Some("advanced") => Tab::Advanced,
                 Some("debug") => Tab::Debug,
                 _ => Tab::Play,
@@ -792,6 +793,7 @@ struct App {
     game: Option<GameSettings>,
     game_warned: bool,
     game_warning_open: bool,
+    log_open: bool,
     bench_start: Option<std::time::Instant>,
     bench_world: Option<std::time::Instant>,
     bench_measure: Option<std::time::Instant>,
@@ -834,8 +836,8 @@ fn current_preset(sets: &BTreeMap<String, String>, shipped: &BTreeMap<String, St
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum Tab {
     Play,
-    Game,
     Graphics,
+    Rendering,
     Advanced,
     Debug,
 }
@@ -960,6 +962,7 @@ impl App {
             game: load_game_settings(),
             game_warned: false,
             game_warning_open: false,
+            log_open: false,
             bench_start: None,
             bench_world: None,
             bench_measure: None,
@@ -1372,15 +1375,15 @@ impl App {
                     ui.label(egui::RichText::new("Game data").small());
                     ui.label(egui::RichText::new(prefix.display().to_string()).small().color(egui::Color32::GRAY));
                 });
-                if ui.small_button("Open game data").clicked() {
+                if chip_button(ui, "Open game data").clicked() {
                     open_path(&prefix);
                 }
             }
             ui.horizontal(|ui| {
-                if ui.small_button("Open cache").clicked() {
+                if chip_button(ui, "Open cache").clicked() {
                     open_path(&cache);
                 }
-                if ui.small_button("Open log").clicked() {
+                if chip_button(ui, "Open log").clicked() {
                     if let Some(path) = &self.log_path {
                         open_path(path);
                     }
@@ -1406,13 +1409,13 @@ impl App {
                         .link(egui::RichText::new("Customise…").small())
                         .clicked()
                     {
-                        self.tab = Tab::Graphics;
+                        self.tab = Tab::Rendering;
                     }
                 });
             });
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new("Choose a preset; the numbers are in Graphics.")
+                    egui::RichText::new("Choose a preset; the numbers are in Rendering.")
                         .small()
                         .color(egui::Color32::GRAY),
                 ),
@@ -1498,7 +1501,7 @@ impl App {
                 } else {
                     ui.label(egui::RichText::new(format!("{} crashes", run.removals)).small().color(egui::Color32::from_rgb(232, 106, 106)));
                 }
-                if ui.small_button("Open log").clicked() {
+                if chip_button(ui, "Open log").clicked() {
                     if let Some(path) = &self.log_path {
                         open_path(path);
                     }
@@ -1508,7 +1511,7 @@ impl App {
     }
 
     fn game_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Game settings");
+        ui.heading("Graphics");
         egui::Frame::group(ui.style())
             .fill(egui::Color32::from_rgb(45, 38, 24))
             .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
@@ -1532,7 +1535,7 @@ impl App {
             });
         ui.add(
             egui::Label::new(
-                egui::RichText::new("The title's own options, from settings.xml. Close the game before changing them; it writes the file when it exits.")
+                egui::RichText::new("The game's own graphics settings, from its settings.xml. Close the game before changing them.")
                     .small()
                     .color(egui::Color32::GRAY),
             )
@@ -1612,11 +1615,11 @@ impl App {
         }
     }
 
-    fn graphics(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Graphics");
+    fn rendering(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Rendering");
         ui.add(
             egui::Label::new(
-                egui::RichText::new("These control speed, memory and stability. A ? explains any of them.")
+                egui::RichText::new("Nullifier's own rendering settings: speed, memory and stability. A ? explains any of them.")
                     .small()
                     .color(egui::Color32::GRAY),
             ),
@@ -1706,13 +1709,13 @@ impl App {
                             egui::Label::new(egui::RichText::new(&key).monospace()),
                         );
                         if describe(&key).is_some() {
-                            if ui.small_button("?").on_hover_text("What this does").clicked() {
+                            if chip_button(ui, "?").on_hover_text("What this does").clicked() {
                                 info = Some(key.clone());
                             }
                         } else {
                             ui.add_enabled(false, egui::Button::new("?").small());
                         }
-                        if ui.small_button("×").clicked() {
+                        if chip_button(ui, "×").clicked() {
                             remove = Some(key.clone());
                         }
                         let mut v = value.clone();
@@ -1950,8 +1953,8 @@ impl eframe::App for App {
                 ui.add_space(16.0);
                 for (tab, label) in [
                     (Tab::Play, "Play"),
-                    (Tab::Game, "Game"),
                     (Tab::Graphics, "Graphics"),
+                    (Tab::Rendering, "Rendering"),
                     (Tab::Advanced, "Advanced"),
                     (Tab::Debug, "Tools"),
                 ] {
@@ -1971,8 +1974,8 @@ impl eframe::App for App {
             });
 
         egui::TopBottomPanel::bottom("log")
-            .resizable(true)
-            .default_height(150.0)
+            .resizable(false)
+            .exact_height(if self.log_open { 150.0 } else { 30.0 })
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let live = self.running() || self.bench_running();
@@ -1982,58 +1985,64 @@ impl eframe::App for App {
                             .color(if live { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::GRAY }),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let style = ui.style_mut();
-                        style.spacing.button_padding = egui::vec2(8.0, 3.0);
-                        style.spacing.interact_size.y = 22.0;
-                        style.spacing.item_spacing.x = 6.0;
-                        style.visuals.widgets.noninteractive.corner_radius = 4.into();
-                        style.visuals.widgets.inactive.corner_radius = 4.into();
-                        style.visuals.widgets.hovered.corner_radius = 4.into();
-                        style.visuals.widgets.active.corner_radius = 4.into();
-                        if ui.small_button("Clear").clicked() {
-                            self.log_shown.clear();
+                        ui.style_mut().spacing.button_padding = egui::vec2(8.0, 3.0);
+                        ui.style_mut().spacing.interact_size.y = 22.0;
+                        ui.style_mut().spacing.item_spacing.x = 6.0;
+                        ui.style_mut().visuals.widgets.noninteractive.corner_radius = 4.into();
+                        ui.style_mut().visuals.widgets.inactive.corner_radius = 4.into();
+                        ui.style_mut().visuals.widgets.hovered.corner_radius = 4.into();
+                        ui.style_mut().visuals.widgets.active.corner_radius = 4.into();
+                        if chip_button(ui, if self.log_open { "Hide log" } else { "Show log" }).clicked() {
+                            self.log_open = !self.log_open;
                         }
-                        if ui.small_button("Open log").clicked() {
-                            if let Some(path) = &self.log_path {
-                                open_path(path);
+                        if self.log_open {
+                            if chip_button(ui, "Clear").clicked() {
+                                self.log_shown.clear();
                             }
-                        }
-                        let shown = match self.settings.log_level.as_str() {
-                            "warn" => "Quiet",
-                            "debug" => "Detailed",
-                            "trace" => "Everything",
-                            _ => "Normal",
-                        };
-                        egui::ComboBox::from_id_salt("log detail footer")
-                            .selected_text(egui::RichText::new(shown).small())
-                            .width(92.0)
-                            .show_ui(ui, |ui| {
-                                for (value, label) in [
-                                    ("warn", "Quiet"),
-                                    ("info", "Normal"),
-                                    ("debug", "Detailed"),
-                                    ("trace", "Everything"),
-                                ] {
-                                    ui.selectable_value(&mut self.settings.log_level, value.to_string(), label);
+                            if chip_button(ui, "Open log").clicked() {
+                                if let Some(path) = &self.log_path {
+                                    open_path(path);
                                 }
-                            });
-                        ui.label(egui::RichText::new("Log detail").small().color(egui::Color32::GRAY));
+                            }
+                            let shown = match self.settings.log_level.as_str() {
+                                "warn" => "Quiet",
+                                "debug" => "Detailed",
+                                "trace" => "Everything",
+                                _ => "Normal",
+                            };
+                            egui::ComboBox::from_id_salt("log detail footer")
+                                .selected_text(egui::RichText::new(shown).small())
+                                .width(92.0)
+                                .show_ui(ui, |ui| {
+                                    for (value, label) in [
+                                        ("warn", "Quiet"),
+                                        ("info", "Normal"),
+                                        ("debug", "Detailed"),
+                                        ("trace", "Everything"),
+                                    ] {
+                                        ui.selectable_value(&mut self.settings.log_level, value.to_string(), label);
+                                    }
+                                });
+                            ui.label(egui::RichText::new("Log detail").small().color(egui::Color32::GRAY));
+                        }
                     });
                 });
-                egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
-                    ui.monospace(&self.log_shown);
-                });
+                if self.log_open {
+                    egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+                        ui.monospace(&self.log_shown);
+                    });
+                }
             });
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Play => self.play(ui),
-            Tab::Game => self.game_page(ui),
-            Tab::Graphics => self.graphics(ui),
+            Tab::Graphics => self.game_page(ui),
+            Tab::Rendering => self.rendering(ui),
             Tab::Advanced => self.advanced(ui),
             Tab::Debug => self.debug(ui),
         });
 
-        if self.tab == Tab::Game && !self.game_warned {
+        if self.tab == Tab::Graphics && !self.game_warned {
             self.game_warned = true;
             self.game_warning_open = true;
         }
@@ -2043,26 +2052,55 @@ impl eframe::App for App {
                 .open(&mut open)
                 .collapsible(false)
                 .resizable(false)
-                .default_width(430.0)
+                .fixed_size([470.0, 0.0])
                 .show(ctx, |ui| {
+                    ui.set_max_width(440.0);
+                    ui.label("Most of the title's own settings do not take effect in this build yet.");
+                    ui.add_space(8.0);
                     ui.label(
-                        "Most of the title's own settings do not take effect in this build yet.",
+                        egui::RichText::new("Verified")
+                            .small()
+                            .strong()
+                            .color(egui::Color32::from_rgb(87, 199, 133)),
                     );
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(
-                            "Verified: gamma (the picture goes black at its lowest value).\nTested and ignored: fullscreen resolution, frame-rate limit, motion blur, ray-traced shadows.",
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "Gamma. Set to its lowest value, the picture goes fully black.",
+                            )
+                            .small()
+                            .color(egui::Color32::GRAY),
                         )
-                        .small()
-                        .color(egui::Color32::GRAY),
+                        .wrap(),
                     );
                     ui.add_space(6.0);
                     ui.label(
-                        egui::RichText::new(
-                            "Changing values is safe: Apply writes settings.xml and keeps settings.xml.bak. Close the game first; it rewrites the file on exit.",
-                        )
-                        .small(),
+                        egui::RichText::new("Tested and ignored")
+                            .small()
+                            .strong()
+                            .color(egui::Color32::from_rgb(232, 179, 74)),
                     );
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "Fullscreen resolution, frame-rate limit, motion blur, ray-traced shadows.",
+                            )
+                            .small()
+                            .color(egui::Color32::GRAY),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(8.0);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "Changing values is safe: Apply writes settings.xml and keeps settings.xml.bak. Close the game first; it rewrites the file on exit.",
+                            )
+                            .small(),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(4.0);
                     if ui.button("Understood").clicked() {
                         self.game_warning_open = false;
                     }
@@ -2353,6 +2391,14 @@ fn stat(ui: &mut egui::Ui, label: &str, value: Option<String>) {
     });
 }
 
+fn chip_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.add(
+        egui::Button::new(egui::RichText::new(text).small())
+            .corner_radius(3)
+            .min_size(egui::vec2(0.0, 22.0)),
+    )
+}
+
 fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).strong().color(egui::Color32::WHITE))
         .fill(ACCENT)
@@ -2404,7 +2450,7 @@ fn number_info(
     let mut asked = None;
     ui.horizontal(|ui| {
         ui.label(desc.as_ref().map(|d| d.name).unwrap_or(key));
-        if desc.is_some() && ui.small_button("?").clicked() {
+        if desc.is_some() && chip_button(ui, "?").clicked() {
             asked = Some(key.to_string());
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2448,7 +2494,7 @@ fn switch_info(
                 sets.remove(key);
             }
         }
-        if desc.is_some() && ui.small_button("?").clicked() {
+        if desc.is_some() && chip_button(ui, "?").clicked() {
             asked = Some(key.to_string());
         }
     });
