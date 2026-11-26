@@ -360,6 +360,51 @@ struct CommunityEntry {
     remote: bool,
 }
 
+fn small_label(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .small()
+        .color(egui::Color32::from_rgb(140, 146, 158))
+}
+
+fn filter_block(ui: &mut egui::Ui, width: f32, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 44.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.label(small_label(label));
+            add(ui);
+        },
+    );
+}
+
+fn field_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    hint: &str,
+    width: f32,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(64.0, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(small_label(label));
+            },
+        );
+        changed = ui
+            .add_sized(
+                [width, 28.0],
+                egui::TextEdit::singleline(value)
+                    .hint_text(hint)
+                    .vertical_align(egui::Align::Center),
+            )
+            .changed();
+    });
+    changed
+}
+
 fn settings_summary(settings: &Settings, hardware: &Hardware) -> String {
     let mut parts: Vec<String> = settings
         .sets
@@ -2857,6 +2902,18 @@ impl App {
             self.community_status = "Choose a name first (a nickname is fine).".into();
             return None;
         }
+        let world_frames = strip_ansi(&raw)
+            .lines()
+            .filter_map(|line| after(line, "host: "))
+            .filter_map(|rest| before(rest, " fps,"))
+            .filter_map(|value| value.trim().parse::<f32>().ok())
+            .filter(|fps| *fps < 10.0)
+            .count();
+        if world_frames == 0 {
+            self.community_status =
+                "The last log has no world frames (menus run at 30). Play or measure in the world first.".into();
+            return None;
+        }
         let log = sanitize_log(&raw, &self.settings);
         let (fps, frame, gpu, draws) = world_stats(&raw);
         let fps = fps.unwrap_or(0.0);
@@ -2937,89 +2994,51 @@ impl App {
         ui.add(
             egui::Label::new(
                 egui::RichText::new(
-                    "Runs you choose to share, with a sanitized log. Everything stays on this PC until you paste the share block somewhere.",
+                    "Share how it runs. Nothing leaves this PC unless you paste the copied block.",
                 )
                 .small()
                 .color(egui::Color32::GRAY),
             )
             .wrap(),
         );
+        // Fields need to read as fields on this dark page.
+        ui.visuals_mut().extreme_bg_color = egui::Color32::from_rgb(30, 33, 40);
+        ui.visuals_mut().widgets.inactive.bg_stroke =
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 66, 78));
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("Your name");
-                    if ui
-                        .add_sized(
-                            [200.0, 26.0],
-                            egui::TextEdit::singleline(&mut self.settings.community_name)
-                                .hint_text("a nickname"),
-                        )
-                        .changed()
-                    {
-                        self.settings.save();
-                    }
-                });
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new("Shown next to your runs. Don't use your real name.")
-                            .small()
-                            .color(egui::Color32::GRAY),
-                    )
-                    .wrap(),
-                );
-            });
-
-            ui.add_space(4.0);
-            card(ui, |ui| {
-                ui.strong("Share the last run");
+                ui.strong("Your entry");
                 let mut changed = false;
-                ui.horizontal(|ui| {
-                    ui.label("Where");
-                    changed |= ui
-                        .add_sized(
-                            [300.0, 24.0],
-                            egui::TextEdit::singleline(&mut self.settings.community_area)
-                                .hint_text("prologue cell, boat mission, city street…"),
-                        )
-                        .changed();
-                    ui.label("Notes");
-                    changed |= ui
-                        .add_sized(
-                            [300.0, 24.0],
-                            egui::TextEdit::singleline(&mut self.settings.community_notes)
-                                .hint_text("pop-in, flicker, HUD, crashes…"),
-                        )
-                        .changed();
-                });
+                changed |= field_row(
+                    ui,
+                    "Name",
+                    &mut self.settings.community_name,
+                    "a nickname",
+                    260.0,
+                );
+                changed |= field_row(
+                    ui,
+                    "Where",
+                    &mut self.settings.community_area,
+                    "prologue cell, boat mission, city street…",
+                    360.0,
+                );
+                changed |= field_row(
+                    ui,
+                    "Notes",
+                    &mut self.settings.community_notes,
+                    "pop-in, flicker, HUD, crashes…",
+                    360.0,
+                );
                 if changed {
                     self.settings.save();
                 }
-                let run = self.last_run();
+                ui.add_space(6.0);
                 let (world_fps, _, _, world_draws) = world_stats(&self.log_shown);
-                if let Some(fps) = world_fps.or(run.fps) {
-                    ui.label(format!(
-                        "{fps:.1} fps · {} draws a frame · {}",
-                        world_draws.or(run.draws).unwrap_or(0),
-                        if run.removals == 0 { "no crashes" } else { "crashes" }
-                    ));
-                } else {
-                    ui.label(
-                        egui::RichText::new("No run yet.")
-                            .small()
-                            .color(egui::Color32::GRAY),
-                    );
-                }
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(
-                            "The log is filtered to frame lines and failures; home paths, the game folder and IPs are replaced before it is stored or copied.",
-                        )
-                        .small()
-                        .color(egui::Color32::GRAY),
-                    )
-                    .wrap(),
-                );
-                ui.add_space(4.0);
+                let run = self.last_run();
+                let fps = world_fps.or(run.fps);
+                let draws = world_draws.or(run.draws).unwrap_or(0);
                 ui.horizontal(|ui| {
                     let can = self.log_path.is_some()
                         && !self.settings.community_name.trim().is_empty()
@@ -3033,88 +3052,113 @@ impl App {
                         }
                     }
                     if chip_button(ui, "Copy settings").clicked() {
-                        ui.ctx().copy_text(settings_summary(
-                            &self.settings,
-                            &self.hardware,
-                        ));
+                        ui.ctx()
+                            .copy_text(settings_summary(&self.settings, &self.hardware));
                     }
-                    if !self.community_status.is_empty() {
+                    if let Some(fps) = fps {
                         ui.label(
-                            egui::RichText::new(&self.community_status)
-                                .small()
-                                .color(egui::Color32::from_rgb(87, 199, 133)),
+                            egui::RichText::new(format!(
+                                "{fps:.1} fps {} · {draws} draws · {}",
+                                if world_fps.is_some() { "in the world" } else { "(last log, maybe a menu)" },
+                                if run.removals == 0 {
+                                    "no crashes"
+                                } else {
+                                    "crashes"
+                                }
+                            ))
+                            .small()
+                            .color(egui::Color32::GRAY),
                         );
                     }
                 });
+                if !self.community_status.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.community_status)
+                                .small()
+                                .color(egui::Color32::from_rgb(160, 166, 178)),
+                        )
+                        .wrap(),
+                    );
+                }
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "The log is filtered; home paths, the game folder, emails and IP addresses are replaced.",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 126, 138)),
+                    )
+                    .wrap(),
+                );
             });
 
             ui.add_space(4.0);
             card(ui, |ui| {
+                let local = self.community.iter().filter(|entry| !entry.remote).count();
+                let remote = self.community.len() - local;
                 ui.horizontal(|ui| {
-                    ui.strong(format!("Shared runs ({})", self.community.len()));
+                    ui.strong("Shared runs");
+                    ui.label(
+                        egui::RichText::new(format!("{local} local · {remote} GitHub"))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        egui::ComboBox::from_id_salt("community sort")
-                            .selected_text(if self.community_sort == 1 {
-                                "Fastest"
-                            } else {
-                                "Newest"
-                            })
-                            .width(95.0)
-                            .show_ui(ui, |ui| {
-                                if ui.selectable_label(self.community_sort == 0, "Newest").clicked() {
-                                    self.community_sort = 0;
-                                }
-                                if ui.selectable_label(self.community_sort == 1, "Fastest").clicked() {
-                                    self.community_sort = 1;
-                                }
-                            });
                         if self.community_fetching {
                             ui.add_enabled(false, egui::Button::new("Checking board…").small());
                         } else if chip_button(ui, "Refresh board").clicked() {
                             self.start_community_fetch();
                         }
                         if chip_button(ui, "Open folder").clicked() {
-                            if let Some(dir) = community_path().and_then(|p| p.parent().map(Path::to_path_buf)) {
+                            if let Some(dir) =
+                                community_path().and_then(|p| p.parent().map(Path::to_path_buf))
+                            {
                                 open_path(&dir);
                             }
                         }
                     });
                 });
-                let mut games: Vec<String> = self.community.iter().map(|e| e.game.clone()).collect();
-                games.sort();
-                games.dedup();
+                ui.add_space(2.0);
                 ui.horizontal_wrapped(|ui| {
-                    ui.label("Filter");
-                    ui.add_sized(
-                        [170.0, 24.0],
-                        egui::TextEdit::singleline(&mut self.community_filter)
-                            .hint_text("name, area or note"),
-                    );
-                    ui.label("Game");
-                    let current = if self.community_game.is_empty() {
-                        "All".to_string()
-                    } else {
-                        self.community_game.clone()
-                    };
-                    egui::ComboBox::from_id_salt("community game")
-                        .selected_text(current)
-                        .width(180.0)
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(self.community_game.is_empty(), "All")
-                                .clicked()
-                            {
-                                self.community_game.clear();
-                            }
-                            for game in &games {
+                    filter_block(ui, 225.0, "Search", |ui| {
+                        ui.add_sized(
+                            [225.0, 26.0],
+                            egui::TextEdit::singleline(&mut self.community_filter)
+                                .hint_text("name, area, note, settings")
+                                .vertical_align(egui::Align::Center),
+                        );
+                    });
+                    let mut games: Vec<String> =
+                        self.community.iter().map(|e| e.game.clone()).collect();
+                    games.sort();
+                    games.dedup();
+                    filter_block(ui, 160.0, "Game", |ui| {
+                        let current = if self.community_game.is_empty() {
+                            "All".to_string()
+                        } else {
+                            self.community_game.clone()
+                        };
+                        egui::ComboBox::from_id_salt("community game")
+                            .selected_text(current)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
                                 if ui
-                                    .selectable_label(self.community_game == *game, game)
+                                    .selectable_label(self.community_game.is_empty(), "All")
                                     .clicked()
                                 {
-                                    self.community_game = game.clone();
+                                    self.community_game.clear();
                                 }
-                            }
-                        });
+                                for game in &games {
+                                    if ui
+                                        .selectable_label(self.community_game == *game, game)
+                                        .clicked()
+                                    {
+                                        self.community_game = game.clone();
+                                    }
+                                }
+                            });
+                    });
                     let mut areas: Vec<String> = self
                         .community
                         .iter()
@@ -3123,67 +3167,94 @@ impl App {
                         .collect();
                     areas.sort();
                     areas.dedup();
-                    ui.label("Area");
-                    let current = if self.community_area_filter.is_empty() {
-                        "All".to_string()
-                    } else {
-                        self.community_area_filter.clone()
-                    };
-                    egui::ComboBox::from_id_salt("community area")
-                        .selected_text(current)
-                        .width(140.0)
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(self.community_area_filter.is_empty(), "All")
-                                .clicked()
-                            {
-                                self.community_area_filter.clear();
-                            }
-                            for area in &areas {
+                    filter_block(ui, 140.0, "Area", |ui| {
+                        let current = if self.community_area_filter.is_empty() {
+                            "All".to_string()
+                        } else {
+                            self.community_area_filter.clone()
+                        };
+                        egui::ComboBox::from_id_salt("community area")
+                            .selected_text(current)
+                            .width(130.0)
+                            .show_ui(ui, |ui| {
                                 if ui
-                                    .selectable_label(self.community_area_filter == *area, area)
+                                    .selectable_label(self.community_area_filter.is_empty(), "All")
                                     .clicked()
                                 {
-                                    self.community_area_filter = area.clone();
+                                    self.community_area_filter.clear();
                                 }
-                            }
-                        });
+                                for area in &areas {
+                                    if ui
+                                        .selectable_label(self.community_area_filter == *area, area)
+                                        .clicked()
+                                    {
+                                        self.community_area_filter = area.clone();
+                                    }
+                                }
+                            });
+                    });
                     let mut versions: Vec<String> =
                         self.community.iter().map(|entry| entry.version.clone()).collect();
                     versions.sort();
                     versions.dedup();
-                    ui.label("Version");
-                    let current = if self.community_version_filter.is_empty() {
-                        "All".to_string()
-                    } else {
-                        format!("v{}", self.community_version_filter)
-                    };
-                    egui::ComboBox::from_id_salt("community version")
-                        .selected_text(current)
-                        .width(90.0)
-                        .show_ui(ui, |ui| {
-                            if ui
-                                .selectable_label(
-                                    self.community_version_filter.is_empty(),
-                                    "All",
-                                )
-                                .clicked()
-                            {
-                                self.community_version_filter.clear();
-                            }
-                            for version in &versions {
+                    filter_block(ui, 105.0, "Version", |ui| {
+                        let current = if self.community_version_filter.is_empty() {
+                            "All".to_string()
+                        } else {
+                            format!("v{}", self.community_version_filter)
+                        };
+                        egui::ComboBox::from_id_salt("community version")
+                            .selected_text(current)
+                            .width(95.0)
+                            .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(
-                                        self.community_version_filter == *version,
-                                        format!("v{version}"),
+                                        self.community_version_filter.is_empty(),
+                                        "All",
                                     )
                                     .clicked()
                                 {
-                                    self.community_version_filter = version.clone();
+                                    self.community_version_filter.clear();
                                 }
-                            }
-                        });
-                    ui.checkbox(&mut self.community_notes_only, "With notes");
+                                for version in &versions {
+                                    if ui
+                                        .selectable_label(
+                                            self.community_version_filter == *version,
+                                            format!("v{version}"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.community_version_filter = version.clone();
+                                    }
+                                }
+                            });
+                    });
+                    filter_block(ui, 105.0, "Options", |ui| {
+                        ui.checkbox(&mut self.community_notes_only, "Notes only");
+                    });
+                    filter_block(ui, 100.0, "Sort", |ui| {
+                        egui::ComboBox::from_id_salt("community sort")
+                            .selected_text(if self.community_sort == 1 {
+                                "Fastest"
+                            } else {
+                                "Newest"
+                            })
+                            .width(95.0)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(self.community_sort == 0, "Newest")
+                                    .clicked()
+                                {
+                                    self.community_sort = 0;
+                                }
+                                if ui
+                                    .selectable_label(self.community_sort == 1, "Fastest")
+                                    .clicked()
+                                {
+                                    self.community_sort = 1;
+                                }
+                            });
+                    });
                 });
                 ui.add_space(4.0);
                 let needle = self.community_filter.to_lowercase();
@@ -3228,93 +3299,120 @@ impl App {
                         .color(egui::Color32::GRAY),
                     );
                 }
-                egui::ScrollArea::vertical().max_height(330.0).show(ui, |ui| {
-                    for index in shown {
-                        let entry = &self.community[index];
-                        egui::Frame::group(ui.style())
-                            .inner_margin(egui::Margin::symmetric(10, 8))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.add_sized(
-                                        [110.0, 20.0],
-                                        egui::Label::new(
-                                            egui::RichText::new(&entry.name).strong(),
-                                        ),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(format!("v{}", entry.version))
-                                            .small()
-                                            .color(egui::Color32::GRAY),
-                                    );
-                                    ui.add_sized(
-                                        [66.0, 20.0],
-                                        egui::Label::new(
-                                            egui::RichText::new(format!("{:.1} fps", entry.fps))
-                                                .strong()
-                                                .color(egui::Color32::from_rgb(87, 199, 133)),
-                                        ),
-                                    );
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(&entry.game).small(),
-                                        ),
-                                    );
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            if chip_button(ui, "Log").clicked() {
-                                                open = Some(index);
-                                            }
-                                            ui.label(
-                                                egui::RichText::new(date_of(entry.when))
+                {
+                    {
+                        for index in shown {
+                            let entry = &self.community[index];
+                            egui::Frame::group(ui.style())
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.add_sized(
+                                            [110.0, 20.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(&entry.name).strong(),
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.add_sized(
+                                            [48.0, 20.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(format!("v{}", entry.version))
                                                     .small()
                                                     .color(egui::Color32::GRAY),
-                                            );
-                                            if entry.remote {
-                                                ui.label(
-                                                    egui::RichText::new("GitHub")
-                                                        .small()
-                                                        .color(egui::Color32::from_rgb(120, 165, 240)),
-                                                );
-                                            }
-                                        },
-                                    );
-                                });
-                                ui.horizontal(|ui| {
-                                    ui.add_sized(
-                                        [110.0, 16.0],
-                                        egui::Label::new(
-                                            egui::RichText::new(&entry.profile)
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.add_sized(
+                                            [62.0, 20.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(format!(
+                                                    "{:.1} fps",
+                                                    entry.fps
+                                                ))
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(87, 199, 133)),
+                                            ),
+                                        );
+                                        let where_at = if entry.area.is_empty() {
+                                            entry.game.clone()
+                                        } else {
+                                            entry.area.clone()
+                                        };
+                                        ui.add_sized(
+                                            [ui.available_width() - 78.0, 20.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(where_at).small(),
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if chip_button(ui, "Log").clicked() {
+                                                    open = Some(index);
+                                                }
+                                                if entry.remote {
+                                                    ui.label(
+                                                        egui::RichText::new("GitHub")
+                                                            .small()
+                                                            .color(egui::Color32::from_rgb(
+                                                                120, 165, 240,
+                                                            )),
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.add_sized(
+                                            [190.0, 16.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(format!(
+                                                    "{} · {}",
+                                                    entry.profile, entry.game
+                                                ))
                                                 .small()
                                                 .color(egui::Color32::GRAY),
-                                        ),
-                                    );
-                                    if !entry.area.is_empty() {
-                                        ui.label(
-                                            egui::RichText::new(&entry.area)
-                                                .small()
-                                                .color(egui::Color32::from_rgb(178, 183, 194)),
-                                        );
-                                    }
-                                    if !entry.notes.is_empty() {
-                                        let notes: String = if entry.notes.chars().count() > 90 {
-                                            format!(
-                                                "{}…",
-                                                entry.notes.chars().take(90).collect::<String>()
                                             )
-                                        } else {
-                                            entry.notes.clone()
-                                        };
-                                        ui.label(
-                                            egui::RichText::new(notes)
-                                                .small()
-                                                .color(egui::Color32::from_rgb(232, 179, 74)),
+                                            .truncate(),
                                         );
-                                    }
+                                        if !entry.notes.is_empty() {
+                                            let notes: String = if entry.notes.chars().count() > 90 {
+                                                format!(
+                                                    "{}…",
+                                                    entry.notes.chars().take(90).collect::<String>()
+                                                )
+                                            } else {
+                                                entry.notes.clone()
+                                            };
+                                            ui.add_sized(
+                                                [ui.available_width() - 78.0, 16.0],
+                                                egui::Label::new(
+                                                    egui::RichText::new(notes)
+                                                        .small()
+                                                        .color(egui::Color32::from_rgb(
+                                                            232, 179, 74,
+                                                        )),
+                                                )
+                                                .truncate(),
+                                            );
+                                        }
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    egui::RichText::new(date_of(entry.when))
+                                                        .small()
+                                                        .color(egui::Color32::GRAY),
+                                                );
+                                            },
+                                        );
+                                    });
                                 });
-                            });
+                        }
                     }
-                });
+                }
                 self.community_open = open;
             });
         });
@@ -3840,7 +3938,8 @@ impl eframe::App for App {
                         let shared = board.len();
                         self.community.retain(|entry| !entry.remote);
                         self.community.extend(board);
-                        self.community_status = format!("{shared} runs from the published board.");
+                        let _ = shared;
+                        self.community_status.clear();
                     }
                     None => {
                         self.community_status =
