@@ -1,31 +1,26 @@
 # Nullifier
 
-Runs an Xbox Series title natively on your PC — **AMD or NVIDIA, Linux or
-Windows**. Not an emulator: the title's x86-64 code runs in our process and we
-supply the console platform underneath it, including a D3D12 back end that
-recompiles its GPU programs.
+Runs an Xbox Series title natively on AMD/NVIDIA, Linux and Windows. A
+hardware-aware launcher picks measured settings; the title's own code runs in
+our process with its graphics translated to D3D12.
 
-**No game files.** You need your own copy. Not affiliated with the title's
+**No game files.** Bring your own copy. Not affiliated with the game's
 developer or publisher.
 
 ## Status
 
-The world renders correctly and is stable — it is **not yet playable**.
-
-| | |
+| | World fps |
 |---|---|
-| Menus, cutscene, prologue | work: characters, buildings, HUD, audio, input, saves |
-| Frame rate (world) | **6.6–6.7 fps** on RX 9070 XT / Linux with the wineserver from `tools/build-wineserver.sh` and the measured switches (frame ~150 ms; 1.1–1.3 with Proton's own server and those off); 5.25–5.30 fps on RTX 5080; 3–5 fps reported on Windows |
-| Light in shadow | missing — the title's ray-traced light does not run, so shadowed areas are black |
-| Stability | minutes-long runs, no crashes, no device loss |
+| Linux · RX 9070 XT | **6.6–6.7** |
+| Linux · RTX 5080 | **5.2–5.3** |
+| Windows · reported | 3–5 |
 
-The speed came from four things: a 4 GB texture budget
-(`VICTORY_TEXTURE_BUDGET_MB`), one whole-section view under Wine instead of a
-map/unmap per page, mip-sized host copies that halved the card's use
-(9.2 → 6.2 GB), and **Wine's own view-tree fix** in its server, which the
-launcher builds and starts for the prefix (`tools/build-wineserver.sh`). The
-server alone is 1.1 → 3.2 fps here. What is still slow, with evidence, is in
-[`docs/FINDINGS.md`](docs/FINDINGS.md).
+About 150 ms a frame on the 9070 XT, stable, picture correct — measured with
+the view-tree wineserver and the shipped profiles.
+
+Works: menus, cutscene, prologue, world, audio, input, saves.
+Missing: the title's ray-traced light, so shadowed areas are black. Not yet
+playable.
 
 ## Get started
 
@@ -35,49 +30,34 @@ cd Nullifier
 ./tools/setup.sh --game /path/to/game
 ```
 
-`setup.sh` installs a private Rust toolchain if needed, builds, detects your
-hardware and starts the title. To run it later, or to see what it selected:
-
-```bash
-./tools/build-wineserver.sh           # Linux, once: several times the frame rate (docs/LAUNCHER.md)
-./launcher/nullifier-launch.sh --detect
-./launcher/nullifier-launch.sh --game /path/to/game
-./tools/bench_scene.sh "label"        # measure a change, with a picture check
-```
-
+Linux, once: `./tools/build-wineserver.sh` — several times the frame rate.
+Later: `./launcher/nullifier-launch.sh --game DIR`.
 Windows: `cargo build --release -p nullifier`, then
-`.\launcher\nullifier-launch.ps1 -Game "D:\path\to\game"`.
+`.\launcher\nullifier-launch.ps1 -Game DIR`.
 
-A graphical front end reads the same profiles and edits the switches this
-build actually has, with a debug panel for logging, captures and free-form
-environment:
+Graphical launcher:
 
 ```bash
 cargo build --manifest-path tools/launcher/Cargo.toml
 ./tools/launcher/target/debug/nullifier-launcher
 ```
 
-It is a separate workspace, so it adds nothing to the layer's build or CI.
-
-Hardware support is a profile, not a fork: add one object to
-[`launcher/profiles.json`](launcher/profiles.json).
-
 ## Contributing
 
-One idea per PR, with a benchmark row — medians of world frames, never peaks.
-Three runs per configuration, and a captured frame over 50 KB: a number without
-that picture is unverified.
+One idea per PR with a bench row: **median of world frames, three runs, and a
+picture over 50 KB**. The rules are in [`AGENTS.md`](AGENTS.md); what is slow
+and why is in [`docs/FINDINGS.md`](docs/FINDINGS.md). Work from another fork
+goes in one commit at a time, with attribution.
 
 | Read | For |
 |---|---|
-| [`docs/ONBOARD.md`](docs/ONBOARD.md) | start here: fresh setup, or bringing an existing fork across |
-| [`AGENTS.md`](AGENTS.md) | the rules, the merge protocol, every known landmine |
-| [`docs/FINDINGS.md`](docs/FINDINGS.md) | what is slow and why, with evidence |
+| [`docs/ONBOARD.md`](docs/ONBOARD.md) | setup, or bringing an existing fork across |
 | [`docs/PIPELINE.md`](docs/PIPELINE.md) | how a frame is assembled and what it costs |
-| [`docs/AI-PROMPT.md`](docs/AI-PROMPT.md) | paste-ready prompt for your AI assistant |
+| [`docs/LAUNCHER.md`](docs/LAUNCHER.md) | profiles, the launcher and its settings |
+| [`docs/AI-PROMPT.md`](docs/AI-PROMPT.md) | paste-ready prompt for an AI contributor |
 
 House rules: no game files; no code from XCL (GPL-2.0, incompatible); vendor
-fixes must be runtime-gated; a PR without a bench row is closed.
+fixes gated; a PR without a bench row is closed.
 
 ## Credits
 
@@ -87,4 +67,3 @@ A rebrand and consolidation, not a rewrite. Built on
 [myokex/victory-amd](https://github.com/myokex/victory-amd), with PRs #127,
 #154 and #270 carried. GPL-3.0-or-later; upstream history and notices are kept —
 see [`LICENSE`](LICENSE).
-
