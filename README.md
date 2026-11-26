@@ -49,12 +49,9 @@ picture over 50 KB**. The rules are in [`AGENTS.md`](AGENTS.md); what is slow
 and why is in [`docs/FINDINGS.md`](docs/FINDINGS.md). Work from another fork
 goes in one commit at a time, with attribution.
 
-| Read | For |
-|---|---|
-| [`docs/ONBOARD.md`](docs/ONBOARD.md) | setup, or bringing an existing fork across |
-| [`docs/PIPELINE.md`](docs/PIPELINE.md) | how a frame is assembled and what it costs |
-| [`docs/LAUNCHER.md`](docs/LAUNCHER.md) | profiles, the launcher and its settings |
-| [`docs/AI-PROMPT.md`](docs/AI-PROMPT.md) | paste-ready prompt for an AI contributor |
+All docs are in the [docs index](docs/README.md). Start with
+[`AGENTS.md`](AGENTS.md) for the rules and [`docs/FINDINGS.md`](docs/FINDINGS.md)
+for what is slow and why.
 
 House rules: no game files; no code from XCL (GPL-2.0, incompatible); vendor
 fixes gated; a PR without a bench row is closed.
