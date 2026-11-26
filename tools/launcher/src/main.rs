@@ -864,6 +864,8 @@ struct App {
     prep_started: Option<std::time::Instant>,
     toast: Option<(String, std::time::Instant)>,
     game_advanced_open: bool,
+    update_tag: Option<String>,
+    update_rx: Option<std::sync::mpsc::Receiver<Option<String>>>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1013,6 +1015,7 @@ impl App {
             .map(|t| tail(&t, 160))
             .unwrap_or_default();
         let readiness = settings_root_readiness(&settings);
+        let (update_tag, update_rx) = update_check();
         let status = if settings.reloaded_profile {
             "profile updated; settings reloaded"
         } else {
@@ -1053,6 +1056,8 @@ impl App {
             prep_started: None,
             toast: None,
             game_advanced_open: false,
+            update_tag,
+            update_rx,
         }
     }
 
@@ -2374,6 +2379,12 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rx) = &self.update_rx {
+            if let Ok(tag) = rx.try_recv() {
+                self.update_tag = tag;
+                self.update_rx = None;
+            }
+        }
         self.tick_bench();
         self.tick_prepare(ctx);
         self.refresh_log();
@@ -2417,7 +2428,29 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new("Nullifier").size(19.0).strong());
-                ui.label(egui::RichText::new(format!("v{VERSION}")).size(11.0).color(egui::Color32::GRAY));
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("v{VERSION}")).size(11.0).color(egui::Color32::GRAY));
+                    if let Some(tag) = self.update_tag.clone() {
+                        if is_newer(&tag, VERSION) {
+                            let dot = ui
+                                .add(
+                                    egui::Label::new(
+                                        egui::RichText::new("● update")
+                                            .size(10.5)
+                                            .color(ACCENT),
+                                    )
+                                    .sense(egui::Sense::click()),
+                                )
+                                .on_hover_text(format!(
+                                    "{tag} is available - click to open the releases page"
+                                ))
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            if dot.clicked() {
+                                open_url(RELEASES_URL);
+                            }
+                        }
+                    }
+                });
                 ui.add_space(16.0);
                 let mut tabs = vec![(Tab::Play, "Play"), (Tab::Graphics, "Graphics")];
                 if self.settings.show_advanced {
@@ -3305,6 +3338,108 @@ fn kill_game() {
             .stderr(Stdio::null())
             .status();
     }
+}
+
+const RELEASES_URL: &str = "https://github.com/iNiKKo/Nullifier/releases/latest";
+
+fn version_parts(text: &str) -> Vec<u32> {
+    text.trim()
+        .trim_start_matches('v')
+        .split(|c: char| !c.is_ascii_digit())
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| p.parse().ok())
+        .collect()
+}
+
+fn is_newer(latest: &str, current: &str) -> bool {
+    let a = version_parts(latest);
+    let b = version_parts(current);
+    for i in 0..a.len().max(b.len()) {
+        let x = *a.get(i).unwrap_or(&0);
+        let y = *b.get(i).unwrap_or(&0);
+        if x != y {
+            return x > y;
+        }
+    }
+    false
+}
+
+/// The newest release tag, or nothing when offline or no release exists.
+fn fetch_latest_tag() -> Option<String> {
+    let out = if cfg!(windows) {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                "try { (Invoke-RestMethod -Uri 'https://api.github.com/repos/iNiKKo/Nullifier/releases/latest' -TimeoutSec 6).tag_name } catch { }",
+            ])
+            .output()
+    } else {
+        Command::new("curl")
+            .args([
+                "-fsSL",
+                "--max-time",
+                "6",
+                "-H",
+                "Accept: application/vnd.github+json",
+                "https://api.github.com/repos/iNiKKo/Nullifier/releases/latest",
+            ])
+            .output()
+    }
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    if let Some(at) = text.find("\"tag_name\"") {
+        let rest = &text[at..];
+        let start = rest.find(':')? + 1;
+        let rest = rest[start..].trim_start().strip_prefix('"')?;
+        let end = rest.find('"')?;
+        return Some(rest[..end].trim().to_string());
+    }
+    let line = text.lines().map(str::trim).find(|line| {
+        line.starts_with('v') || line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+    })?;
+    Some(line.to_string())
+}
+
+/// Once a day at most, in the background. A cached answer is used as is.
+fn update_check() -> (Option<String>, Option<std::sync::mpsc::Receiver<Option<String>>>) {
+    if std::env::var_os("NULLIFIER_NO_UPDATE_CHECK").is_some() {
+        return (None, None);
+    }
+    let Some(cache) = cache_dir().map(|dir| dir.join("update.txt")) else {
+        return (None, None);
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if let Ok(text) = std::fs::read_to_string(&cache) {
+        let mut lines = text.lines();
+        let tag = lines.next().unwrap_or("").trim().to_string();
+        let when: u64 = lines.next().unwrap_or("0").trim().parse().unwrap_or(0);
+        if !tag.is_empty() && now.saturating_sub(when) < 86_400 {
+            return (Some(tag), None);
+        }
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let tag = fetch_latest_tag();
+        if let Some(tag) = &tag {
+            if let Some(dir) = cache.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&cache, format!("{tag}\n{now}\n"));
+        }
+        let _ = tx.send(tag);
+    });
+    (None, Some(rx))
+}
+
+fn open_url(url: &str) {
+    open_path(Path::new(url));
 }
 
 fn open_path(path: &Path) {

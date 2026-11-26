@@ -24,8 +24,16 @@ be fixed, or you are testing and should use `tools/bench.sh`.
 binary) for the things the console's own menu never had:
 
 ```bash
-cargo build --manifest-path tools/launcher/Cargo.toml
-./tools/launcher/target/debug/nullifier-launcher          # Windows: tools\launcher\target\debug\nullifier-launcher.exe
+./Nullifier.sh                                            # builds it once, then opens it
+```
+
+Windows: double-click `Nullifier.bat` (it builds `tools\launcher\target\release`
+once if needed). Both wrappers are in the repository root; the command line
+below is what they run.
+
+```bash
+cargo build --release --manifest-path tools/launcher/Cargo.toml
+./tools/launcher/target/release/nullifier-launcher
 ```
 
 * **First run** — a welcome screen: drop the game folder on the window (or use
@@ -70,6 +78,11 @@ cargo build --manifest-path tools/launcher/Cargo.toml
   launcher itself (the same code on Windows and Linux): it loads the game,
   warms up 6 s, measures 20 s, and reports median, p10, frames and crashes
   with a progress bar. `Measure…` on Play runs it too.
+
+The version in the rail is checked against the newest GitHub release once a
+day (cached in `~/.cache/nullifier/update.txt`; set `NULLIFIER_NO_UPDATE_CHECK=1`
+to skip it). A newer release adds a small blue **● update** next to the
+version; clicking it opens the releases page. There is no silent update.
 
 The GUI writes an exact profile to `~/.cache/nullifier/launcher-profile.json`
 and passes it with `VICTORY_PROFILES`, forcing it by name. That is why the

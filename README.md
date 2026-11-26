@@ -22,26 +22,60 @@ Works: menus, cutscene, prologue, world, audio, input, saves.
 Missing: the title's ray-traced light, so shadowed areas are black. Not yet
 playable.
 
-## Get started
+## Install
+
+No game files are included; bring your own copy. There is no prebuilt release
+yet, so the steps below build it once (about ten minutes, then starts are
+instant).
+
+### Linux
+
+You need a Vulkan-capable AMD or NVIDIA card, `clang`, `lld`, `python3`,
+`curl`, and Proton (a Steam install already has one; the launcher finds it).
 
 ```bash
-git clone git@github.com:iNiKKo/Nullifier.git
+git clone https://github.com/iNiKKo/Nullifier.git
 cd Nullifier
-./tools/setup.sh
-cargo build --manifest-path tools/launcher/Cargo.toml
-./tools/launcher/target/debug/nullifier-launcher
+./tools/setup.sh              # installs Rust in ~/.local, builds the engine
+./tools/build-wineserver.sh   # optional, several times the frame rate
+./Nullifier.sh                # builds and opens the launcher
 ```
 
-In the launcher: drop your game folder on the window and press **Play**. The
-first run offers one **Set up now** button if the engine still needs building.
-The command line below does the same without the window.
+Then, in the window:
 
-Linux, once: `./tools/build-wineserver.sh` — several times the frame rate (the
-launcher offers this as one button too). Windows: `cargo build --release -p
-nullifier`, then `.\launcher\nullifier-launch.ps1 -Game DIR`.
+1. Drop your game folder on the page — the folder that contains
+   `game_scarlett_master.exe`.
+2. Press **Play**. If something is still missing, **Set up now** builds it
+   without a terminal.
 
-No window: `./tools/setup.sh --game /path/to/game`, then
-`./launcher/nullifier-launch.sh --game DIR`.
+### Windows
+
+You need Windows 10/11 and a D3D12 card with shader model 6.6 and mesh shaders.
+
+1. Install Rust from <https://rustup.rs> (the defaults are fine).
+2. In PowerShell, inside the repository:
+
+   ```powershell
+   cargo build --release -p nullifier
+   cargo build --release --manifest-path tools\launcher\Cargo.toml
+   ```
+
+3. Double-click **`Nullifier.bat`** (it builds the launcher once if needed),
+   drop the game folder, press **Play**.
+
+### Command line
+
+```bash
+./tools/setup.sh --game /path/to/game
+./launcher/nullifier-launch.sh --game DIR
+```
+
+Windows: `.\launcher\nullifier-launch.ps1 -Game DIR`.
+
+Your settings, saves and game data stay under `~/.local/share/nullifier`,
+`~/.config/nullifier` and `~/.cache/nullifier` on Linux, and under
+`%LOCALAPPDATA%\nullifier` on Windows. Deleting the repository does not delete
+them.
 
 ## Contributing
 

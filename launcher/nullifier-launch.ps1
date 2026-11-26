@@ -118,8 +118,12 @@ if ($Detect) {
 
 if (-not $Game)        { Write-Error "need -Game DIR (or VICTORY_GAME_DIR)"; exit 2 }
 if (-not (Test-Path $Game)) { Write-Error "not a directory: $Game"; exit 2 }
-if (-not $Bin)         { $Bin = Join-Path $Root "target\x86_64-pc-windows-msvc\diag\nullifier.exe" }
-if (-not (Test-Path $Bin)) { Write-Error "no nullifier.exe at $Bin; build it first (see AGENTS.md)"; exit 2 }
+if (-not $Bin) {
+  $native = Join-Path $Root "target\release\nullifier.exe"
+  $diag   = Join-Path $Root "target\x86_64-pc-windows-msvc\diag\nullifier.exe"
+  if (Test-Path $native) { $Bin = $native } else { $Bin = $diag }
+}
+if (-not (Test-Path $Bin)) { Write-Error "no nullifier.exe at $Bin; build it first (cargo build --release -p nullifier)"; exit 2 }
 
 $exe = Join-Path $Game $TitleExe
 if (-not (Test-Path $exe)) { Write-Error "title exe not found: $exe"; exit 2 }
