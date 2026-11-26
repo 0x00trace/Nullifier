@@ -539,6 +539,14 @@ pub(crate) fn upload_from(list: &HostList, resource: This, texture: &ID3D12Resou
     // at submission is left, and what it finds changed the next list that
     // samples the texture uploads (a frame late where every list of the
     // frame was recorded before that check).
+    if film_log() && staging.film_plane() {
+        tracing::info!(
+            frame = crate::frame::current(),
+            memory = ?staging.memory,
+            recorded = !(staging.uploaded.load(Relaxed) && !staging.dirty.load(Relaxed)),
+            "film plane sampled by a list"
+        );
+    }
     if staging.uploaded.load(Relaxed) && !staging.dirty.load(Relaxed) {
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::TexSkipped, 1);
@@ -612,7 +620,23 @@ pub(crate) fn upload_from(list: &HostList, resource: This, texture: &ID3D12Resou
     list.defer_texture(staging);
 }
 
+/// Diagnostics (`VICTORY_FILM_LOG=1`): a line for every list that samples
+/// a plane of a movie, and for every check of one at a submission, with the
+/// mean of the plane's bytes when it is read: what the title's memory holds
+/// when a frame comes out black.
+fn film_log() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_FILM_LOG").is_some_and(|v| v == "1"))
+}
+
 impl Staging {
+    /// A linear 8-bit picture of one level: what the processor draws a
+    /// movie's planes into.
+    fn film_plane(&self) -> bool {
+        let d = &self.layout.desc;
+        d.swizzle.0 == 0 && d.mips == 1 && d.element_bytes == 1 && d.block == 1
+    }
+
 
     /// The title memory the texture is read from: address and bytes.
     pub(crate) fn memory(&self) -> (usize, usize) {
@@ -637,6 +661,13 @@ impl Staging {
         use std::sync::atomic::Ordering::Relaxed;
         let started = std::time::Instant::now();
         let read = self.refresh_now();
+        if read == 0 && film_log() && self.film_plane() {
+            tracing::info!(
+                frame = crate::frame::current(),
+                memory = ?self.memory,
+                "film plane found unchanged at a submission"
+            );
+        }
         let preparing = &crate::host::PREPARING;
         preparing[2].fetch_add(started.elapsed().as_micros() as u64, Relaxed);
         preparing[3].fetch_add(read as u64, Relaxed);
@@ -890,6 +921,18 @@ impl Staging {
     /// Detiles `tiled` (the texture's memory) into the staging buffer.
     fn detile(&self, tiled: &[u8]) {
         self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+        if film_log() && self.film_plane() {
+            let sum: u64 = tiled.iter().map(|&b| u64::from(b)).sum();
+            let d = &self.layout.desc;
+            tracing::info!(
+                frame = crate::frame::current(),
+                memory = ?self.memory,
+                width = d.width,
+                height = d.height,
+                mean = format_args!("{:.1}", sum as f64 / tiled.len().max(1) as f64),
+                "film plane detiled"
+            );
+        }
         #[cfg(feature = "diagnostics")]
         if tiled.iter().all(|&b| b == 0) {
             tracing::debug!(
