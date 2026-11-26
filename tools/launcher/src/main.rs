@@ -29,11 +29,12 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 fn apply_theme(ctx: &egui::Context) {
     use egui::{Color32, FontFamily, FontId, Stroke, TextStyle};
     let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-    style.spacing.button_padding = egui::vec2(12.0, 7.0);
-    style.spacing.interact_size.y = 28.0;
+    style.spacing.item_spacing = egui::vec2(10.0, 9.0);
+    style.spacing.button_padding = egui::vec2(14.0, 8.0);
+    style.spacing.interact_size.y = 30.0;
+    style.spacing.indent = 18.0;
     style.text_styles = [
-        (TextStyle::Heading, FontId::new(20.0, FontFamily::Proportional)),
+        (TextStyle::Heading, FontId::new(21.0, FontFamily::Proportional)),
         (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
         (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
         (TextStyle::Small, FontId::new(11.5, FontFamily::Proportional)),
@@ -42,17 +43,17 @@ fn apply_theme(ctx: &egui::Context) {
     .into();
     let mut v = egui::Visuals::dark();
     let panel = Color32::from_rgb(24, 26, 30);
-    let card = Color32::from_rgb(31, 33, 39);
+    let card = Color32::from_rgb(30, 32, 38);
     let line = Color32::from_rgb(50, 53, 61);
     let ink = Color32::from_rgb(233, 235, 241);
-    v.panel_fill = Color32::from_rgb(19, 20, 23);
+    v.panel_fill = Color32::from_rgb(17, 18, 21);
     v.window_fill = panel;
     v.faint_bg_color = card;
     v.extreme_bg_color = Color32::from_rgb(15, 16, 19);
     v.override_text_color = Some(ink);
     v.hyperlink_color = ACCENT;
     v.selection.bg_fill = ACCENT;
-    v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    v.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
     for w in [
         &mut v.widgets.noninteractive,
         &mut v.widgets.inactive,
@@ -63,9 +64,9 @@ fn apply_theme(ctx: &egui::Context) {
         w.corner_radius = 7.into();
     }
     v.widgets.noninteractive.bg_fill = card;
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, line);
-    v.widgets.inactive.bg_fill = Color32::from_rgb(38, 41, 48);
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(38, 41, 48);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, line);
+    v.widgets.inactive.bg_fill = Color32::from_rgb(40, 43, 50);
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(36, 39, 45);
     v.widgets.hovered.bg_fill = Color32::from_rgb(45, 49, 58);
     v.widgets.hovered.weak_bg_fill = Color32::from_rgb(45, 49, 58);
     v.widgets.active.bg_fill = ACCENT;
@@ -135,10 +136,15 @@ struct Settings {
     keys: String,
     /// `KEY=VALUE` lines, applied last.
     extra_env: String,
+    /// FNV-1a of launcher/profiles.json when the sets were last taken from it.
+    #[serde(default)]
+    profiles_hash: u64,
     #[serde(default)]
     planned: Planned,
     #[serde(skip)]
     root: Option<PathBuf>,
+    #[serde(skip)]
+    reloaded_profile: bool,
 }
 
 /// Toggles that need engine work; kept so the choice survives, never applied.
@@ -172,8 +178,10 @@ impl Default for Settings {
             capture_frames: "1024,1536".into(),
             keys: String::new(),
             extra_env: String::new(),
+            profiles_hash: 0,
             planned: Planned::default(),
             root: None,
+            reloaded_profile: false,
         }
     }
 }
@@ -185,6 +193,7 @@ impl Settings {
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         if let Some(root) = root {
+            let hash = profile_hash(root);
             if settings.sets.is_empty() {
                 let profiles = profiles(root);
                 let hw = hardware(root);
@@ -195,6 +204,17 @@ impl Settings {
                     .find(|p| p.name == name)
                     .map(|p| p.sets.clone())
                     .unwrap_or_default();
+                settings.profiles_hash = hash;
+            } else if settings.profiles_hash != hash {
+                // The profiles changed since these sets were taken (a new
+                // measured switch, a new default): take the named profile
+                // again rather than keep running old settings.
+                let profiles = profiles(root);
+                if let Some(profile) = profiles.iter().find(|p| p.name == settings.profile) {
+                    settings.sets = profile.sets.clone();
+                    settings.reloaded_profile = true;
+                }
+                settings.profiles_hash = hash;
             }
         }
         settings
@@ -209,6 +229,13 @@ impl Settings {
             let _ = std::fs::write(path, text);
         }
     }
+}
+
+fn profile_hash(root: &Path) -> u64 {
+    let bytes = std::fs::read(root.join("launcher/profiles.json")).unwrap_or_default();
+    bytes.into_iter().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+    })
 }
 
 fn config_path() -> Option<PathBuf> {
@@ -255,12 +282,11 @@ struct Hardware {
     vendor: String,
     vram_mb: u32,
     profile: String,
-    raw: String,
 }
 
 fn hardware(root: &Path) -> Hardware {
     let raw = detect(root);
-    let mut hw = Hardware { raw: raw.clone(), ..Default::default() };
+    let mut hw = Hardware { ..Default::default() };
     for line in raw.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("GPU vendor") {
@@ -594,7 +620,7 @@ fn current_preset(sets: &BTreeMap<String, String>, shipped: &BTreeMap<String, St
     None
 }
 
-#[derive(PartialEq, Eq, Clone, Copy)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum Tab {
     Play,
     Graphics,
@@ -665,7 +691,7 @@ fn median(values: &mut [f32]) -> f32 {
     if n == 0 {
         return 0.0;
     }
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         (values[n / 2 - 1] + values[n / 2]) / 2.0
     } else {
         values[n / 2]
@@ -698,6 +724,11 @@ impl App {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .map(|t| tail(&t, 160))
             .unwrap_or_default();
+        let status = if settings.reloaded_profile {
+            "profile updated; settings reloaded"
+        } else {
+            "ready"
+        };
         Self {
             settings,
             profiles,
@@ -708,7 +739,7 @@ impl App {
             bench: None,
             log_path,
             log_shown,
-            status: "ready".into(),
+            status: status.into(),
             picking: false,
             pick_dir: home_dir().unwrap_or_else(|| PathBuf::from(".")),
             new_key: String::new(),
@@ -972,6 +1003,9 @@ impl App {
         if let Some(profile) = self.profiles.iter().find(|p| p.name == name) {
             self.settings.profile = name.to_string();
             self.settings.sets = profile.sets.clone();
+            if let Some(root) = &self.settings.root {
+                self.settings.profiles_hash = profile_hash(root);
+            }
             self.status = format!("loaded {}", name);
         }
     }
@@ -1135,10 +1169,20 @@ impl App {
             .unwrap_or_default();
         let current = current_preset(&self.settings.sets, &shipped);
         card(ui, |ui| {
-            ui.strong("Performance");
+            ui.horizontal(|ui| {
+                ui.strong("Performance");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .link(egui::RichText::new("Customise…").small())
+                        .clicked()
+                    {
+                        self.tab = Tab::Graphics;
+                    }
+                });
+            });
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new("Choose one, or fine-tune it later.")
+                    egui::RichText::new("Choose a preset; the numbers are in Graphics.")
                         .small()
                         .color(egui::Color32::GRAY),
                 ),
@@ -1146,20 +1190,11 @@ impl App {
             ui.add_space(2.0);
             let mut chosen = None;
             for (preset, title, desc) in [
-                (Preset::Recommended, "Recommended", "Measured on your GPU: the steady choice with the right picture."),
-                (Preset::LowMemory, "Low memory", "For an 8 GB card or a busy desktop. Textures stream more often."),
-                (Preset::Safe, "Safe", "If it crashes or loses the device. A little slower, the most cautious."),
+                (Preset::Recommended, "Recommended", "Measured for your graphics card."),
+                (Preset::LowMemory, "Low memory", "For an 8 GB card or a busy desktop."),
+                (Preset::Safe, "Safe", "If it crashes or loses the device."),
             ] {
-                let selected = current == Some(preset);
-                let response = ui.add(
-                    egui::Button::new(
-                        egui::RichText::new(format!("{title}\n{desc}"))
-                            .color(if selected { egui::Color32::WHITE } else { egui::Color32::from_rgb(200, 203, 212) }),
-                    )
-                    .fill(if selected { ACCENT } else { egui::Color32::from_rgb(38, 41, 48) })
-                    .min_size(egui::vec2(ui.available_width(), 46.0)),
-                );
-                if response.clicked() {
+                if preset_card(ui, current == Some(preset), title, desc).clicked() {
                     chosen = Some(preset);
                 }
             }
@@ -1180,13 +1215,6 @@ impl App {
                 self.settings.profile = auto.clone();
                 self.settings.sets = sets;
                 self.status = format!("{preset:?} preset");
-            }
-            ui.add_space(2.0);
-            if ui
-                .link(egui::RichText::new("Customise…").small())
-                .clicked()
-            {
-                self.tab = Tab::Graphics;
             }
         });
     }
@@ -1502,44 +1530,6 @@ impl App {
             self.runtime_card(ui);
 
             ui.add_space(4.0);
-            card(ui, |ui| {
-                ui.strong("Log");
-                ui.horizontal(|ui| {
-                    ui.label("Detail");
-                    let shown = match self.settings.log_level.as_str() {
-                        "warn" => "Quiet",
-                        "debug" => "Detailed",
-                        "trace" => "Everything",
-                        _ => "Normal",
-                    };
-                    egui::ComboBox::from_id_salt("log level")
-                        .selected_text(shown)
-                        .show_ui(ui, |ui| {
-                            for (value, label) in [
-                                ("warn", "Quiet"),
-                                ("info", "Normal"),
-                                ("debug", "Detailed"),
-                                ("trace", "Everything"),
-                            ] {
-                                ui.selectable_value(&mut self.settings.log_level, value.to_string(), label);
-                            }
-                        });
-                    if ui.button("Open log").clicked() {
-                        if let Some(path) = &self.log_path {
-                            open_path(path);
-                        }
-                    }
-                });
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new("More detail makes the log larger and the game slower. Normal is right for play.")
-                            .small()
-                            .color(egui::Color32::GRAY),
-                    )
-                    .wrap(),
-                );
-            });
-
             ui.add_space(4.0);
             card(ui, |ui| {
                 ui.strong("Screenshots");
@@ -1602,9 +1592,7 @@ impl eframe::App for App {
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.add_space(4.0);
-                ui.label(egui::RichText::new(TITLE).size(18.0).strong());
-                ui.label(egui::RichText::new(VERSION).small().color(egui::Color32::GRAY));
+                ui.add_space(2.0);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if self.running() || self.bench_running() {
                         if ui.add(egui::Button::new("Stop").min_size(egui::vec2(90.0, 32.0))).clicked() {
@@ -1621,20 +1609,26 @@ impl eframe::App for App {
             .exact_width(150.0)
             .resizable(false)
             .show(ctx, |ui| {
-                ui.add_space(8.0);
+                ui.add_space(12.0);
+                ui.label(egui::RichText::new("Nullifier").size(19.0).strong());
+                ui.label(egui::RichText::new(format!("v{VERSION}")).size(11.0).color(egui::Color32::GRAY));
+                ui.add_space(16.0);
                 for (tab, label) in [
                     (Tab::Play, "Play"),
                     (Tab::Graphics, "Graphics"),
                     (Tab::Advanced, "Advanced"),
                     (Tab::Debug, "Tools"),
                 ] {
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 30.0],
-                            egui::SelectableLabel::new(self.tab == tab, label),
-                        )
-                        .clicked()
-                    {
+                    let selected = self.tab == tab;
+                    let text = egui::RichText::new(label).size(14.0).color(if selected {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::from_rgb(178, 183, 194)
+                    });
+                    let button = egui::Button::new(text)
+                        .fill(if selected { ACCENT } else { egui::Color32::TRANSPARENT })
+                        .stroke(egui::Stroke::NONE);
+                    if ui.add_sized([ui.available_width(), 34.0], button).clicked() {
                         self.tab = tab;
                     }
                 }
@@ -1652,9 +1646,34 @@ impl eframe::App for App {
                             .color(if live { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::GRAY }),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("Clear log").clicked() {
+                        if ui.small_button("Clear").clicked() {
                             self.log_shown.clear();
                         }
+                        if ui.small_button("Open").clicked() {
+                            if let Some(path) = &self.log_path {
+                                open_path(path);
+                            }
+                        }
+                        let shown = match self.settings.log_level.as_str() {
+                            "warn" => "Quiet",
+                            "debug" => "Detailed",
+                            "trace" => "Everything",
+                            _ => "Normal",
+                        };
+                        egui::ComboBox::from_id_salt("log detail footer")
+                            .selected_text(egui::RichText::new(shown).small())
+                            .width(92.0)
+                            .show_ui(ui, |ui| {
+                                for (value, label) in [
+                                    ("warn", "Quiet"),
+                                    ("info", "Normal"),
+                                    ("debug", "Detailed"),
+                                    ("trace", "Everything"),
+                                ] {
+                                    ui.selectable_value(&mut self.settings.log_level, value.to_string(), label);
+                                }
+                            });
+                        ui.label(egui::RichText::new("Log detail").small().color(egui::Color32::GRAY));
                     });
                 });
                 egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
@@ -1769,12 +1788,12 @@ fn describe(key: &str) -> Option<Desc> {
     match key {
         "VICTORY_TEXTURE_BUDGET_MB" => d(
             "Texture memory budget",
-            "The most texture data the game may keep on your graphics card at once. Higher can look sharper when you move fast; lower leaves room for other apps.",
+            "Texture data kept on the card. Higher looks sharper in motion; lower leaves room for other apps.",
             "2048–4096 MB on a 16 GB card. Never more than your card's VRAM.",
         ),
         "VICTORY_CARD_BUFFERS_MB" => d(
             "World memory kept on the card",
-            "How much of the game's own working memory is mirrored inside the card. Too much competes with textures.",
+            "The game's working memory mirrored on the card. Too much competes with textures.",
             "512 MB measured best on 16 GB; 256 MB on an 8 GB card.",
         ),
         "VICTORY_CARD_BUFFERS_MIN_MB" => d(
@@ -1784,62 +1803,62 @@ fn describe(key: &str) -> Option<Desc> {
         ),
         "VICTORY_LATE_WAIT" => d(
             "Frames prepared ahead",
-            "How many frames the game may hand to the card before the previous one has finished. More can smooth short hitches, but Linux drivers can lose the device.",
+            "Frames handed to the card ahead of the last. 2 and above can crash on Linux.",
             "0 or 1. 2 and above is known to crash on Linux.",
         ),
         "VICTORY_TEXTURE_NO_WAIT" => d(
             "Do not wait for textures",
-            "Show the frame without waiting for a texture that is still uploading. Faster; a texture can pop in a moment late.",
+            "Show a frame without waiting for a texture upload. Faster; textures can pop in late.",
             "On. Turn it off only if textures look wrong.",
         ),
         "VICTORY_CARD_HASH_LANES" => d(
             "Faster card checks",
-            "Checks the card's copies with a team of threads instead of one long line. Without it the check is the largest thing on the card.",
+            "Check card copies with a team of threads. Without it the check is the largest thing on the card.",
             "On. 4.45 -> 6.6 fps here, no crashes.",
         ),
         "VICTORY_WIDE_BACK" => d(
             "Copy results back in whole ranges",
-            "When shaders write memory the game reads on the processor, copy whole ranges back instead of many small pieces.",
+            "Copy shader results back in whole ranges instead of small pieces.",
             "On.",
         ),
         "VICTORY_CARD_REHASH_RUNS" => d(
             "Re-check only changed ranges",
-            "Only re-read card copies that changed, instead of all of them every frame.",
+            "Only re-check card copies that changed.",
             "On is safe; the effect is small.",
         ),
         "VICTORY_INDIRECT_WINDOW" => d(
             "Batch indirect draws",
-            "Handle many draw records in windows instead of one pass per draw. Measured about 25% faster on this machine.",
+            "Handle many draw records in windows. Measured about 25% faster here.",
             "On.",
         ),
         "VICTORY_INDIRECT_RUNS" => d(
             "Batch single draw records",
-            "Clamp a run of single draw records in one pass instead of one pass each. Measured about 18% faster here.",
+            "One pass per run of single draw records. Measured about 18% faster here.",
             "On.",
         ),
         "VICTORY_JOIN_COPIES" => d(
             "Join neighbouring copies",
-            "Send adjacent memory copies as one. It has crashed the graphics driver before, so it is off by default.",
+            "Send adjacent copies as one. Has crashed the driver before.",
             "Off unless you are testing.",
         ),
         "VICTORY_RELAY" => d(
             "Hand results back beside writes",
-            "Copy what shaders wrote back into the game's memory next to the write guards. 2 is faster but has crashed before; 0 turns it off.",
+            "Hand results back beside writes. 2 is faster but has crashed before.",
             "0, or 2 if your machine stays stable with it.",
         ),
         "VICTORY_VSYNC" => d(
             "V-Sync",
-            "Wait for the display between frames. Removes tearing, at the cost of a little delay.",
+            "Wait for the display. Removes tearing, adds a little delay.",
             "Off unless you see tearing; it matters most above 30 fps.",
         ),
         "VICTORY_FPS_CAP" => d(
             "Frame rate limit",
-            "Hold the game under this rate. 0 leaves it unlimited. A low limit steadies heat and fan noise.",
+            "Hold the game under this rate. 0 is unlimited; lower limits steady heat and noise.",
             "0 (off), 60, 120 or 144. Below 30 the picture feels heavy.",
         ),
         "VICTORY_LOG" => d(
             "Log detail",
-            "How much the layer writes to the log. debug and trace are for bug reports and are much slower.",
+            "How much is written to the log. More detail is slower.",
             "info for play; warn if you want quiet.",
         ),
         _ => None,
@@ -1894,6 +1913,46 @@ fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
 
 // ---------------------------------------------------------------- widgets
 
+fn preset_card(ui: &mut egui::Ui, selected: bool, title: &str, desc: &str) -> egui::Response {
+    let fill = if selected { ACCENT } else { egui::Color32::from_rgb(38, 41, 48) };
+    let stroke = if selected { ACCENT } else { egui::Color32::from_rgb(52, 56, 64) };
+    let frame = egui::Frame::new()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0_f32, stroke))
+        .corner_radius(8)
+        .inner_margin(egui::Margin::symmetric(12, 9));
+    let response = frame
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                let painter = ui.painter();
+                if selected {
+                    painter.circle_filled(rect.center(), 6.0, egui::Color32::WHITE);
+                    painter.circle_filled(rect.center(), 3.0, ACCENT);
+                } else {
+                    painter.circle_stroke(rect.center(), 6.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 125, 136)));
+                }
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(title)
+                            .strong()
+                            .color(if selected { egui::Color32::WHITE } else { egui::Color32::from_rgb(225, 228, 236) }),
+                    );
+                    ui.label(
+                        egui::RichText::new(desc).size(11.5).color(if selected {
+                            egui::Color32::from_rgb(235, 240, 255)
+                        } else {
+                            egui::Color32::from_rgb(158, 163, 174)
+                        }),
+                    );
+                });
+            });
+        })
+        .response;
+    response.interact(egui::Sense::click())
+}
+
 fn pair(ms: Option<f32>, mb: Option<f32>) -> Option<String> {
     match (ms, mb) {
         (Some(ms), Some(mb)) => Some(format!("{ms:.1} ms · {mb:.0} MB")),
@@ -1918,7 +1977,7 @@ fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
 
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::symmetric(12, 10))
+        .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui);
@@ -1931,8 +1990,8 @@ fn warnings_card(ui: &mut egui::Ui, list: &[String]) {
     }
     egui::Frame::group(ui.style())
         .fill(egui::Color32::from_rgb(45, 38, 24))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 95, 45)))
-        .inner_margin(egui::Margin::symmetric(12, 10))
+        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
+        .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.label(egui::RichText::new("Check these").strong().color(egui::Color32::from_rgb(240, 200, 120)));
@@ -1952,6 +2011,11 @@ fn number_info(
     step: u32,
 ) -> Option<String> {
     let desc = describe(key);
+    let suffix = match key {
+        "VICTORY_TEXTURE_BUDGET_MB" | "VICTORY_CARD_BUFFERS_MB" => " MB",
+        "VICTORY_FPS_CAP" => " fps",
+        _ => "",
+    };
     let mut value = setting_value(sets, key).unwrap_or(*range.start());
     let mut asked = None;
     ui.horizontal(|ui| {
@@ -1959,15 +2023,20 @@ fn number_info(
         if desc.is_some() && ui.small_button("?").clicked() {
             asked = Some(key.to_string());
         }
-        if ui
-            .add(egui::DragValue::new(&mut value).range(range.clone()).speed(step as f64))
-            .changed()
-        {
-            sets.insert(key.to_string(), value.to_string());
-        }
-        if let Some(d) = &desc {
-            ui.label(egui::RichText::new(d.safe.split('.').next().unwrap_or("")).small().color(egui::Color32::GRAY));
-        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add_sized(
+                    [92.0, 26.0],
+                    egui::DragValue::new(&mut value)
+                        .range(range.clone())
+                        .speed(step as f64)
+                        .suffix(suffix),
+                )
+                .changed()
+            {
+                sets.insert(key.to_string(), value.to_string());
+            }
+        });
     });
     if let Some(d) = &desc {
         ui.add(
@@ -2006,48 +2075,6 @@ fn switch_info(
         );
     }
     asked
-}
-
-fn number(
-    ui: &mut egui::Ui,
-    sets: &mut BTreeMap<String, String>,
-    key: &str,
-    label: &str,
-    range: std::ops::RangeInclusive<u32>,
-    step: u32,
-    suffix: &str,
-) {
-    let mut value: u32 = sets
-        .get(key)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(*range.start());
-    ui.horizontal(|ui| {
-        ui.label(label);
-        if ui
-            .add(egui::DragValue::new(&mut value).range(range.clone()).speed(step as f64))
-            .changed()
-        {
-            sets.insert(key.to_string(), value.to_string());
-        }
-        if !suffix.is_empty() {
-            ui.label(egui::RichText::new(suffix).small().color(egui::Color32::GRAY));
-        }
-    });
-}
-
-fn switch(ui: &mut egui::Ui, sets: &mut BTreeMap<String, String>, key: &str, label: &str, note: &str) {
-    let mut on = sets.contains_key(key);
-    if ui
-        .checkbox(&mut on, label)
-        .on_hover_text(note)
-        .changed()
-    {
-        if on {
-            sets.insert(key.to_string(), "1".into());
-        } else {
-            sets.remove(key);
-        }
-    }
 }
 
 fn capitalise(text: &str) -> String {
