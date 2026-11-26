@@ -24,6 +24,9 @@ use serde_json::{json, Value};
 const TITLE: &str = "Nullifier";
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(77, 122, 235);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The translation layer's build string. Kept beside `BUILD` in
+/// `crates/victory-gpu/src/host.rs` (bumped by hand there).
+const LAYER_VERSION: &str = "0.003";
 
 
 fn apply_theme(ctx: &egui::Context) {
@@ -353,6 +356,9 @@ struct CommunityEntry {
     settings: String,
     #[serde(default)]
     hardware: String,
+    /// The launcher that made the entry; `version` is the layer.
+    #[serde(default)]
+    launcher: String,
     when: u64,
     log: String,
     /// From the published board rather than this PC.
@@ -439,11 +445,32 @@ fn community_path() -> Option<PathBuf> {
     data_dir().map(|dir| dir.join("community.json"))
 }
 
+fn known_game(game: &str) -> String {
+    if game.starts_with("unknown") && game.contains("b99f876b") {
+        "v1.0.2.1".to_string()
+    } else {
+        game.to_string()
+    }
+}
+
+fn normalize_community(entries: &mut [CommunityEntry]) {
+    for entry in entries {
+        // Entries made by the launcher before it showed the layer version.
+        if entry.launcher.is_empty() && entry.version.starts_with("0.0.") {
+            entry.launcher = entry.version.clone();
+            entry.version = LAYER_VERSION.to_string();
+        }
+        entry.game = known_game(&entry.game);
+    }
+}
+
 fn load_community() -> Vec<CommunityEntry> {
-    community_path()
+    let mut entries: Vec<CommunityEntry> = community_path()
         .and_then(|path| std::fs::read_to_string(path).ok())
         .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    normalize_community(&mut entries);
+    entries
 }
 
 fn save_community(entries: &[CommunityEntry]) {
@@ -635,11 +662,13 @@ fn game_label(raw: &str) -> String {
     let clean = strip_ansi(raw);
     for line in clean.lines().take(40) {
         if let Some(rest) = after(line, "build          ") {
-            return rest.trim().chars().take(40).collect();
+            let label = known_game(rest.trim());
+            return label.chars().take(40).collect();
         }
         if let Some(rest) = after(line, "build ") {
             if rest.contains('(') {
-                return rest.trim().chars().take(40).collect();
+                let label = known_game(rest.trim());
+                return label.chars().take(40).collect();
             }
         }
     }
@@ -2952,7 +2981,7 @@ impl App {
             .unwrap_or(0);
         let entry = CommunityEntry {
             name: name.clone(),
-            version: VERSION.to_string(),
+            version: LAYER_VERSION.to_string(),
             game: game_label(&raw),
             profile: if self.settings.profile.is_empty() {
                 "custom".into()
@@ -2966,6 +2995,7 @@ impl App {
             area: self.settings.community_area.trim().to_string(),
             notes: self.settings.community_notes.trim().to_string(),
             settings: settings_summary(&self.settings, &self.hardware),
+            launcher: VERSION.to_string(),
             hardware: format!(
                 "{} {:.0} GB VRAM, {}",
                 self.hardware.vendor.to_uppercase(),
@@ -2990,7 +3020,7 @@ impl App {
         self.community_status = format!("Added {name}'s run; a share block is on the clipboard.");
         let json = serde_json::to_string_pretty(&CommunityEntry {
             name: name.clone(),
-            version: VERSION.to_string(),
+            version: LAYER_VERSION.to_string(),
             game,
             profile: profile.clone(),
             fps,
@@ -3001,6 +3031,7 @@ impl App {
             notes,
             settings: settings_line,
             hardware,
+            launcher: VERSION.to_string(),
             when,
             log,
             remote: false,
@@ -3477,8 +3508,9 @@ impl App {
                             }
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "Nullifier v{} · profile {} · {} draws · frame {:.1} ms · GPU {:.1} ms",
+                                    "Layer v{} · launcher v{} · profile {} · {} draws · frame {:.1} ms · GPU {:.1} ms",
                                     entry.version,
+                                    if entry.launcher.is_empty() { "-" } else { &entry.launcher },
                                     entry.profile,
                                     entry.draws,
                                     entry.frame_ms,
@@ -3976,6 +4008,7 @@ impl eframe::App for App {
                         for entry in &mut board {
                             entry.remote = true;
                         }
+                        normalize_community(&mut board);
                         let shared = board.len();
                         self.community.retain(|entry| !entry.remote);
                         self.community.extend(board);
@@ -4039,15 +4072,24 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new("Nullifier").size(19.0).strong());
+                ui.label(
+                    egui::RichText::new(format!("layer v{LAYER_VERSION}"))
+                        .size(11.0)
+                        .color(egui::Color32::GRAY),
+                );
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("v{VERSION}")).size(11.0).color(egui::Color32::GRAY));
+                    ui.label(
+                        egui::RichText::new(format!("launcher {VERSION}"))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(120, 126, 138)),
+                    );
                     if let Some(tag) = self.update_tag.clone() {
                         if is_newer(&tag, VERSION) {
                             let dot = ui
                                 .add(
                                     egui::Label::new(
                                         egui::RichText::new("● update")
-                                            .size(10.5)
+                                            .size(10.0)
                                             .color(ACCENT),
                                     )
                                     .sense(egui::Sense::click()),

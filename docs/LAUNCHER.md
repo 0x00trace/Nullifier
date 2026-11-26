@@ -62,7 +62,9 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   the game has focus and no pad is connected, the cursor is kept in the window
   and its movement turns the right stick; sensitivity and inversion are on the
   same page. Menu navigation with the mouse is not included.
-* **Community** — a nickname, **where** in the game the run was and **notes**
+* **Community** — each run records the **translation layer** version (the
+  title window's `v0.003` build string) and the launcher version separately;
+  a nickname, **where** in the game the run was and **notes**
   (pop-in, flicker, HUD, crashes), then **Share last run**: it adds a local
   entry and copies a JSON block. Each entry keeps the Nullifier version, title
   build, profile, fps, frame and GPU time, draws, the full set of active
