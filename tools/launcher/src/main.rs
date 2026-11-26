@@ -3015,7 +3015,7 @@ impl App {
                     "Name",
                     &mut self.settings.community_name,
                     "a nickname",
-                    260.0,
+                    360.0,
                 );
                 changed |= field_row(
                     ui,
@@ -3036,8 +3036,9 @@ impl App {
                 }
                 ui.add_space(6.0);
                 let (world_fps, _, _, world_draws) = world_stats(&self.log_shown);
+                let in_world = world_fps.is_some_and(|fps| fps < 10.0);
                 let run = self.last_run();
-                let fps = world_fps.or(run.fps);
+                let fps = if in_world { world_fps } else { run.fps };
                 let draws = world_draws.or(run.draws).unwrap_or(0);
                 ui.horizontal(|ui| {
                     let can = self.log_path.is_some()
@@ -3051,7 +3052,7 @@ impl App {
                             ui.ctx().copy_text(markdown);
                         }
                     }
-                    if chip_button(ui, "Copy settings").clicked() {
+                    if ui.add(secondary("Copy settings", 130.0, 32.0)).clicked() {
                         ui.ctx()
                             .copy_text(settings_summary(&self.settings, &self.hardware));
                     }
@@ -3059,7 +3060,7 @@ impl App {
                         ui.label(
                             egui::RichText::new(format!(
                                 "{fps:.1} fps {} · {draws} draws · {}",
-                                if world_fps.is_some() { "in the world" } else { "(last log, maybe a menu)" },
+                                if in_world { "in the world" } else { "(last log, maybe a menu)" },
                                 if run.removals == 0 {
                                     "no crashes"
                                 } else {
@@ -3107,10 +3108,10 @@ impl App {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if self.community_fetching {
                             ui.add_enabled(false, egui::Button::new("Checking board…").small());
-                        } else if chip_button(ui, "Refresh board").clicked() {
+                        } else if ui.add(secondary("Refresh board", 120.0, 28.0)).clicked() {
                             self.start_community_fetch();
                         }
-                        if chip_button(ui, "Open folder").clicked() {
+                        if ui.add(secondary("Open folder", 105.0, 28.0)).clicked() {
                             if let Some(dir) =
                                 community_path().and_then(|p| p.parent().map(Path::to_path_buf))
                             {
@@ -3120,10 +3121,14 @@ impl App {
                     });
                 });
                 ui.add_space(2.0);
-                ui.horizontal_wrapped(|ui| {
-                    filter_block(ui, 225.0, "Search", |ui| {
+                egui::Grid::new("community filters")
+                    .num_columns(3)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                    ui.spacing_mut().interact_size.y = 28.0;
+                    filter_block(ui, 270.0, "Search", |ui| {
                         ui.add_sized(
-                            [225.0, 26.0],
+                            [260.0, 28.0],
                             egui::TextEdit::singleline(&mut self.community_filter)
                                 .hint_text("name, area, note, settings")
                                 .vertical_align(egui::Align::Center),
@@ -3167,7 +3172,7 @@ impl App {
                         .collect();
                     areas.sort();
                     areas.dedup();
-                    filter_block(ui, 140.0, "Area", |ui| {
+                    filter_block(ui, 160.0, "Area", |ui| {
                         let current = if self.community_area_filter.is_empty() {
                             "All".to_string()
                         } else {
@@ -3175,7 +3180,7 @@ impl App {
                         };
                         egui::ComboBox::from_id_salt("community area")
                             .selected_text(current)
-                            .width(130.0)
+                            .width(150.0)
                             .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(self.community_area_filter.is_empty(), "All")
@@ -3193,11 +3198,12 @@ impl App {
                                 }
                             });
                     });
+                    ui.end_row();
                     let mut versions: Vec<String> =
                         self.community.iter().map(|entry| entry.version.clone()).collect();
                     versions.sort();
                     versions.dedup();
-                    filter_block(ui, 105.0, "Version", |ui| {
+                    filter_block(ui, 160.0, "Version", |ui| {
                         let current = if self.community_version_filter.is_empty() {
                             "All".to_string()
                         } else {
@@ -3205,7 +3211,7 @@ impl App {
                         };
                         egui::ComboBox::from_id_salt("community version")
                             .selected_text(current)
-                            .width(95.0)
+                            .width(150.0)
                             .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(
@@ -3229,17 +3235,23 @@ impl App {
                                 }
                             });
                     });
-                    filter_block(ui, 105.0, "Options", |ui| {
-                        ui.checkbox(&mut self.community_notes_only, "Notes only");
+                    filter_block(ui, 160.0, "Options", |ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(150.0, 28.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.checkbox(&mut self.community_notes_only, "Notes only");
+                            },
+                        );
                     });
-                    filter_block(ui, 100.0, "Sort", |ui| {
+                    filter_block(ui, 160.0, "Sort", |ui| {
                         egui::ComboBox::from_id_salt("community sort")
                             .selected_text(if self.community_sort == 1 {
                                 "Fastest"
                             } else {
                                 "Newest"
                             })
-                            .width(95.0)
+                            .width(150.0)
                             .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(self.community_sort == 0, "Newest")
@@ -4610,6 +4622,12 @@ fn help_button(ui: &mut egui::Ui) -> egui::Response {
         color,
     );
     response.on_hover_cursor(egui::CursorIcon::Help)
+}
+
+fn secondary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(text).color(egui::Color32::from_rgb(210, 214, 222)))
+        .fill(egui::Color32::from_rgb(40, 43, 50))
+        .min_size(egui::vec2(width, height))
 }
 
 fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
