@@ -1361,6 +1361,10 @@ pub(crate) fn host_made<'a>(
 /// (`VICTORY_TEXTURE_BUDGET_MB` sets a limit on those copies' bytes
 /// instead). Past the budget the system moves the card's memory into the
 /// PC's, which ended runs 20 and 24.
+///
+/// `VICTORY_TEXTURE_SHARE=<percent>` adds a second condition to the
+/// system's rule ([`room_in_budget`]): no more copies while those alive
+/// hold that share of the budget.
 #[cfg(windows)]
 pub(crate) fn room() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
@@ -1378,9 +1382,70 @@ pub(crate) fn room() -> bool {
     if filled < FLOOR {
         return true;
     }
+    static SHARE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    let share = *SHARE.get_or_init(|| {
+        let percent = std::env::var("VICTORY_TEXTURE_SHARE").ok().and_then(|v| v.trim().parse::<u64>().ok());
+        percent.filter(|p| (1..=90).contains(p)).unwrap_or(0)
+    });
     match crate::host::host().and_then(|h| h.video_memory()) {
-        Some([budget, used, ..]) => used < budget / 10 * 9,
+        Some([budget, used, ..]) => match room_in_budget(budget, used, filled, share) {
+            Room::Free => true,
+            Room::Full => false,
+            Room::Share => {
+                ROOM_BY_SHARE.fetch_add(1, Relaxed);
+                false
+            }
+        },
         None => filled < WITHOUT_BUDGET,
+    }
+}
+
+/// Passes that made no copy because of `VICTORY_TEXTURE_SHARE` alone
+/// (diagnostics, for the memory line).
+pub(crate) static ROOM_BY_SHARE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// What [`room_in_budget`] finds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Room {
+    /// More copies may be made.
+    Free,
+    /// The process uses nine tenths of its budget or more.
+    Full,
+    /// The system's count leaves room, the share does not.
+    Share,
+}
+
+/// [`room`]'s answer where the system gives a budget: `used` of `budget`
+/// bytes of the card's memory are in use by the process, `filled` of them
+/// by copies of textures the title fills. Room while under nine tenths of
+/// the budget, and, with a `share` in percent (0: none), while those copies
+/// hold less than that share of it. The share never makes room where the
+/// first rule finds none.
+///
+/// Why a share. A world's first seconds bring some 30,000 texture views at
+/// once, and with room on the card the pass makes copies for them up to the
+/// nine tenths: 6.3 GB of them by the 13th second of a run on a 16 GB card
+/// (RTX 5080, a budget of 12 GB). The title replaces most of those views
+/// within seconds (12,800 copies let go by the 26th second), but the
+/// system's count of the memory in use does not come down with them: 2.1
+/// GB more were counted that are neither these copies nor render targets
+/// (space the host has freed and keeps). So the first rule found no room
+/// for the next 108 s, in which not one copy was made while 6,000 to
+/// 12,500 views waited. A lead character's face was black for all of that
+/// time: its colour texture was one of those waiting (black in the colour
+/// target of the geometry pass, not only on the screen). When copies were
+/// made again, 80 to 87 % of their bytes went into that kept space (859 MB
+/// of copies for 114 MB more in use). With a share the copies cannot fill
+/// the card in the first place, the count stays under the nine tenths, and
+/// what the title lets go makes room at once.
+#[cfg(windows)]
+fn room_in_budget(budget: u64, used: u64, filled: u64, share: u64) -> Room {
+    if used >= budget / 10 * 9 {
+        Room::Full
+    } else if share > 0 && filled >= budget / 100 * share {
+        Room::Share
+    } else {
+        Room::Free
     }
 }
 
@@ -2275,6 +2340,42 @@ static RESOURCE_FUNCTIONS: Table<32> = {
 mod tests {
     use super::*;
     use crate::object::slot;
+
+    const GB: u64 = 1 << 30;
+
+    /// The system's rule alone, as it was: room while the process uses less
+    /// than nine tenths of its budget, however much of that the copies hold.
+    #[test]
+    fn without_a_share_only_the_systems_count_decides() {
+        assert_eq!(room_in_budget(12 * GB, 4 * GB, 3 * GB, 0), Room::Free);
+        assert_eq!(room_in_budget(12 * GB, 10 * GB, 9 * GB, 0), Room::Free);
+        assert_eq!(room_in_budget(12 * GB, 11 * GB, 3 * GB, 0), Room::Full);
+        // exactly nine tenths is full
+        assert_eq!(room_in_budget(10 * GB, 9 * GB, 0, 0), Room::Full);
+    }
+
+    /// With a share the copies stop short of filling the card: the burst of
+    /// a world's first seconds (6.3 GB of copies in a budget of 12 GB) is
+    /// held at the share while the system still counts room.
+    #[test]
+    fn a_share_holds_the_copies_below_the_systems_limit() {
+        let budget = 12 * GB;
+        let share = budget / 100 * 35;
+        assert_eq!(room_in_budget(budget, 6 * GB, share - 1, 35), Room::Free);
+        assert_eq!(room_in_budget(budget, 6 * GB, share, 35), Room::Share);
+        assert_eq!(room_in_budget(budget, 9 * GB, 6 * GB + GB / 4, 35), Room::Share);
+    }
+
+    /// The share is a second condition, never a way around the first: where
+    /// the system's count is at nine tenths there is no room, whatever the
+    /// copies hold.
+    #[test]
+    fn a_share_makes_no_room_where_the_system_counts_none() {
+        for share in [0, 1, 35, 90] {
+            assert_eq!(room_in_budget(12 * GB, 11 * GB, 0, share), Room::Full, "{share}");
+            assert_eq!(room_in_budget(12 * GB, 12 * GB, 2 * GB, share), Room::Full, "{share}");
+        }
+    }
 
     type Release = extern "system" fn(This) -> u32;
     type Map = extern "system" fn(This, u32, *const c_void, *mut *mut u8) -> HRESULT;
