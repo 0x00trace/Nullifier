@@ -65,8 +65,8 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   entry and copies a JSON block. Each entry keeps the Nullifier version, title
   build, profile, fps, frame and GPU time, draws, the full set of active
   settings, the GPU/OS and the sanitized log. The list has two-line rows and
-  filters for name/area/note text, game build and area, "with notes only", and
-  newest/fastest sorting; the log window shows the settings and hardware too.
+  filters for name/area/note/settings text, game build, area and version,
+  "with notes only", and newest/fastest sorting; the log window shows the settings and hardware too.
   **Refresh board** reads the published `community/leaderboard.json` from
   `main` (raw GitHub, no token or server) and marks those rows **GitHub**;
   local entries stay in `~/.local/share/nullifier/community.json`.

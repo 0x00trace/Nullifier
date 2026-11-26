@@ -1339,6 +1339,7 @@ struct App {
     community_filter: String,
     community_game: String,
     community_area_filter: String,
+    community_version_filter: String,
     community_sort: u8,
     community_notes_only: bool,
     community_status: String,
@@ -1552,6 +1553,7 @@ impl App {
             community_filter: String::new(),
             community_game: String::new(),
             community_area_filter: String::new(),
+            community_version_filter: String::new(),
             community_sort: 0,
             community_notes_only: false,
             community_status: String::new(),
@@ -2993,10 +2995,11 @@ impl App {
                     self.settings.save();
                 }
                 let run = self.last_run();
-                if let Some(fps) = run.fps {
+                let (world_fps, _, _, world_draws) = world_stats(&self.log_shown);
+                if let Some(fps) = world_fps.or(run.fps) {
                     ui.label(format!(
                         "{fps:.1} fps · {} draws a frame · {}",
-                        run.draws.unwrap_or(0),
+                        world_draws.or(run.draws).unwrap_or(0),
                         if run.removals == 0 { "no crashes" } else { "crashes" }
                     ));
                 } else {
@@ -3080,7 +3083,7 @@ impl App {
                 let mut games: Vec<String> = self.community.iter().map(|e| e.game.clone()).collect();
                 games.sort();
                 games.dedup();
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     ui.label("Filter");
                     ui.add_sized(
                         [170.0, 24.0],
@@ -3145,6 +3148,41 @@ impl App {
                                 }
                             }
                         });
+                    let mut versions: Vec<String> =
+                        self.community.iter().map(|entry| entry.version.clone()).collect();
+                    versions.sort();
+                    versions.dedup();
+                    ui.label("Version");
+                    let current = if self.community_version_filter.is_empty() {
+                        "All".to_string()
+                    } else {
+                        format!("v{}", self.community_version_filter)
+                    };
+                    egui::ComboBox::from_id_salt("community version")
+                        .selected_text(current)
+                        .width(90.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(
+                                    self.community_version_filter.is_empty(),
+                                    "All",
+                                )
+                                .clicked()
+                            {
+                                self.community_version_filter.clear();
+                            }
+                            for version in &versions {
+                                if ui
+                                    .selectable_label(
+                                        self.community_version_filter == *version,
+                                        format!("v{version}"),
+                                    )
+                                    .clicked()
+                                {
+                                    self.community_version_filter = version.clone();
+                                }
+                            }
+                        });
                     ui.checkbox(&mut self.community_notes_only, "With notes");
                 });
                 ui.add_space(4.0);
@@ -3157,6 +3195,8 @@ impl App {
                         (self.community_game.is_empty() || e.game == self.community_game)
                             && (self.community_area_filter.is_empty()
                                 || e.area == self.community_area_filter)
+                            && (self.community_version_filter.is_empty()
+                                || e.version == self.community_version_filter)
                             && (!self.community_notes_only || !e.notes.is_empty())
                             && (needle.is_empty()
                                 || e.name.to_lowercase().contains(&needle)
