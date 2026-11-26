@@ -18,6 +18,41 @@ be fixed, or you are testing and should use `tools/bench.sh`.
 .\launcher\nullifier-launch.ps1 -Game "D:\games\title"
 ```
 
+## The graphical launcher
+
+`tools/launcher` is a small native front end (egui; Windows and Linux, one
+binary) for the things the console's own menu never had:
+
+```bash
+cargo build --manifest-path tools/launcher/Cargo.toml
+./tools/launcher/target/debug/nullifier-launcher          # Windows: tools\launcher\target\debug\nullifier-launcher.exe
+```
+
+* **Play** — game folder, profile (with what it was measured on), `--detect`
+  output, and Launch/Stop. It runs the same `nullifier-launch.sh`/`.ps1` as
+  the command line, so there is one source of truth.
+* **Graphics** — the switches this build reads: texture budget, card buffers,
+  send-ahead, texture/copy toggles, indirect windows and runs. Off means the
+  variable is absent, never `=0`, so a reader that tests for presence cannot
+  be fooled. Presets: Shipped, Safe, Fast.
+* **Debug** — log level, frame captures, scripted keys, and free-form
+  `KEY=VALUE` environment, applied last.
+
+The GUI writes an exact profile to `~/.cache/nullifier/launcher-profile.json`
+and passes it with `VICTORY_PROFILES`, forcing it by name. That is why the
+launchers honour `VICTORY_PROFILES` at all: it lets a front end pass a set,
+including switching an opt-in off by omission.
+
+`--check` prints the resolved profile, the exact environment and the command
+it would run, without launching. `--tab graphics|debug` opens on that tab.
+
+**Inert on purpose:** FSR, ray tracing, render scale, V-Sync, an FPS cap and
+LOD distance are shown but disabled. Each needs engine work (see
+`docs/ROADMAP.md`); a toggle that does nothing is worse than none.
+
+The crate is its own workspace: `cargo clippy --workspace` at the root does
+not build it, and CI shared with the layer needs no GUI libraries.
+
 ## What it detects
 
 | | Linux / macOS | Windows |

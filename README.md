@@ -48,6 +48,17 @@ hardware and starts the title. To run it later, or to see what it selected:
 Windows: `cargo build --release -p nullifier`, then
 `.\launcher\nullifier-launch.ps1 -Game "D:\path\to\game"`.
 
+A graphical front end reads the same profiles and edits the switches this
+build actually has, with a debug panel for logging, captures and free-form
+environment:
+
+```bash
+cargo build --manifest-path tools/launcher/Cargo.toml
+./tools/launcher/target/debug/nullifier-launcher
+```
+
+It is a separate workspace, so it adds nothing to the layer's build or CI.
+
 Hardware support is a profile, not a fork: add one object to
 [`launcher/profiles.json`](launcher/profiles.json).
 

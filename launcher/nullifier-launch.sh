@@ -12,7 +12,7 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-PROFILES="$HERE/profiles.json"
+PROFILES="${VICTORY_PROFILES:-$HERE/profiles.json}"
 
 GAME="${VICTORY_GAME_DIR:-}"
 BIN="${VICTORY_BIN:-}"

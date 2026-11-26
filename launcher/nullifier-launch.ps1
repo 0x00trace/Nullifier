@@ -24,7 +24,8 @@ param(
 $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $Here
-$Matrix = Get-Content (Join-Path $Here "profiles.json") -Raw | ConvertFrom-Json
+$MatrixPath = if ($env:VICTORY_PROFILES) { $env:VICTORY_PROFILES } else { Join-Path $Here "profiles.json" }
+$Matrix = Get-Content $MatrixPath -Raw | ConvertFrom-Json
 
 function Get-GpuInfo {
   $vendor = "unknown"
