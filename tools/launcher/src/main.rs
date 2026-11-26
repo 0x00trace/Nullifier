@@ -576,6 +576,17 @@ struct App {
     new_key: String,
     new_value: String,
     info: Option<String>,
+    bench_start: Option<std::time::Instant>,
+    bench_phase: String,
+    bench_progress: f32,
+    bench_result: String,
+    pick_for: Pick,
+}
+
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Pick {
+    Game,
+    Capture,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -642,6 +653,11 @@ impl App {
             new_key: String::new(),
             new_value: String::new(),
             info: None,
+            bench_start: None,
+            bench_phase: String::new(),
+            bench_progress: 0.0,
+            bench_result: String::new(),
+            pick_for: Pick::Game,
         }
     }
 
@@ -722,7 +738,11 @@ impl App {
             Ok(child) => {
                 self.bench = Some(child);
                 self.log_path = log;
-                self.status = "benchmarking (about 2 minutes)".into();
+                self.bench_start = Some(std::time::Instant::now());
+                self.bench_progress = 0.02;
+                self.bench_phase = "Starting".into();
+                self.bench_result.clear();
+                self.status = "benchmark running".into();
             }
             Err(e) => self.status = format!("cannot benchmark: {e}"),
         }
@@ -751,6 +771,35 @@ impl App {
                 .status();
         }
         self.status = "stopped".into();
+    }
+
+    fn tick_bench(&mut self) {
+        let Some(start) = self.bench_start else { return };
+        let elapsed = start.elapsed().as_secs_f32();
+        let text = self
+            .log_path
+            .as_ref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .unwrap_or_default();
+        if text.contains("median") {
+            self.bench_progress = 1.0;
+            self.bench_phase = "Done".into();
+            if let Some(line) = text.lines().find(|l| l.contains("median")) {
+                self.bench_result = line.trim().to_string();
+            }
+            if !self.bench_running() {
+                self.bench_start = None;
+            }
+        } else if text.contains("world reached") {
+            self.bench_progress = 0.8;
+            self.bench_phase = "Measuring the frame rate".into();
+        } else if text.contains("bench_scene:") {
+            self.bench_progress = (0.1 + elapsed / 150.0).min(0.6);
+            self.bench_phase = format!("Loading the game ({elapsed:.0} s)");
+        } else {
+            self.bench_progress = 0.05;
+            self.bench_phase = "Starting".into();
+        }
     }
 
     fn refresh_log(&mut self) {
@@ -817,15 +866,16 @@ impl App {
         ui.add_space(4.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
             card(ui, |ui| {
-                ui.strong("Game");
+                ui.strong("Game folder");
                 ui.horizontal(|ui| {
                     let width = (ui.available_width() - 110.0).max(120.0);
                     ui.add_sized(
                         [width, 28.0],
                         egui::TextEdit::singleline(&mut self.settings.game_dir)
-                            .hint_text("the folder holding the title's files"),
+                            .hint_text("Where the game is installed"),
                     );
-                    if ui.button("Browse…").clicked() {
+                    if ui.button("Choose…").clicked() {
+                        self.pick_for = Pick::Game;
                         self.pick_dir = PathBuf::from(&self.settings.game_dir);
                         if !self.pick_dir.is_dir() {
                             self.pick_dir = home_dir().unwrap_or_else(|| PathBuf::from("/"));
@@ -863,7 +913,7 @@ impl App {
                     if let Some(name) = picked {
                         self.load_profile(&name);
                     }
-                    if ui.button("Detect").clicked() {
+                    if ui.button("Rescan").on_hover_text("Check this PC again and pick the profile.").clicked() {
                         self.detect_now();
                         let auto = auto_profile(&self.profiles, &self.hardware);
                         self.load_profile(&auto);
@@ -875,9 +925,9 @@ impl App {
                             "hardware not detected".to_string()
                         } else {
                             format!(
-                                "{} · {} MB VRAM",
+                                "{} · {:.0} GB of graphics memory",
                                 self.hardware.vendor.to_uppercase(),
-                                self.hardware.vram_mb
+                                self.hardware.vram_mb as f32 / 1024.0
                             )
                         })
                         .small()
@@ -906,8 +956,6 @@ impl App {
                 self.quick(&mut cols[0]);
                 self.last_run_card(&mut cols[1]);
             });
-            ui.add_space(6.0);
-            self.runtime_card(ui);
         });
     }
 
@@ -917,20 +965,20 @@ impl App {
         let cache = cache_dir().unwrap_or_default();
         let tree = base.join("wineserver/bin/wineserver").is_file();
         card(ui, |ui| {
-            ui.strong("Runtime");
+            ui.strong("Installation");
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("wineserver").small());
+                ui.label(egui::RichText::new("Graphics service").small());
                 ui.label(
-                    egui::RichText::new(if tree { "view tree" } else { "Proton's own (no view tree)" })
+                    egui::RichText::new(if tree { "optimised" } else { "standard" })
                         .small()
                         .color(if tree { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::from_rgb(232, 179, 74) }),
                 );
                 ui.add_space(12.0);
-                ui.label(egui::RichText::new("prefix").small());
+                ui.label(egui::RichText::new("Game data").small());
                 ui.label(egui::RichText::new(prefix.display().to_string()).small().color(egui::Color32::GRAY));
             });
             ui.horizontal(|ui| {
-                if ui.small_button("Open prefix").clicked() {
+                if ui.small_button("Open game data").clicked() {
                     open_path(&prefix);
                 }
                 if ui.small_button("Open cache").clicked() {
@@ -955,10 +1003,10 @@ impl App {
             .unwrap_or_default();
         let current = current_preset(&self.settings.sets, &shipped);
         card(ui, |ui| {
-            ui.strong("How should it run?");
+            ui.strong("Performance");
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new("Pick one. The numbers behind it are in Graphics if you want them.")
+                    egui::RichText::new("Choose one, or fine-tune it later.")
                         .small()
                         .color(egui::Color32::GRAY),
                 ),
@@ -1003,7 +1051,7 @@ impl App {
             }
             ui.add_space(2.0);
             if ui
-                .link(egui::RichText::new("Fine tuning…").small())
+                .link(egui::RichText::new("Fine-tune…").small())
                 .clicked()
             {
                 self.tab = Tab::Graphics;
@@ -1017,7 +1065,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.strong("Last run");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Bench…").clicked() {
+                    if ui.button("Measure…").on_hover_text("Run a 20-second benchmark with these settings.").clicked() {
                         self.bench_now();
                     }
                 });
@@ -1062,7 +1110,7 @@ impl App {
         ui.heading("Graphics");
         ui.add(
             egui::Label::new(
-                egui::RichText::new("Fine tuning. Hover a ? for what it does and a safe value.")
+                egui::RichText::new("These control speed, memory and stability. A ? explains any of them.")
                     .small()
                     .color(egui::Color32::GRAY),
             ),
@@ -1095,7 +1143,7 @@ impl App {
             });
             ui.add_space(4.0);
             card(ui, |ui| {
-                ui.strong("Timing (tested, with a history)");
+                ui.strong("Timing");
                 let asked = number_info(ui, sets, "VICTORY_LATE_WAIT", 0..=3, 1);
                 if info.is_none() { info = asked; }
                 let asked = switch_info(ui, sets, "VICTORY_JOIN_COPIES");
@@ -1113,10 +1161,10 @@ impl App {
         ui.heading("Advanced");
         egui::ScrollArea::vertical().show(ui, |ui| {
             card(ui, |ui| {
-                ui.strong("Every switch");
+                ui.strong("All settings");
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new("Edit the exact set a run gets. Removing a line turns the switch off.")
+                        egui::RichText::new("For troubleshooting and experiments. Each line is one setting; removing it turns it off.")
                             .small()
                             .color(egui::Color32::GRAY),
                     ),
@@ -1176,7 +1224,7 @@ impl App {
 
             ui.add_space(4.0);
             card(ui, |ui| {
-                ui.strong("Extra environment (KEY=VALUE, one per line)");
+                ui.strong("Environment variables");
                 ui.add(
                     egui::TextEdit::multiline(&mut self.settings.extra_env)
                         .desired_rows(4)
@@ -1186,18 +1234,16 @@ impl App {
 
             ui.add_space(4.0);
             card(ui, |ui| {
-                ui.strong("Not in this build");
+                ui.strong("Coming later");
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new("Disabled with the reason. A toggle that does nothing is worse than none.")
+                        egui::RichText::new("These will arrive with engine work; they cannot be turned on yet.")
                             .small()
                             .color(egui::Color32::GRAY),
                     ),
                 );
                 ui.add_enabled(false, egui::Checkbox::new(&mut self.settings.planned.fsr, "FSR upscaling"));
-                ui.add(egui::Label::new(egui::RichText::new("needs AMD's PC FidelityFX DLL and the HLE module").small()));
                 ui.add_enabled(false, egui::Checkbox::new(&mut self.settings.planned.ray_tracing, "Ray-traced light"));
-                ui.add(egui::Label::new(egui::RichText::new("BVH translates; end-to-end not wired; ~3–4× slower").small()));
                 ui.add_enabled(false, egui::Slider::new(&mut self.settings.planned.render_scale, 0.5..=1.0).text("Render scale"));
                 ui.add_enabled(false, egui::Checkbox::new(&mut self.settings.planned.vsync, "V-Sync"));
                 ui.add_enabled(false, egui::Slider::new(&mut self.settings.planned.fps_cap, 0..=120).text("FPS cap"));
@@ -1206,7 +1252,7 @@ impl App {
 
             ui.add_space(4.0);
             card(ui, |ui| {
-                ui.strong("Profile notes");
+                ui.strong("Profile details");
                 if let Some(profile) = self.profile() {
                     ui.label(format!("{} · {}", profile.name, profile.confidence));
                     ui.add(
@@ -1218,75 +1264,175 @@ impl App {
     }
 
     fn debug(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Debug");
+        ui.heading("Tools");
         egui::ScrollArea::vertical().show(ui, |ui| {
             card(ui, |ui| {
-                ui.strong("Detect");
+                ui.strong("This computer");
                 ui.horizontal(|ui| {
-                    if ui.button("Run --detect").clicked() {
+                    ui.label(if self.hardware.vendor.is_empty() {
+                        "Not checked yet".to_string()
+                    } else {
+                        format!(
+                            "{} · {:.0} GB of graphics memory",
+                            self.hardware.vendor.to_uppercase(),
+                            self.hardware.vram_mb as f32 / 1024.0
+                        )
+                    });
+                    if ui
+                        .button("Scan hardware")
+                        .on_hover_text("Checks your graphics card and picks the right profile.")
+                        .clicked()
+                    {
                         self.detect_now();
-                    }
-                    if self.settings.root.is_some() {
-                        ui.label(
-                            egui::RichText::new(format!("{} · {} MB", self.hardware.vendor, self.hardware.vram_mb))
-                                .small()
-                                .color(egui::Color32::GRAY),
-                        );
+                        let auto = auto_profile(&self.profiles, &self.hardware);
+                        self.load_profile(&auto);
                     }
                 });
-                if !self.detect_output.is_empty() {
-                    egui::ScrollArea::vertical().max_height(130.0).show(ui, |ui| {
-                        ui.monospace(&self.detect_output);
+                egui::CollapsingHeader::new("Details")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        if self.detect_output.is_empty() {
+                            ui.label(egui::RichText::new("Scan to see the details.").small());
+                        } else {
+                            ui.monospace(&self.detect_output);
+                        }
                     });
-                }
             });
 
             ui.add_space(4.0);
+            self.runtime_card(ui);
+
+            ui.add_space(4.0);
             card(ui, |ui| {
-                ui.strong("Logging and captures");
+                ui.strong("Log");
                 ui.horizontal(|ui| {
-                    ui.label("Log level");
-                    for level in ["error", "warn", "info", "debug", "trace"] {
-                        ui.selectable_value(&mut self.settings.log_level, level.to_string(), level);
+                    ui.label("Detail");
+                    let shown = match self.settings.log_level.as_str() {
+                        "warn" => "Quiet",
+                        "debug" => "Detailed",
+                        "trace" => "Everything",
+                        _ => "Normal",
+                    };
+                    egui::ComboBox::from_id_salt("log level")
+                        .selected_text(shown)
+                        .show_ui(ui, |ui| {
+                            for (value, label) in [
+                                ("warn", "Quiet"),
+                                ("info", "Normal"),
+                                ("debug", "Detailed"),
+                                ("trace", "Everything"),
+                            ] {
+                                ui.selectable_value(&mut self.settings.log_level, value.to_string(), label);
+                            }
+                        });
+                    if ui.button("Open log").clicked() {
+                        if let Some(path) = &self.log_path {
+                            open_path(path);
+                        }
                     }
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Capture folder");
-                    ui.text_edit_singleline(&mut self.settings.capture_dir);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Capture frames");
-                    ui.text_edit_singleline(&mut self.settings.capture_frames);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("Keys");
-                    ui.text_edit_singleline(&mut self.settings.keys);
                 });
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new("VICTORY_KEYS: seconds:key, e.g. 15:Enter,22:Enter")
+                        egui::RichText::new("More detail makes the log larger and the game slower. Normal is right for play.")
                             .small()
                             .color(egui::Color32::GRAY),
-                    ),
+                    )
+                    .wrap(),
                 );
             });
 
             ui.add_space(4.0);
             card(ui, |ui| {
-                ui.strong("Benchmark and profiling");
-                ui.horizontal(|ui| {
-                    if ui.button("Benchmark 20 s").clicked() {
-                        self.bench_now();
+                ui.strong("Screenshots");
+                let mut save = !self.settings.capture_dir.trim().is_empty();
+                if ui.checkbox(&mut save, "Save pictures of frames").changed() {
+                    if save {
+                        if self.settings.capture_dir.trim().is_empty() {
+                            self.settings.capture_dir = home_dir()
+                                .map(|h| h.join("Pictures/nullifier").display().to_string())
+                                .unwrap_or_default();
+                        }
+                    } else {
+                        self.settings.capture_dir.clear();
                     }
-                    if ui.button("Stop").clicked() {
-                        self.stop();
-                    }
-                    ui.label(
-                        egui::RichText::new("runs tools/bench_scene.sh with this profile; median, p10, frame, removals")
+                }
+                if save {
+                    ui.horizontal(|ui| {
+                        ui.label("Folder");
+                        ui.text_edit_singleline(&mut self.settings.capture_dir);
+                        if ui.button("Choose…").clicked() {
+                            self.pick_for = Pick::Capture;
+                            self.pick_dir = PathBuf::from(&self.settings.capture_dir);
+                            if !self.pick_dir.is_dir() {
+                                self.pick_dir = home_dir().unwrap_or_else(|| PathBuf::from("/"));
+                            }
+                            self.picking = true;
+                        }
+                    });
+                    egui::CollapsingHeader::new("Which frames")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.label("Frame numbers, separated by commas.");
+                            ui.text_edit_singleline(&mut self.settings.capture_frames);
+                        });
+                }
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.strong("Automation");
+                egui::CollapsingHeader::new("Press keys by itself")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new("Reaches a scene without playing: seconds:key, e.g. 15:Enter,22:Enter.")
+                                    .small()
+                                    .color(egui::Color32::GRAY),
+                            )
+                            .wrap(),
+                        );
+                        ui.text_edit_singleline(&mut self.settings.keys);
+                    });
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.strong("Benchmark");
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new("Runs the game for 20 seconds with these settings and reports the frame rate. Takes about two minutes.")
                             .small()
                             .color(egui::Color32::GRAY),
-                    );
+                    )
+                    .wrap(),
+                );
+                ui.horizontal(|ui| {
+                    let busy = self.bench_running();
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("Run benchmark"))
+                        .clicked()
+                    {
+                        self.bench_now();
+                    }
+                    if busy {
+                        ui.label(egui::RichText::new("Running…").small());
+                    }
                 });
+                if self.bench_progress > 0.0 {
+                    ui.add(
+                        egui::ProgressBar::new(self.bench_progress)
+                            .text(&self.bench_phase)
+                            .animate(self.bench_running()),
+                    );
+                }
+                if !self.bench_result.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&self.bench_result)
+                            .small()
+                            .color(egui::Color32::from_rgb(87, 199, 133)),
+                    );
+                }
             });
         });
     }
@@ -1294,6 +1440,7 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.tick_bench();
         self.refresh_log();
         if self.running() || self.bench_running() {
             ctx.request_repaint_after(Duration::from_millis(500));
@@ -1325,7 +1472,7 @@ impl eframe::App for App {
                     (Tab::Play, "Play"),
                     (Tab::Graphics, "Graphics"),
                     (Tab::Advanced, "Advanced"),
-                    (Tab::Debug, "Debug"),
+                    (Tab::Debug, "Tools"),
                 ] {
                     if ui
                         .add_sized(
@@ -1337,10 +1484,6 @@ impl eframe::App for App {
                         self.tab = tab;
                     }
                 }
-                ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                    ui.add_space(6.0);
-                    ui.label(egui::RichText::new(&self.status).small().color(egui::Color32::GRAY));
-                });
             });
 
         egui::TopBottomPanel::bottom("log")
@@ -1348,13 +1491,17 @@ impl eframe::App for App {
             .default_height(150.0)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.strong("Log");
-                    if ui.small_button("Clear").clicked() {
-                        self.log_shown.clear();
-                    }
-                    if let Some(path) = &self.log_path {
-                        ui.label(egui::RichText::new(path.display().to_string()).small().color(egui::Color32::GRAY));
-                    }
+                    let live = self.running() || self.bench_running();
+                    ui.label(
+                        egui::RichText::new(capitalise(&self.status))
+                            .small()
+                            .color(if live { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::GRAY }),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Clear log").clicked() {
+                            self.log_shown.clear();
+                        }
+                    });
                 });
                 egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
                     ui.monospace(&self.log_shown);
@@ -1436,7 +1583,11 @@ impl eframe::App for App {
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui.button("Use this folder").clicked() {
-                            self.settings.game_dir = self.pick_dir.display().to_string();
+                            let picked = self.pick_dir.display().to_string();
+                            match self.pick_for {
+                                Pick::Game => self.settings.game_dir = picked,
+                                Pick::Capture => self.settings.capture_dir = picked,
+                            }
                             self.picking = false;
                         }
                         if ui.button("Cancel").clicked() {
@@ -1711,6 +1862,14 @@ fn switch(ui: &mut egui::Ui, sets: &mut BTreeMap<String, String>, key: &str, lab
         } else {
             sets.remove(key);
         }
+    }
+}
+
+fn capitalise(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
     }
 }
 
