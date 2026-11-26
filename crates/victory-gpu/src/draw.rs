@@ -148,6 +148,105 @@ fn windows() -> bool {
     *ON.get_or_init(|| std::env::var_os("VICTORY_INDIRECT_WINDOW").is_some_and(|v| v == "1"))
 }
 
+/// A run of single indirect records clamped by one pass ([`runs`]): the
+/// host copy they come from (its number), their kind, and the pass's table
+/// and slots.
+struct RunOpen {
+    copy: u64,
+    kind: u32,
+    run: crate::indirect::Run,
+}
+
+/// Whether the single records of indirect draws are clamped a run at a
+/// time (`VICTORY_INDIRECT_RUNS=1`; off by default).
+///
+/// The title issues its mesh draws one record a call, in runs of up to
+/// some hundreds between two of its compute passes, and each record lies
+/// somewhere else in one large argument buffer: from one draw to the next
+/// the offset goes on by 16 bytes or by thousands, or back. A window
+/// ([`windows`]) clamps the records one step apart after a draw's, which
+/// serves under half of them (1,727 of about 3,000 indirect commands a
+/// frame still had a pass of ours in a run of this title's opening).
+///
+/// With the switch, the first single record after a command that may write
+/// arguments gets a pass of ours that clamps a run: that record and the
+/// ones the draws after it ask for, wherever they lie in the same argument
+/// buffer, up to `crate::indirect::RUN_MOST`. The pass finds them by a table
+/// that is filled as those draws are recorded (`crate::indirect::bound_run`),
+/// and the draws read their records from its slots with no pass of ours
+/// and no barrier. The run ends at a compute dispatch, at a draw whose
+/// shaders can store to buffers, at an indirect call with a count buffer or
+/// more than one record, at a record of another kind or argument buffer, at
+/// another host list, and when it is full; the next single record begins
+/// another.
+///
+/// What a draw reads is what a pass in front of it would have clamped: the
+/// run's pass runs behind everything recorded before it, and nothing that
+/// may write arguments lies between it and the run's draws.
+/// `VICTORY_INDIRECT_WINDOW_CHECK=1` clamps every such record again at its
+/// draw and compares the two on the card. Every draw has a slot of its
+/// own in the run, so a record drawn again is clamped and charged to the
+/// list's budget again, as a pass in front of the draw charged it. A run
+/// goes before a window where both switches are on.
+fn runs() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_INDIRECT_RUNS").is_some_and(|v| v == "1"))
+}
+
+/// Whether a pass of ours may clamp more than one record ([`windows`],
+/// [`runs`]): then many threads charge a list's budget at once
+/// (`crate::host`'s `card_budget`).
+pub(crate) fn clamps_together() -> bool {
+    windows() || runs()
+}
+
+/// Diagnostics of [`windows`] and [`runs`]: indirect commands since the
+/// last line, by what became of their clamp. In order: read from a window
+/// (no pass of ours); then clamped by a pass of ours because: it is a
+/// dispatch; it asks for more than one record; it has a count buffer; its
+/// shaders can store to buffers; it is the list's first; there was no
+/// window on its argument buffer (another buffer, kind or stride, or the
+/// window was ended); its record does not continue the window's walk; it
+/// is past the window's end (the next window: as meant). And the records
+/// those passes clamped in all; the commands that read their record from
+/// a run open before them (no pass of ours), and those that opened a run
+/// (one pass of ours for the run).
+#[cfg(feature = "diagnostics")]
+static CLAMP_WHY: [std::sync::atomic::AtomicU64; 12] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 12];
+
+/// The line of [`CLAMP_WHY`], per frame over `frames` frames. Nothing with
+/// both switches off: every indirect command then has a pass of its own.
+#[cfg(feature = "diagnostics")]
+pub(crate) fn clamp_line(frames: f64) {
+    if !windows() && !runs() {
+        return;
+    }
+    let n: Vec<f64> = CLAMP_WHY
+        .iter()
+        .map(|n| n.swap(0, std::sync::atomic::Ordering::Relaxed) as f64 / frames.max(1.0))
+        .collect();
+    tracing::info!(
+        "indirect commands per frame by their clamp: {:.0} read from a run a pass of ours clamped before them, {:.0} opened a run (one pass of ours each, VICTORY_INDIRECT_RUNS=1); \
+         {:.0} read from a window (no pass of ours, VICTORY_INDIRECT_WINDOW=1); a pass of ours for each of {:.0} others: {:.0} dispatches, {:.0} of more than one record, {:.0} with a count \
+         buffer, {:.0} whose shaders can store to buffers, {:.0} first on their list, {:.0} with no window on their argument buffer, {:.0} off the window's walk, {:.0} past the window's end; \
+         {:.0} records clamped by those passes",
+        n[10],
+        n[11],
+        n[0],
+        n[1..9].iter().sum::<f64>(),
+        n[1],
+        n[2],
+        n[3],
+        n[4],
+        n[5],
+        n[6],
+        n[7],
+        n[8],
+        n[9],
+    );
+}
+
 /// What one title list has set, and what its host list was last given.
 #[derive(Default)]
 pub(crate) struct State {
@@ -182,6 +281,9 @@ pub(crate) struct State {
     /// The indirect records clamped last, if later draws may still read
     /// them ([`windows`]).
     window: Option<Window>,
+    /// The run of single indirect records open on the host list, if later
+    /// draws may still join it ([`runs`]).
+    run: Option<RunOpen>,
     /// What the host list has: pipeline, root signature, heaps.
     host_pipeline: usize,
     /// Graphics, compute.
@@ -1742,10 +1844,29 @@ impl State {
         });
     }
 
+    /// Whether the shaders of the pipeline bound now can store to buffers
+    /// (or the pipeline is not known): a draw with them may write the
+    /// arguments of draws after it, which ends a run ([`runs`]). The same
+    /// test keeps such a draw out of a window or a run.
+    fn may_store(&self) -> bool {
+        crate::pipeline::host_pipeline(self.pipeline as This)
+            .is_none_or(|p| p.stages.iter().any(|stage| stage.translated().stores))
+    }
+
+    /// Before a direct draw is recorded: it ends the window ([`windows`]),
+    /// and the run if its shaders may write arguments ([`runs`]).
+    fn ends_clamps(&mut self) {
+        self.window = None;
+        if self.run.is_some() && self.may_store() {
+            self.run = None;
+        }
+    }
+
     /// Runs a dispatch on the host.
     pub(crate) fn dispatch(&mut self, list: &HostList, x: u32, y: u32, z: u32) {
-        // It may write the arguments a window holds clamped.
+        // It may write the arguments a window or a run holds clamped.
         self.window = None;
+        self.run = None;
         #[cfg(feature = "diagnostics")]
         if crate::pipeline::is_skipped(self.pipeline as This) {
             DROPPED.fetch_add(1, Ordering::Relaxed);
@@ -1894,7 +2015,7 @@ impl State {
     /// Runs a mesh dispatch of `x` groups on the host (the title's mesh
     /// programs are one-dimensional).
     pub(crate) fn dispatch_mesh(&mut self, list: &HostList, x: u32) {
-        self.window = None;
+        self.ends_clamps();
         #[cfg(feature = "diagnostics")]
         self.trace("mesh", x, 0);
         let ran = mesh_test() != 1
@@ -2217,7 +2338,7 @@ impl State {
         first: u32,
         first_instance: u32,
     ) {
-        self.window = None;
+        self.ends_clamps();
         #[cfg(feature = "diagnostics")]
         self.trace("draw", vertices, first);
         let ready = self.prepare(list, false);
@@ -2322,7 +2443,7 @@ impl State {
         base: i32,
         first_instance: u32,
     ) {
-        self.window = None;
+        self.ends_clamps();
         #[cfg(feature = "diagnostics")]
         self.trace("indexed", indices, first);
         // Indexed rectangles are drawn by the rectangle geometry stage
@@ -2455,34 +2576,110 @@ impl State {
         } else {
             None
         };
-        let windowed = windows()
-            && kind != DISPATCH
+        // A single record, which neither it nor its draw can write: what a
+        // window or a run takes.
+        let single = kind != DISPATCH
             && max == 1
             && count.is_none()
             && !p.stages.iter().any(|stage| stage.translated().stores);
+        let windowed = windows() && single;
+        let in_run = runs() && single && crate::indirect::run_takes(kind, stride, offset);
         // Another host list (a new one after a cut, or this one after its
         // reset) has another scratch buffer, or this one's with old bytes.
-        if !windowed || list.first_use(WINDOW_USE) {
+        let first_on_list = list.first_use(WINDOW_USE);
+        if !windowed || first_on_list {
             self.window = None;
+        }
+        // Anything but a single record may write arguments (a dispatch) or
+        // clamps into the scratch buffer the run's records lie in.
+        if !in_run || first_on_list {
+            self.run = None;
+        }
+        // Diagnostics: why this command gets a pass of ours, if it does.
+        #[cfg(feature = "diagnostics")]
+        let why_not = if kind == DISPATCH {
+            1
+        } else if max != 1 {
+            2
+        } else if count.is_some() {
+            3
+        } else if !single {
+            4
+        } else if first_on_list {
+            5
+        } else {
+            match &self.window {
+                None => 6,
+                Some(w) if !(w.copy == args.id() && w.kind == kind && w.stride == stride) => 6,
+                Some(w) if offset >= w.base && (offset - w.base) % u64::from(w.step) == 0 => 8,
+                Some(_) => 7,
+            }
+        };
+        // A run ([`runs`]): the record's place in the run open on its
+        // argument buffer, or in a new one, whose pass is recorded here.
+        let in_a_run = if in_run {
+            let joined = self
+                .run
+                .as_mut()
+                .filter(|r| r.copy == args.id() && r.kind == kind)
+                .and_then(|r| {
+                    r.run
+                        .place(offset)
+                        .map(|at| (r.run.scratch().clone(), at, r.run.slot_bytes()))
+                });
+            #[cfg(feature = "diagnostics")]
+            if joined.is_some() {
+                CLAMP_WHY[10].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+            joined.or_else(|| {
+                // The pass binds a compute pipeline of ours.
+                let mut run = crate::indirect::bound_run(list, &args.buffer, kind)?;
+                self.host_pipeline = 0;
+                self.host_roots[1] = 0;
+                let at = run.place(offset)?;
+                let found = (run.scratch().clone(), at, run.slot_bytes());
+                self.run = Some(RunOpen {
+                    copy: args.id(),
+                    kind,
+                    run,
+                });
+                #[cfg(feature = "diagnostics")]
+                CLAMP_WHY[11].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Some(found)
+            })
+        } else {
+            None
+        };
+        if in_run && in_a_run.is_none() {
+            // No pass could be recorded: the record is clamped alone below,
+            // into the scratch buffer a run would hold.
+            self.run = None;
         }
         let same = |w: &Window| w.copy == args.id() && w.kind == kind && w.stride == stride;
         let hit = self
             .window
             .as_ref()
+            .filter(|_| in_a_run.is_none())
             .filter(|w| same(w) && offset >= w.base)
             .filter(|w| (offset - w.base) % u64::from(w.step) == 0 && (offset - w.base) / u64::from(w.step) < u64::from(w.records))
             .map(|w| (w.scratch.clone(), offset - w.base, w.step));
-        let (bounded, at) = match hit {
-            Some((scratch, at, step)) => {
-                // Diagnostics of windows: the record clamped again and
-                // compared (`crate::indirect::window_check`).
+        let (bounded, at) = match (in_a_run, hit) {
+            (Some((scratch, at, slot)), _) => {
+                // A run's records lie in the scratch buffer a window's
+                // would: the two are not open together.
+                self.window = None;
+                // The record's bytes are up to date when the list is
+                // submitted, as for a record clamped alone.
+                args.refresh(list, arguments, len);
+                // Diagnostics: the record clamped again here and compared
+                // (`crate::indirect::window_check`).
                 if crate::indirect::window_check()
                     && crate::indirect::check_hit(
                         list,
                         (&args.buffer, offset),
-                        (kind, step),
-                        &scratch,
-                        at,
+                        (kind, slot),
+                        (&scratch, at),
+                        false,
                     )
                 {
                     self.host_pipeline = 0;
@@ -2490,7 +2687,26 @@ impl State {
                 }
                 (scratch, at)
             }
-            None => {
+            (None, Some((scratch, at, step))) => {
+                #[cfg(feature = "diagnostics")]
+                CLAMP_WHY[0].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                // Diagnostics of windows: the record clamped again and
+                // compared (`crate::indirect::window_check`).
+                if crate::indirect::window_check()
+                    && crate::indirect::check_hit(
+                        list,
+                        (&args.buffer, offset),
+                        (kind, step),
+                        (&scratch, at),
+                        true,
+                    )
+                {
+                    self.host_pipeline = 0;
+                    self.host_roots[1] = 0;
+                }
+                (scratch, at)
+            }
+            (None, None) => {
                 // A record a short step after the last window's last one
                 // (the same step as that window's, if it had one): the
                 // title walks the buffer, so the ones that step apart
@@ -2534,6 +2750,12 @@ impl State {
                     why("not bounded (no clamp, or arguments not 4-byte aligned)");
                     return false;
                 };
+                #[cfg(feature = "diagnostics")]
+                {
+                    CLAMP_WHY[why_not].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    CLAMP_WHY[9]
+                        .fetch_add(u64::from(records), std::sync::atomic::Ordering::Relaxed);
+                }
                 self.host_pipeline = 0;
                 self.host_roots[1] = 0;
                 self.window = windowed.then(|| Window {
