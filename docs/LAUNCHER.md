@@ -41,7 +41,9 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   any `.exe`, two folders deep). If the engine has not been built yet, one
   **Set up now** button runs `tools/setup.sh` in the background with a live
   tail, plain progress text and a Cancel button. No terminal is needed.
-* **Play** — the chosen game with a green "game found", the measured settings
+* **Play** — the last run's numbers separate **in-game** frames (a few hundred
+  draws or more) from menu/loading frames: the heading is the in-game median,
+  with the menu's rate beside it. The chosen game has a green "game found", the measured settings
   for this card, and one big **Play**. **Change…** reopens the picker,
   **Settings…** opens Rendering, and the three plain-language presets
   (Recommended, Low memory, Safe) plus the last run's numbers sit below. The

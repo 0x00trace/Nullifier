@@ -608,12 +608,15 @@ fn sanitize_log(raw: &str, settings: &Settings) -> String {
 /// last frame time, GPU time and draw count.
 fn world_stats(raw: &str) -> (Option<f32>, Option<f32>, Option<f32>, Option<u32>) {
     let clean = strip_ansi(raw);
-    let mut values = Vec::new();
+    let mut values: Vec<f32> = Vec::new();
     let (mut frame, mut gpu, mut draws) = (None, None, None);
     for line in clean.lines() {
         let Some(rest) = after(line, "host: ") else { continue };
+        let line_draws = before(rest, " draws/frame").and_then(last_num).map(|v| v as u32);
         if let Some(value) = before(rest, " fps,").and_then(|v| v.trim().parse().ok()) {
-            values.push(value);
+            if line_draws.is_some_and(|draws| draws >= 200) {
+                values.push(value);
+            }
         }
         if let Some(value) = before(rest, " ms/frame").and_then(last_num) {
             frame = Some(value);
@@ -625,17 +628,7 @@ fn world_stats(raw: &str) -> (Option<f32>, Option<f32>, Option<f32>, Option<u32>
             draws = Some(value as u32);
         }
     }
-    let mut world: Vec<f32> = values.iter().copied().filter(|value| *value < 10.0).collect();
-    if world.is_empty() {
-        world = values;
-    }
-    world.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let median = match world.len() {
-        0 => None,
-        n if n % 2 == 1 => Some(world[n / 2]),
-        n => Some((world[n / 2 - 1] + world[n / 2]) / 2.0),
-    };
-    (median, frame, gpu, draws)
+    (median_fps(values), frame, gpu, draws)
 }
 
 fn game_label(raw: &str) -> String {
@@ -1448,7 +1441,12 @@ enum Tab {
 
 #[derive(Clone, Default)]
 struct LastRun {
+    /// Median of the in-game frame lines (a few hundred draws or more).
     fps: Option<f32>,
+    /// Median of menu/loading lines, kept to show what the menu runs at.
+    menu_fps: Option<f32>,
+    /// Whether any line was an in-game one (a few hundred draws or more).
+    in_game: bool,
     frame: Option<f32>,
     copies_ms: Option<f32>,
     copies_mb: Option<f32>,
@@ -1459,6 +1457,15 @@ struct LastRun {
     heap_ms: Option<f32>,
     draws: Option<u32>,
     removals: u32,
+}
+
+fn median_fps(mut values: Vec<f32>) -> Option<f32> {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    match values.len() {
+        0 => None,
+        n if n % 2 == 1 => Some(values[n / 2]),
+        n => Some((values[n / 2 - 1] + values[n / 2]) / 2.0),
+    }
 }
 
 fn before<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
@@ -1932,11 +1939,23 @@ impl App {
         let Some(path) = &self.log_path else { return run };
         let Some(text) = read_tail(path, 2 * 1024 * 1024) else { return run };
         run.removals = text.matches("device removed").count() as u32;
+        let mut world: Vec<f32> = Vec::new();
+        let mut menus: Vec<f32> = Vec::new();
+        let mut last_fps = None;
         for line in text.lines() {
             let clean = strip_ansi(line);
             let Some(rest) = after(&clean, "host: ") else { continue };
-            if let Some(v) = before(rest, " fps,") {
-                run.fps = v.trim().parse().ok();
+            let mut line_draws = None;
+            if let Some(v) = before(rest, " draws/frame").and_then(last_num) {
+                line_draws = Some(v as u32);
+            }
+            if let Some(v) = before(rest, " fps,").and_then(|v| v.trim().parse::<f32>().ok()) {
+                last_fps = Some(v);
+                if line_draws.is_some_and(|draws| draws >= 200) {
+                    world.push(v);
+                } else {
+                    menus.push(v);
+                }
             }
             if let Some(v) = before(rest, " ms/frame") {
                 run.frame = last_num(v);
@@ -1968,10 +1987,16 @@ impl App {
                     run.heap_ms = Some(v);
                 }
             }
-            if let Some(v) = before(rest, " draws/frame").and_then(last_num) {
-                run.draws = Some(v as u32);
+            if let Some(draws) = line_draws {
+                run.draws = Some(draws);
             }
         }
+        run.in_game = !world.is_empty();
+        run.fps = median_fps(world).or(last_fps);
+        run.menu_fps = median_fps(menus).or_else(|| {
+            // A menu log with no draws recorded still has a 30 fps line.
+            last_fps.filter(|fps| *fps >= 15.0)
+        });
         run
     }
 
@@ -2490,7 +2515,17 @@ impl App {
             }
             ui.horizontal(|ui| {
                 ui.heading(format!("{:.1}", run.fps.unwrap_or(0.0)));
-                ui.label("fps");
+                ui.label(if run.in_game { "fps in game" } else { "fps (menu/loading)" });
+                if run.in_game {
+                    if let Some(menu) = run.menu_fps {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(format!("menu {menu:.0} fps"))
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    }
+                }
                 if let Some(draws) = run.draws {
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new(format!("{draws} draws a frame")).small().color(egui::Color32::GRAY));
@@ -2902,16 +2937,10 @@ impl App {
             self.community_status = "Choose a name first (a nickname is fine).".into();
             return None;
         }
-        let world_frames = strip_ansi(&raw)
-            .lines()
-            .filter_map(|line| after(line, "host: "))
-            .filter_map(|rest| before(rest, " fps,"))
-            .filter_map(|value| value.trim().parse::<f32>().ok())
-            .filter(|fps| *fps < 10.0)
-            .count();
-        if world_frames == 0 {
+        let (world_fps, frame, gpu, draws) = world_stats(&raw);
+        if world_fps.is_none() {
             self.community_status =
-                "The last log has no world frames (menus run at 30). Play or measure in the world first.".into();
+                "The last log has no in-game frames (menus run at 30). Play or measure in the world first.".into();
             return None;
         }
         let log = sanitize_log(&raw, &self.settings);
@@ -3036,7 +3065,7 @@ impl App {
                 }
                 ui.add_space(6.0);
                 let (world_fps, _, _, world_draws) = world_stats(&self.log_shown);
-                let in_world = world_fps.is_some_and(|fps| fps < 10.0);
+                let in_world = world_fps.is_some();
                 let run = self.last_run();
                 let fps = if in_world { world_fps } else { run.fps };
                 let draws = world_draws.or(run.draws).unwrap_or(0);
@@ -5158,6 +5187,14 @@ INFO victory_gpu::host: 4.4 fps, 227.0 ms/frame (90.0 preparing: copies 70.0 ms 
         assert_eq!(frame, Some(227.0));
         assert_eq!(gpu, Some(35.0));
         assert_eq!(draws, Some(3000));
+    }
+
+    #[test]
+    fn menus_are_not_in_game_frames() {
+        let raw = "INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (0.1 preparing; 0.2 on the GPU), 2 draws/frame\n";
+        assert_eq!(world_stats(raw).0, None);
+        let mixed = "INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame, 2 draws/frame\n                     INFO victory_gpu::host: 4.4 fps, 227.0 ms/frame, 3000 draws/frame\n";
+        assert_eq!(world_stats(mixed).0, Some(4.4));
     }
 
     #[test]
