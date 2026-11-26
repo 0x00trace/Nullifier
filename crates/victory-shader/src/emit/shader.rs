@@ -472,6 +472,11 @@ impl Shader {
                 }
             }
         }
+        // Loops in the one shape the host's converter takes, whichever
+        // passes ran: it is about what the host accepts, not about cost.
+        if super::bitcode::loops::on() {
+            self.m.single_latches();
+        }
         let mut resources = None;
         let mut bindings = Vec::new();
         let i32c = |s: &mut Self, v: u32| {
