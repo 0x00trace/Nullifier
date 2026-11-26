@@ -786,7 +786,7 @@ impl HostHeap {
         // the title wrote in a way we do not know, or a table entry no
         // used-resource entry names) read a wild address. Every slot starts
         // null instead.
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         if let Err(e) = h.fill_null(kind, size) {
             tracing::warn!(error = %e, "host descriptor heap not made null");
         }
@@ -863,7 +863,7 @@ impl HostHeap {
             return None;
         }
         #[cfg(feature = "diagnostics")]
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::DynamicAsked, 1);
         let mut guard = self.next.lock().unwrap_or_else(|e| e.into_inner());
@@ -968,7 +968,7 @@ impl HostHeap {
             let textures = self.textures.lock().unwrap_or_else(|e| e.into_inner());
             (textures.rechecks_due(frame, MOST), textures.rechecks.len() as u64)
         };
-        let began = std::time::Instant::now();
+        let began = crate::clock::Stamp::now();
         let mut found = [0, 0, waiting];
         for (index, seen) in due {
             if began.elapsed() > SPAN {

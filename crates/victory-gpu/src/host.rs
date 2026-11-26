@@ -206,8 +206,11 @@ fn trail_on() -> bool {
 
 /// Microseconds since the first call.
 pub(crate) fn now_us() -> u64 {
-    static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
-    EPOCH.get_or_init(std::time::Instant::now).elapsed().as_micros() as u64
+    static EPOCH: OnceLock<crate::clock::Stamp> = OnceLock::new();
+    EPOCH
+        .get_or_init(crate::clock::Stamp::now)
+        .elapsed()
+        .as_micros() as u64
 }
 
 /// The calling thread, as the log's other lines name threads.
@@ -331,7 +334,7 @@ fn worked() -> u64 {
 
 /// The thread that holds the submission lock stood waiting for the card
 /// from `since` until now ([`CARD_CLOCK_US`]).
-fn stood(since: std::time::Instant) {
+fn stood(since: crate::clock::Stamp) {
     CARD_CLOCK_US[2].fetch_add(since.elapsed().as_micros() as u64, Ordering::Relaxed);
 }
 
@@ -340,7 +343,7 @@ struct CardClock {
     fence: ID3D12Fence,
     /// Signals sent so far; and, while the card has reached the last of
     /// them, since when and what [`worked`] said then.
-    state: Mutex<(u64, Option<(std::time::Instant, u64)>)>,
+    state: Mutex<(u64, Option<(crate::clock::Stamp, u64)>)>,
     sent: std::sync::Condvar,
 }
 
@@ -374,7 +377,7 @@ fn card_clock_watch(clock: &'static CardClock) {
         seen = target;
         let mut state = clock.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.0 == target && state.1.is_none() {
-            state.1 = Some((std::time::Instant::now(), worked()));
+            state.1 = Some((crate::clock::Stamp::now(), worked()));
         }
     }
 }
@@ -1965,7 +1968,7 @@ struct CardPlan {
     /// Timing run: when the list that brought the copies up to date went
     /// to the card (`Host::submit` waits for it on its own).
     #[cfg(feature = "diagnostics")]
-    sync_sent: Option<std::time::Instant>,
+    sync_sent: Option<crate::clock::Stamp>,
 }
 
 /// One piece of submission-time work, in recorded order.
@@ -2729,7 +2732,7 @@ fn relay_wait(why: usize, done: impl Fn(&Line) -> bool) {
     LATE_STATS[1].fetch_add(1, Ordering::Relaxed);
     LATE_STATS[why].fetch_add(1, Ordering::Relaxed);
     let was_working = working(false);
-    let waiting = std::time::Instant::now();
+    let waiting = crate::clock::Stamp::now();
     while !done(&line) {
         line = LINE_LANDED.wait(line).unwrap_or_else(|e| e.into_inner());
     }
@@ -2808,7 +2811,7 @@ fn relay_worker() {
         match next {
             Ok(items) => host.relay_land(items, &mut fetch),
             Err(target) => {
-                let waiting = std::time::Instant::now();
+                let waiting = crate::clock::Stamp::now();
                 // SAFETY: the host's fence and this thread's event.
                 let waited = unsafe {
                     host.fence.SetEventOnCompletion(target, event).map(|()| {
@@ -2846,7 +2849,7 @@ fn relay_hand_back(back: &[Declared]) {
         return;
     }
     #[cfg(feature = "diagnostics")]
-    let scanning = std::time::Instant::now();
+    let scanning = crate::clock::Stamp::now();
     // Looked through without a lock: a piece that changes meanwhile (a
     // later flight writing, the title's bytes going in) is found now or by
     // that flight's landing, and the merge looks again under the lock.
@@ -3104,7 +3107,7 @@ fn hand_back(back: &[Declared]) {
             work.extend(spans.into_iter().map(|(from, to)| (shadow.clone(), from, to)));
         }
         #[cfg(feature = "diagnostics")]
-        let scanning = std::time::Instant::now();
+        let scanning = crate::clock::Stamp::now();
         let found = crate::shadow::find_all(&work);
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::BackScanUs, scanning.elapsed().as_micros() as u64);
@@ -3189,7 +3192,7 @@ impl Host {
     /// A new list, open for recording.
     pub(crate) fn new_list(&self) -> windows::core::Result<HostList> {
         #[cfg(feature = "diagnostics")]
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         #[cfg(feature = "diagnostics")]
         let before = private_bytes();
         let list = self.make_list();
@@ -3535,7 +3538,7 @@ impl Host {
             }
             #[cfg(feature = "diagnostics")]
             if timing() {
-                sync_sent = Some(std::time::Instant::now());
+                sync_sent = Some(crate::clock::Stamp::now());
             }
             used.push((false, sync));
         }
@@ -3761,7 +3764,7 @@ impl Host {
         };
         f.sent += 1;
         let ((allocator, list), fence, event, sent) = (f.list.clone(), f.fence.clone(), f.event, f.sent);
-        let waiting = std::time::Instant::now();
+        let waiting = crate::clock::Stamp::now();
         // SAFETY: the list's last run was waited for by this thread; live
         // buffers (the copies are held by the plans); the fence and the
         // event are this thread's.
@@ -3822,7 +3825,7 @@ impl Host {
     /// bottom-of-pipe writes and the fence signals behind it. Title memory
     /// is complete before the title is told anything.
     fn relay_land(&self, items: Vec<Late>, fetch: &mut Option<RelayFetch>) {
-        let landing = std::time::Instant::now();
+        let landing = crate::clock::Stamp::now();
         {
             let flights: Vec<&Flight> = items
                 .iter()
@@ -3981,7 +3984,7 @@ impl Host {
             let Some((fetched, data, _)) = &work.fetched else {
                 fail(format_args!("no memory to fetch what shaders wrote to the card's memory ({total} bytes)"));
             };
-            let waiting = std::time::Instant::now();
+            let waiting = crate::clock::Stamp::now();
             let (allocator, list) = &work.fetch;
             // SAFETY: the list's last run was waited for; live buffers; the
             // fence and event are ours, under the submission lock.
@@ -4207,7 +4210,7 @@ impl Host {
             LATE_STATS[11].fetch_add(flights as u64, Ordering::Relaxed);
             if flights > 0 {
                 submitting(2, flights);
-                let waiting = std::time::Instant::now();
+                let waiting = crate::clock::Stamp::now();
                 // SAFETY: the fence and event are ours, under the
                 // submission lock; `submitted` is the last value signalled.
                 unsafe {
@@ -4247,7 +4250,7 @@ impl Host {
                     ));
                 }
                 submitting(3, flights);
-                let copying = std::time::Instant::now();
+                let copying = crate::clock::Stamp::now();
                 let mut seen = std::collections::HashSet::new();
                 let mut back: Vec<Declared> = Vec::new();
                 for item in &items {
@@ -4317,7 +4320,7 @@ impl Host {
     /// still held.
     fn submit<'a>(&'a self, runs: &[&HostList], late: bool) -> Option<(std::sync::MutexGuard<'a, u64>, Sent)> {
         #[cfg(feature = "diagnostics")]
-        let called = std::time::Instant::now();
+        let called = crate::clock::Stamp::now();
         #[cfg(feature = "diagnostics")]
         crate::copystat::submission_begins();
         // One submission at a time from preparation to copy-back: snapshots
@@ -4362,7 +4365,7 @@ impl Host {
         let this_submission = STARTED.fetch_add(1, Ordering::AcqRel) + 1;
         // The ranges shaders write are counted for it (with the relay).
         crate::shadow::preparing(this_submission);
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         #[cfg(feature = "diagnostics")]
         let lock = (started - called).as_micros() as u64;
         #[cfg(feature = "diagnostics")]
@@ -4398,13 +4401,13 @@ impl Host {
             // are settled, and the asking made again: the copy-back wrote
             // title memory, which other copies of it must see.
             if behind && stale_under_flights(runs) {
-                let settling = std::time::Instant::now();
+                let settling = crate::clock::Stamp::now();
                 self.settle(&mut submitted, WHY_STALE);
                 settled += settling.elapsed();
                 crate::watch::ask_once(&ranges);
             }
         } else if behind && stale_under_flights(runs) {
-            let settling = std::time::Instant::now();
+            let settling = crate::clock::Stamp::now();
             self.settle(&mut submitted, WHY_STALE);
             settled += settling.elapsed();
         }
@@ -4423,7 +4426,7 @@ impl Host {
         // lists have not gone to the card.
         {
             #[cfg(feature = "diagnostics")]
-            let snapshots = std::time::Instant::now();
+            let snapshots = crate::clock::Stamp::now();
             crate::shadow::take_snapshots();
             #[cfg(feature = "diagnostics")]
             crate::copystat::add(crate::copystat::C::SnapshotUs, snapshots.elapsed().as_micros() as u64);
@@ -4433,7 +4436,7 @@ impl Host {
         // write follows them in the same submission.
         let flown = late && relay();
         if flown && self.card_results_low() {
-            let settling = std::time::Instant::now();
+            let settling = crate::clock::Stamp::now();
             self.settle(&mut submitted, WHY_MOST);
             settled += settling.elapsed();
         }
@@ -4441,7 +4444,7 @@ impl Host {
         if let Some(check) = card.as_ref().and_then(|c| c.check.clone()) {
             lists.push(Some(check));
         }
-        let prepared = std::time::Instant::now();
+        let prepared = crate::clock::Stamp::now();
         // Timing run: the list of ours that brought copies in the card's
         // memory up to date is waited for on its own, as every list is. Its
         // time from when it was sent goes to the sums by command, under
@@ -4518,7 +4521,7 @@ impl Host {
         submitting(2, runs.len());
         for (i, group) in groups.iter().enumerate() {
             *submitted += 1;
-            let started = std::time::Instant::now();
+            let started = crate::clock::Stamp::now();
             // SAFETY: closed lists; the fence and event are ours.
             unsafe {
                 self.queue.ExecuteCommandLists(group);
@@ -4610,7 +4613,7 @@ impl Host {
         // which tell the title the GPU is done; each range once per
         // submission, however many dispatches declared it (the world's
         // passes declare the same big ranges dozens of times).
-        let copying = std::time::Instant::now();
+        let copying = crate::clock::Stamp::now();
         // For copies in the card's memory the compare has run there: the
         // pieces that differ are fetched and merged.
         if let Some(card) = &card {
@@ -4943,7 +4946,7 @@ impl HostList {
     /// for).
     pub(crate) fn reset(&self) {
         #[cfg(feature = "diagnostics")]
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         self._alive.used();
         *self.deferred() = Deferred::default();
         self.states.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -5313,7 +5316,7 @@ impl HostList {
             return;
         }
         {
-            let started = std::time::Instant::now();
+            let started = crate::clock::Stamp::now();
             let at = self.notes.lock().unwrap_or_else(|e| e.into_inner()).len() as u32;
             if let Some((heap, _)) = self.stamps() && at < STAMPS - 1 {
                 // SAFETY: an open list and our query heap.
@@ -5736,7 +5739,7 @@ impl HostList {
         #[cfg(feature = "diagnostics")]
         use crate::copystat::{C, add};
         for step in &self.deferred().copies {
-            let started = std::time::Instant::now();
+            let started = crate::clock::Stamp::now();
             let copied = match step {
                 &Step::Copy(dst, src, len) => {
                     #[cfg(feature = "diagnostics")]
@@ -5793,7 +5796,7 @@ impl HostList {
                     // askings a frame).
                     batch.flush_one(shadow);
                     #[cfg(feature = "diagnostics")]
-                    let snapshot = std::time::Instant::now();
+                    let snapshot = crate::clock::Stamp::now();
                     shadow.writing(*address, *len);
                     #[cfg(feature = "diagnostics")]
                     {
@@ -5884,7 +5887,7 @@ impl Batch {
 
     /// Brings `[from, to)` of a copy up to date, timed.
     fn update(shadow: &crate::shadow::Shadow, from: usize, to: usize) {
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         let copied = shadow.update(from, to - from);
         let us = started.elapsed().as_micros() as u64;
         #[cfg(feature = "diagnostics")]
@@ -5912,7 +5915,7 @@ impl Batch {
         // not one per copy.
         let ahead = self.refreshes.len() > 1;
         if ahead {
-            let started = std::time::Instant::now();
+            let started = crate::clock::Stamp::now();
             let ranges: Vec<(usize, usize)> = self
                 .refreshes
                 .iter()
@@ -5926,7 +5929,7 @@ impl Batch {
             // Each copy on its own, several at a time: a copy's refresh
             // writes that copy and reads title memory, nothing of another's.
             // The time counted is the time it took, not the threads' sum.
-            let started = std::time::Instant::now();
+            let started = crate::clock::Stamp::now();
             let before = PREPARING[0].load(Ordering::Relaxed);
             let jobs: Vec<Box<dyn FnOnce() + Send>> = self
                 .refreshes
@@ -5988,7 +5991,7 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
         crate::watch::writing(dst as usize, len);
     }
     #[cfg(feature = "diagnostics")]
-    let moved = std::time::Instant::now();
+    let moved = crate::clock::Stamp::now();
     let whole = read(src, dst, len);
     #[cfg(feature = "diagnostics")]
     crate::copystat::add(crate::copystat::C::MoveUs, moved.elapsed().as_micros() as u64);
@@ -6004,7 +6007,7 @@ pub(crate) fn copy_mapped(dst: *mut u8, src: *const u8, len: usize, title_dst: b
     #[cfg(feature = "diagnostics")]
     crate::copystat::add(crate::copystat::C::Fallbacks, 1);
     #[cfg(feature = "diagnostics")]
-    let sparse = std::time::Instant::now();
+    let sparse = crate::clock::Stamp::now();
     if !title_dst && len >= 64 << 10 {
         read_sparse(src, dst, len);
     } else {
@@ -6465,19 +6468,19 @@ struct Presenter {
 /// The frame rate, shown in the window's caption every second and logged
 /// every few seconds.
 struct Meter {
-    since: std::time::Instant,
+    since: crate::clock::Stamp,
     frames: u32,
     #[cfg(feature = "diagnostics")]
     copy_stats_frames: u64,
     drawn: u64,
-    logged: std::time::Instant,
+    logged: crate::clock::Stamp,
     /// The caption the window had, once read.
     caption: Option<Vec<u16>>,
 }
 
 impl Meter {
     fn new() -> Self {
-        let now = std::time::Instant::now();
+        let now = crate::clock::Stamp::now();
         Meter {
             since: now,
             frames: 0,
@@ -6509,7 +6512,7 @@ impl Meter {
         let fps = frames / elapsed.as_secs_f64();
         let ms = elapsed.as_secs_f64() * 1000.0 / frames;
         let draws = (drawn - self.drawn) as f64 / frames;
-        (self.since, self.frames, self.drawn) = (std::time::Instant::now(), 0, drawn);
+        (self.since, self.frames, self.drawn) = (crate::clock::Stamp::now(), 0, drawn);
         // Of a frame, ms preparing submissions and ms waiting for the GPU.
         let [cpu, gpu] = [0, 1].map(|i| {
             SUBMISSION_US[i].swap(0, Ordering::Relaxed) as f64 / 1000.0 / frames
@@ -6588,7 +6591,7 @@ impl Meter {
         #[cfg(feature = "diagnostics")]
         let drops = crate::pipeline::take_drops();
         if self.logged.elapsed() >= std::time::Duration::from_secs(5) {
-            self.logged = std::time::Instant::now();
+            self.logged = crate::clock::Stamp::now();
             tracing::info!(
                 "placed texture views: {} writes of another view of the texture a slot showed (it kept the old view until the new was made)",
                 crate::descriptor::host::KEPT_VIEWS.load(Ordering::Relaxed)
@@ -7364,7 +7367,7 @@ mod batch {   // Batch::texture_due lives here; `mod tests` is already taken at 
         let submit = |dedupe: bool| {
             let mut batch = Batch::default();
             let mut hashed = 0usize;
-            let started = std::time::Instant::now();
+            let started = crate::clock::Stamp::now();
             for _ in 0..LISTS {
                 for t in &textures {
                     if !dedupe || batch.texture_due(t) {

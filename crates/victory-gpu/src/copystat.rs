@@ -544,7 +544,7 @@ fn log_memory_map() {
     const HOST: usize = 1 << 40;
     /// One page asked about stands for this much.
     const STEP: usize = 64 << 10;
-    let started = std::time::Instant::now();
+    let started = crate::clock::Stamp::now();
     // Allocation, start, bytes, committed, type, protection.
     type Region = (usize, usize, usize, bool, u32, u32);
     let mut regions: Vec<Region> = Vec::new();
@@ -860,8 +860,11 @@ fn log_memory() {
 
 /// Microseconds since the first call.
 fn now_us() -> u64 {
-    static EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    EPOCH.get_or_init(std::time::Instant::now).elapsed().as_micros() as u64
+    static EPOCH: std::sync::OnceLock<crate::clock::Stamp> = std::sync::OnceLock::new();
+    EPOCH
+        .get_or_init(crate::clock::Stamp::now)
+        .elapsed()
+        .as_micros() as u64
 }
 
 /// When the last frame was presented and when the last submission returned
@@ -949,7 +952,7 @@ fn submitter(all: &mut Vec<(u32, Submitter)>, id: u32) -> &mut Submitter {
 }
 
 /// A list call on this thread that began at `started` has returned.
-pub(crate) fn recorded(started: std::time::Instant) {
+pub(crate) fn recorded(started: crate::clock::Stamp) {
     let ns = started.elapsed().as_nanos() as u64;
     add(C::RecordCalls, 1);
     add(C::RecordNs, ns);

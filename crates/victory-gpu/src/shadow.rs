@@ -1903,7 +1903,7 @@ impl Shadow {
             // submission (on several threads: gigabytes a frame, bound by
             // memory speed), title memory read only where the GPU wrote.
             #[cfg(feature = "diagnostics")]
-            let scanning = std::time::Instant::now();
+            let scanning = crate::clock::Stamp::now();
             let differing = match found {
                 Some(found) => found,
                 None => self.differing(from, to, before),
@@ -1913,7 +1913,7 @@ impl Shadow {
                 use crate::copystat::{C, add};
                 add(C::BackScanUs, scanning.elapsed().as_micros() as u64);
                 add(C::BackDiffer, differing.len() as u64);
-                std::time::Instant::now()
+                crate::clock::Stamp::now()
             };
             // Where the copy changes (the GPU wrote, and below the title's
             // bytes come in), a kept snapshot is no longer current.
@@ -2409,7 +2409,7 @@ impl Shadow {
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::WholeBytes, (to - from) as u64);
         #[cfg(feature = "diagnostics")]
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         self.copy(from, to);
         #[cfg(feature = "diagnostics")]
         crate::copystat::whole(from, to - from, started.elapsed().as_micros() as u64);
