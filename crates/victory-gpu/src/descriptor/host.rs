@@ -1699,6 +1699,19 @@ macro_rules! once {
     }};
 }
 
+/// Moves a 2D view of a title texture to a host copy that holds the
+/// texture's mips from `held` on (`crate::resource::held_from`): the first
+/// mip the view shows and the floor of what it samples count from there.
+fn held_view(desc: &mut D3D12_SHADER_RESOURCE_VIEW_DESC, held: u32) {
+    if held == 0 || desc.ViewDimension != D3D12_SRV_DIMENSION_TEXTURE2D {
+        return;
+    }
+    // SAFETY: the member the dimension names.
+    let view = unsafe { &mut desc.Anonymous.Texture2D };
+    view.MostDetailedMip = view.MostDetailedMip.saturating_sub(held);
+    view.ResourceMinLODClamp = (view.ResourceMinLODClamp - held as f32).max(0.0);
+}
+
 /// A view description from its words, with the format as the host has it.
 fn srv_desc(words: &[u32; 10]) -> D3D12_SHADER_RESOURCE_VIEW_DESC {
     let mut words = *words;
@@ -2275,6 +2288,9 @@ fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
                     }
                 }
                 let mut desc = desc.as_ref().map(srv_desc);
+                if let Some(desc) = desc.as_mut() {
+                    held_view(desc, crate::resource::held_from(resource));
+                }
                 if !fits(texture, desc.as_mut().map(|d| &mut d.Format), false) {
                     return None;
                 }
@@ -2427,7 +2443,7 @@ pub(crate) fn placed_texture(view: &View) -> Option<View> {
         return None;
     }
     let address = u64::from(desc[10]) | u64::from(desc[11]) << 32;
-    let texture = crate::resource::texture_at(address, resource)?;
+    let texture = crate::resource::texture_at(address, resource, crate::resource::first_mip(desc))?;
     Some(View::Shader(texture as usize, desc[..10].try_into().ok()))
 }
 
@@ -2695,6 +2711,36 @@ mod tests {
         assert_eq!(dimension(None), D3D12_UAV_DIMENSION_TEXTURE2D);
         // Multisampled UAVs need a cap; they stay 2D.
         assert_eq!(dimension(Some(6)), D3D12_UAV_DIMENSION_TEXTURE2D);
+    }
+
+    /// A view of a texture from mip 3 on is, on a host copy that holds the
+    /// mips from 3 on, a view from that copy's first mip; on a copy that
+    /// holds them from 2 on, from its second. A copy with every mip takes
+    /// the view as the title wrote it, and other kinds of view are not 2D
+    /// views of one texture's mips.
+    #[test]
+    fn a_view_counts_its_mips_from_the_first_the_host_copy_holds() {
+        let view = |dimension: u32, first: u32, floor: f32| {
+            srv_desc(&[98, dimension, 0x1688, 0, first, 5, 0, floor.to_bits(), 0, 0])
+        };
+        // SAFETY: the member the dimension names.
+        let shows = |d: D3D12_SHADER_RESOURCE_VIEW_DESC| unsafe {
+            let t = d.Anonymous.Texture2D;
+            (t.MostDetailedMip, t.MipLevels, t.ResourceMinLODClamp)
+        };
+        let mut d = view(4, 3, 0.0);
+        held_view(&mut d, 3);
+        assert_eq!(shows(d), (0, 5, 0.0));
+        let mut d = view(4, 3, 4.5);
+        held_view(&mut d, 2);
+        assert_eq!(shows(d), (1, 5, 2.5));
+        let mut d = view(4, 3, 4.5);
+        held_view(&mut d, 0);
+        assert_eq!(shows(d), (3, 5, 4.5));
+        // a 2D array view: left as it is
+        let mut d = view(5, 3, 0.0);
+        held_view(&mut d, 3);
+        assert_eq!(shows(d).0, 3);
     }
 
     /// Views of one placed texture are told from views of others by the

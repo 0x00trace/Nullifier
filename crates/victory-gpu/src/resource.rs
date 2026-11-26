@@ -1155,6 +1155,10 @@ struct Hosted {
     gone: std::sync::atomic::AtomicBool,
     /// A texture of [`PLACED_TEXTURES`].
     placed: std::sync::atomic::AtomicBool,
+    /// The first mip the host copy holds ([`held_for`]): 0, every mip, for
+    /// all but a texture made for a view that shows a streamed texture
+    /// from a later mip on ([`texture_at`]).
+    held: std::sync::atomic::AtomicU32,
 }
 
 /// Counts for the memory line: host copies of textures the title fills
@@ -1303,7 +1307,8 @@ fn hosted(this: This, make: bool) -> Option<Made> {
             .clear
             .as_ref()
             .map_or(std::ptr::null(), |c| std::ptr::from_ref(c).cast::<c_void>());
-        let Some(texture) = host_texture(&r.desc, r.host.state, clear) else {
+        let shown = shown_from(&r.desc, r.host.held.load(Relaxed));
+        let Some(texture) = host_texture(&shown, r.host.state, clear) else {
             r.host.refused.store(true, Relaxed);
             return None;
         };
@@ -1773,6 +1778,7 @@ fn hand_out_resource(
             refused: std::sync::atomic::AtomicBool::new(false),
             gone: std::sync::atomic::AtomicBool::new(false),
             placed: std::sync::atomic::AtomicBool::new(false),
+            held: std::sync::atomic::AtomicU32::new(0),
         },
     });
     // The host copy waits for the texture's first use ([`Hosted`]).
@@ -2010,12 +2016,14 @@ pub(crate) extern "system" fn create_at_address(
 /// Textures the title placed in its own memory and views without a
 /// resource object (device 0x230, the title's streamed and
 /// interface textures), by address and description: a resource at that
-/// address, made the first time a draw reads one.
+/// address, made the first time a draw reads one. One for each first mip a
+/// host copy holds ([`held_for`]): the texture from a later mip on is a
+/// smaller texture on the host.
 /// The resource is kept for the run (views and lists name its address);
 /// its host texture is let go when nothing names it any more
 /// ([`let_go_idle`]) and made again on the next use.
 #[cfg(windows)]
-static PLACED_TEXTURES: std::sync::Mutex<std::collections::BTreeMap<(u64, [u32; 14]), usize>> =
+static PLACED_TEXTURES: std::sync::Mutex<std::collections::BTreeMap<(u64, [u32; 14], u32), usize>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// The bytes of title memory a texture with the resource description
@@ -2065,12 +2073,110 @@ pub(crate) fn first_mip(view: &[u32]) -> u32 {
     }
 }
 
-/// The resource for a texture placed at `address` with the resource
-/// description `desc` (as words), made on first use.
+/// Whether the host copy of a streamed texture holds only the mips its
+/// view shows ([`held_for`]). On by default; `VICTORY_SHOWN_MIPS=0` makes
+/// every host copy with all the mips the title describes, as before.
 #[cfg(windows)]
-pub(crate) fn texture_at(address: u64, desc: &[u32; 14]) -> Option<This> {
+fn shown_mips() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SHOWN_MIPS").is_none_or(|v| v != "0"))
+}
+
+/// The first mip the host copy holds of a texture described by `desc` of
+/// which a view shows the mips from `first` on: `first`, or the nearest
+/// larger mip the host makes a texture of (a block-compressed texture is
+/// whole blocks). 0, every mip, for all but block-compressed 2D textures
+/// of one slice that the title fills: those are the ones a title streams,
+/// and nothing on the host writes them.
+///
+/// Why. A title that streams textures describes every mip of them and has
+/// memory for the small ones first; its view says from which mip on
+/// ([`first_mip`], [`placed_bytes_from`]). The host copy was made with
+/// every mip all the same. In a run of 235 s the texture pass uploaded
+/// 30,931 placed textures whose views showed 2,563 MB, into host copies of
+/// 11,205 MB; the 6,640 of them shown from mip 3 on held 159 MB in 5,717
+/// MB. The card filled with mips that hold nothing, the pass found no room
+/// for more copies ([`room`]) and thousands of textures waited for minutes:
+/// a lead character's face stayed black for most of the opening.
+#[cfg(windows)]
+fn held_for(desc: &ResourceDesc, first: u32) -> u32 {
+    const TEXTURE_2D: u32 = 3;
+    let streamed = desc.dimension == TEXTURE_2D
+        && desc.depth_or_array_size == 1
+        && desc.sample_count <= 1
+        && fills(desc)
+        && element(desc.format).is_some_and(|(_, texels)| texels == 4);
+    if first == 0 || first >= u32::from(desc.mip_levels) || !streamed {
+        return 0;
+    }
+    let Some(texture) = texture_layout(desc).filter(|t| t.planes.len() == 1) else {
+        return 0;
+    };
+    let layout = &texture.planes[0].layout;
+    let whole_blocks = |mip: u32| {
+        let (width, height) = (desc.width >> mip, u64::from(desc.height >> mip));
+        width >= 4 && height >= 4 && width % 4 == 0 && height % 4 == 0
+    };
+    // Only where the title's layout ends behind the mips held, as the
+    // upload asks (`crate::texture`'s staging).
+    (1..=first)
+        .rev()
+        .find(|&mip| whole_blocks(mip) && layout.bytes_from(mip) < layout.size)
+        .unwrap_or(0)
+}
+
+/// [`held_for`] of a description in words, remembered: it is asked for
+/// every view of a placed texture a draw or the texture pass looks at.
+#[cfg(windows)]
+fn held_of(desc: &[u32; 14], first: u32) -> u32 {
+    type Held = std::collections::BTreeMap<([u32; 14], u32), u32>;
+    static HELD: std::sync::Mutex<Held> = std::sync::Mutex::new(Held::new());
+    if first == 0 || !shown_mips() {
+        return 0;
+    }
+    let mut held = HELD.lock().unwrap_or_else(|e| e.into_inner());
+    *held.entry((*desc, first)).or_insert_with(|| {
+        // SAFETY: 56 bytes in the description's layout.
+        let d = unsafe { desc.as_ptr().cast::<ResourceDesc>().read_unaligned() };
+        held_for(&d, first)
+    })
+}
+
+/// `desc` as the description of its mips from `held` on (a mip less than
+/// its count: [`held_for`]).
+#[cfg(windows)]
+fn shown_from(desc: &ResourceDesc, held: u32) -> ResourceDesc {
+    let mut shown = *desc;
+    if held > 0 {
+        shown.width = (desc.width >> held).max(1);
+        shown.height = (desc.height >> held).max(1);
+        shown.mip_levels = desc.mip_levels.saturating_sub(held as u16).max(1);
+    }
+    shown
+}
+
+/// The first mip the host copy of title texture `this` holds: its
+/// subresources and the mips of its views count from there. 0 for all but
+/// the textures [`texture_at`] makes for views from a later mip on.
+#[cfg(windows)]
+pub(crate) fn held_from(this: This) -> u32 {
+    if this.is_null() {
+        return 0;
+    }
+    resource(this)
+        .host
+        .held
+        .load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The resource for a texture placed at `address` with the resource
+/// description `desc` (as words) that a view shows from mip `first` on,
+/// made on first use.
+#[cfg(windows)]
+pub(crate) fn texture_at(address: u64, desc: &[u32; 14], first: u32) -> Option<This> {
+    let held = held_of(desc, first);
     let mut map = PLACED_TEXTURES.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(&r) = map.get(&(address, *desc)) {
+    if let Some(&r) = map.get(&(address, *desc, held)) {
         return Some(r as This);
     }
     // SAFETY: 56 bytes in the description's layout.
@@ -2091,11 +2197,12 @@ pub(crate) fn texture_at(address: u64, desc: &[u32; 14]) -> Option<This> {
     if made != S_OK {
         return None;
     }
-    map.insert((address, *desc), out as usize);
-    resource(out)
-        .host
-        .placed
+    // Under the map's lock: no one finds the resource before this is said.
+    map.insert((address, *desc, held), out as usize);
+    let host = &resource(out).host;
+    host.placed
         .store(true, std::sync::atomic::Ordering::Relaxed);
+    host.held.store(held, std::sync::atomic::Ordering::Relaxed);
     Some(out)
 }
 
@@ -2275,6 +2382,111 @@ static RESOURCE_FUNCTIONS: Table<32> = {
 mod tests {
     use super::*;
     use crate::object::slot;
+
+    /// A 2D texture of one slice as a title describes one it streams.
+    fn streamed(width: u64, height: u32, mips: u16, format: u32) -> ResourceDesc {
+        ResourceDesc {
+            dimension: 3,
+            alignment: 0,
+            width,
+            height,
+            depth_or_array_size: 1,
+            mip_levels: mips,
+            format,
+            sample_count: 1,
+            sample_quality: 0,
+            layout: 0x105,
+            flags: 0,
+        }
+    }
+
+    const BC7: u32 = 98;
+
+    /// The host copy of a streamed texture holds the mips its view shows:
+    /// of a 2048x2048 texture shown from mip 3 on, a 256x256 texture of the
+    /// nine mips from there. (It held all twelve: 5.6 MB on the card for
+    /// the 87 KB the title has streamed in.)
+    #[test]
+    fn a_streamed_textures_host_copy_holds_the_mips_its_view_shows() {
+        let d = streamed(2048, 2048, 12, BC7);
+        assert_eq!(held_for(&d, 3), 3);
+        let shown = shown_from(&d, 3);
+        assert_eq!((shown.width, shown.height, shown.mip_levels), (256, 256, 9));
+        assert_eq!((shown.format, shown.dimension), (d.format, d.dimension));
+        // shown whole: every mip, the description as it is
+        assert_eq!(held_for(&d, 0), 0);
+        let whole = shown_from(&d, 0);
+        assert_eq!(
+            (whole.width, whole.height, whole.mip_levels),
+            (2048, 2048, 12)
+        );
+    }
+
+    /// The host makes a block-compressed texture of whole blocks only: a
+    /// view from a mip smaller than a block, or of a size that is not whole
+    /// blocks, gets a copy from the nearest larger mip that is.
+    #[test]
+    fn a_host_copy_starts_at_a_mip_of_whole_blocks() {
+        let d = streamed(2048, 2048, 12, BC7);
+        // 4x4 is mip 9; mips 10 and 11 are 2x2 and 1x1
+        assert_eq!(held_for(&d, 9), 9);
+        assert_eq!(held_for(&d, 10), 9);
+        assert_eq!(held_for(&d, 11), 9);
+        // 1000, 500, 250, 125: only the first two are whole blocks
+        let odd = streamed(1000, 1000, 10, BC7);
+        assert_eq!(held_for(&odd, 1), 1);
+        assert_eq!(held_for(&odd, 3), 1);
+        // 12x12 has no smaller mip of whole blocks
+        assert_eq!(held_for(&streamed(12, 12, 4, BC7), 2), 0);
+    }
+
+    /// Every other texture keeps every mip on the host: one that is not
+    /// block-compressed (a view placed in a render target's memory shows
+    /// the target's own texels), arrays and volumes, textures the host
+    /// renders to, and a view that names a mip the texture does not have.
+    #[test]
+    fn other_textures_keep_every_mip_on_the_host() {
+        const RGBA8: u32 = 28;
+        assert_eq!(held_for(&streamed(2048, 2048, 12, RGBA8), 3), 0);
+        let mut array = streamed(2048, 2048, 12, BC7);
+        array.depth_or_array_size = 6;
+        assert_eq!(held_for(&array, 3), 0);
+        let mut volume = streamed(256, 256, 9, BC7);
+        (volume.dimension, volume.depth_or_array_size) = (4, 256);
+        assert_eq!(held_for(&volume, 3), 0);
+        let mut target = streamed(2048, 2048, 12, RGBA8);
+        target.flags = 1;
+        assert_eq!(held_for(&target, 3), 0);
+        assert_eq!(held_for(&streamed(2048, 2048, 12, BC7), 12), 0);
+    }
+
+    /// With a host device: a view from mip 3 on of a 512x512 texture of ten
+    /// mips gets a host copy of 64x64 and seven mips, the same view again
+    /// the same texture, and a view of all of that memory another texture,
+    /// with every mip.
+    #[test]
+    fn the_host_makes_a_streamed_textures_copy_from_the_mip_shown() {
+        if crate::host::host().is_none() {
+            return;
+        }
+        let words: [u32; 14] = [3, 0, 0, 0, 512, 0, 512, 0xa_0001, BC7, 1, 0, 0x105, 0, 0];
+        let bytes = placed_bytes(&words).expect("a texture's size") as usize;
+        // Kept: the resources are (`PLACED_TEXTURES`).
+        let memory = Box::leak(vec![0u8; bytes].into_boxed_slice());
+        let address = memory.as_ptr() as u64;
+        let low = texture_at(address, &words, 3).expect("a resource");
+        let whole = texture_at(address, &words, 0).expect("a resource");
+        assert_ne!(low, whole);
+        assert_eq!(texture_at(address, &words, 3), Some(low));
+        assert_eq!((held_from(low), held_from(whole)), (3, 0));
+        // SAFETY: live resources.
+        let of = |this: This| unsafe {
+            let d = host_resource(this).expect("a host copy").GetDesc();
+            (d.Width, d.Height, d.MipLevels)
+        };
+        assert_eq!(of(low), (64, 64, 7));
+        assert_eq!(of(whole), (512, 512, 10));
+    }
 
     type Release = extern "system" fn(This) -> u32;
     type Map = extern "system" fn(This, u32, *const c_void, *mut *mut u8) -> HRESULT;

@@ -46,6 +46,9 @@ pub(crate) struct Staging {
     /// The first of them that is uploaded, and the bytes of title memory
     /// read for it and the smaller ones.
     first: u32,
+    /// The first of them the host texture holds: its subresources count
+    /// from there (`crate::resource::held_from`).
+    held: u32,
     size: usize,
     /// The staging buffer's bytes (counted in `STAGED` while it lives).
     bytes: u64,
@@ -520,6 +523,9 @@ pub(crate) fn upload(list: &HostList, resource: This, texture: &ID3D12Resource) 
 /// placed texture the title may have no memory for the larger ones, and
 /// what lies there is another texture's.
 pub(crate) fn upload_from(list: &HostList, resource: This, texture: &ID3D12Resource, first: u32) {
+    // A host copy that holds the mips from a later one on is uploaded from
+    // that one at the earliest.
+    let first = first.max(crate::resource::held_from(resource));
     let host_written = HOST_WRITTEN
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -628,7 +634,7 @@ impl Staging {
     /// The texture's subresource the `i`th part of the staging buffer is.
     fn subresource(&self, i: usize) -> u32 {
         let (mip, slice) = self.part(i);
-        slice * self.mips + mip
+        host_subresource(mip, slice, self.mips, self.held)
     }
 
     /// Detiles the texture memory into the staging buffer if it changed
@@ -1167,6 +1173,9 @@ pub(crate) fn mapped_bytes(at: *const u8, len: usize) -> u64 {
 /// The staging state of a title texture from mip `first` on, made on first
 /// use (and made anew for larger mips than the one there holds).
 fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<Staging>> {
+    // The host copy holds the title's mips from this one on.
+    let held = crate::resource::held_from(resource);
+    let first = first.max(held);
     let mut map = STAGING.lock().unwrap_or_else(|e| e.into_inner());
     let map = map.get_or_insert_with(HashMap::new);
     if let Some(s) = map.get(&(resource as usize))
@@ -1190,17 +1199,20 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
     let host = host()?;
     // SAFETY: a live resource.
     let d = unsafe { texture.GetDesc() };
+    let mips = u32::from(d.MipLevels) + held;
     // Only where the title's layout can end behind the smaller mips.
-    let first = if first < u32::from(d.MipLevels) && layout.bytes_from(first) < layout.size {
+    let first = if first < mips && layout.bytes_from(first) < layout.size {
         first
     } else {
-        0
+        held
     };
     let size = layout.bytes_from(first) as usize;
+    // The host copy's subresource that is mip `first`.
+    let from = first - held;
     let count = if d.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D {
         u32::from(d.MipLevels)
     } else {
-        u32::from(d.MipLevels) * u32::from(d.DepthOrArraySize) - first
+        u32::from(d.MipLevels) * u32::from(d.DepthOrArraySize) - from
     };
     let mut footprints = vec![D3D12_PLACED_SUBRESOURCE_FOOTPRINT::default(); count as usize];
     let mut rows = vec![0u32; count as usize];
@@ -1209,7 +1221,7 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
     unsafe {
         host.device.GetCopyableFootprints(
             &d,
-            first,
+            from,
             count,
             0,
             Some(footprints.as_mut_ptr()),
@@ -1236,8 +1248,9 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
         footprints,
         rows,
         layout,
-        mips: u32::from(d.MipLevels),
+        mips,
         first,
+        held,
         size,
         bytes: total,
         memory,
@@ -1248,6 +1261,76 @@ fn staging(resource: This, texture: &ID3D12Resource, first: u32) -> Option<Arc<S
     });
     map.insert(resource as usize, s.clone());
     Some(s)
+}
+
+/// The host copy's subresource that is mip `mip` of array slice `slice` of
+/// a title texture of `mips` mips, where the copy holds them from `held`
+/// on.
+fn host_subresource(mip: u32, slice: u32, mips: u32, held: u32) -> u32 {
+    slice * (mips - held) + mip - held
+}
+
+#[cfg(test)]
+mod held_tests {
+    use super::host_subresource;
+
+    /// A host copy that holds a texture's mips from a later one on counts
+    /// its subresources from that mip: the upload of the title's mip 3 into
+    /// a copy made from mip 3 goes to the copy's first subresource. A copy
+    /// with every mip counts as the title does.
+    #[test]
+    fn a_host_copy_counts_its_subresources_from_the_first_mip_it_holds() {
+        assert_eq!(host_subresource(3, 0, 12, 3), 0);
+        assert_eq!(host_subresource(4, 0, 12, 3), 1);
+        assert_eq!(host_subresource(11, 0, 12, 3), 8);
+        // every mip, and array slices of whole chains
+        assert_eq!(host_subresource(0, 0, 12, 0), 0);
+        assert_eq!(host_subresource(3, 0, 12, 0), 3);
+        assert_eq!(host_subresource(2, 1, 5, 0), 7);
+    }
+
+    /// With a host device: the staging buffer of a 512x512 texture of ten
+    /// mips whose host copy holds the mips from 3 on has the seven parts of
+    /// that copy, mip 3 (64x64) first; they go to the copy's subresources 0
+    /// to 6, and the title's memory detiles into them. Asked for from mip 0
+    /// it is the same staging buffer: the copy has no larger mip. The copy
+    /// with every mip, uploaded from mip 3 on, takes the same seven parts
+    /// as its subresources 3 to 9.
+    #[test]
+    fn a_staging_buffer_names_the_subresources_of_the_copy_it_fills() {
+        if crate::host::host().is_none() {
+            return;
+        }
+        const BC7: u32 = 98;
+        let words: [u32; 14] = [3, 0, 0, 0, 512, 0, 512, 0xa_0001, BC7, 1, 0, 0x105, 0, 0];
+        let bytes = crate::resource::placed_bytes(&words).expect("a texture's size") as usize;
+        // Kept: the resources made for it are.
+        let memory = Box::leak(vec![0x5au8; bytes].into_boxed_slice());
+        let address = memory.as_ptr() as u64;
+        let parts = |s: &super::Staging| {
+            (0..s.footprints.len())
+                .map(|i| s.subresource(i))
+                .collect::<Vec<_>>()
+        };
+
+        let low = crate::resource::texture_at(address, &words, 3).expect("a resource");
+        let copy = crate::resource::host_resource(low).expect("a host copy");
+        let s = super::staging(low, copy, 3).expect("a staging buffer");
+        assert_eq!((s.first, s.held, s.mips, s.footprints.len()), (3, 3, 10, 7));
+        assert_eq!(s.footprints[0].Footprint.Width, 64);
+        assert_eq!(parts(&s), [0, 1, 2, 3, 4, 5, 6]);
+        s.detile(&memory[..s.size]);
+        let again = super::staging(low, copy, 0).expect("a staging buffer");
+        assert!(std::sync::Arc::ptr_eq(&s, &again));
+
+        let whole = crate::resource::texture_at(address, &words, 0).expect("a resource");
+        let copy = crate::resource::host_resource(whole).expect("a host copy");
+        let s = super::staging(whole, copy, 3).expect("a staging buffer");
+        assert_eq!((s.first, s.held, s.mips, s.footprints.len()), (3, 0, 10, 7));
+        assert_eq!(s.footprints[0].Footprint.Width, 64);
+        assert_eq!(parts(&s), [3, 4, 5, 6, 7, 8, 9]);
+        s.detile(&memory[..s.size]);
+    }
 }
 
 #[cfg(test)]
