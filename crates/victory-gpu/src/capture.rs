@@ -402,9 +402,86 @@ pub(crate) fn forget_targets() {
     }
 }
 
+/// `VICTORY_DUMP_WORLD_FORMATS=<format>[,<format>...]` (host format numbers; with
+/// `VICTORY_CAPTURE_WORLD` and a capture folder): beside every world
+/// frame's saved picture, the full-screen target of each of these formats
+/// that was last rendered to is saved too
+/// (`frame-<n>-9<k>-<resource>-<w>x<h>-f<format>.png`). One target costs a
+/// fraction of a second, where all of a frame's targets
+/// (`VICTORY_DUMP_TARGETS`) cost seconds and so shift the cutscene, which
+/// follows the clock. Format 27 is the first target of the title's
+/// geometry pass (surface colour): a face that is black on the screen is
+/// black there if its texture is missing, and has its colours there if the
+/// lighting lost it.
+fn world_formats() -> &'static [u32] {
+    static FORMATS: std::sync::OnceLock<Vec<u32>> = std::sync::OnceLock::new();
+    FORMATS.get_or_init(|| {
+        if folder().is_none() || !world_on() {
+            return Vec::new();
+        }
+        let list = std::env::var("VICTORY_DUMP_WORLD_FORMATS").unwrap_or_default();
+        list.split(',').filter_map(|f| f.trim().parse().ok()).collect()
+    })
+}
+
+/// The target of each of [`world_formats`] last rendered to: its format,
+/// the title's resource and the host copy (held, as in [`TARGETS`]).
+static LATEST: std::sync::Mutex<Vec<(u32, usize, std::sync::Arc<crate::resource::HostTexture>)>> =
+    std::sync::Mutex::new(Vec::new());
+
+/// Keeps `resource` as the latest target of its format, if it is a
+/// full-screen target (16:9, 1,000 rows or more) of one of [`world_formats`].
+fn latest_target(resource: crate::object::This) {
+    let Some(copy) = crate::resource::host_copy(resource) else { return };
+    let mut latest = LATEST.lock().unwrap_or_else(|e| e.into_inner());
+    if latest.iter().any(|(_, _, held)| std::sync::Arc::ptr_eq(held, &copy)) {
+        return;
+    }
+    // SAFETY: a live resource.
+    let d = unsafe { copy.texture.GetDesc() };
+    let format = d.Format.0 as u32;
+    if !world_formats().contains(&format)
+        || d.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D
+        || d.SampleDesc.Count > 1
+        || d.Height < 1000
+        || d.Width * 9 != u64::from(d.Height) * 16
+    {
+        return;
+    }
+    latest.retain(|&(f, _, _)| f != format);
+    latest.push((format, resource as usize, copy));
+}
+
+/// At the present of `frame`: with `VICTORY_DUMP_WORLD_FORMATS`, saves the
+/// latest target of each format if this is a world frame whose picture is
+/// saved.
+pub(crate) fn dump_world_formats(frame: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    if world_formats().is_empty() {
+        return;
+    }
+    let first = WORLD.load(Relaxed);
+    if first == u64::MAX || frame <= first || !wanted(frame) {
+        return;
+    }
+    let Some(host) = crate::host::host() else { return };
+    let latest = LATEST.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    for (k, (_, resource, copy)) in latest.iter().enumerate() {
+        // SAFETY: a live resource.
+        let d = unsafe { copy.texture.GetDesc() };
+        dump_one(host, &copy.texture, copy.state.load(Relaxed), frame, 900 + k, *resource as crate::object::This, &d);
+    }
+}
+
 /// Notes a title texture the frame being built renders to or writes.
 pub(crate) fn note_target(resource: crate::object::This) {
-    if resource.is_null() || !(dump_black() > 0 || dump_on() && listed(crate::queue::presented() + 1)) {
+    if resource.is_null() {
+        return;
+    }
+    if !world_formats().is_empty() {
+        latest_target(resource);
+    }
+    if !(dump_black() > 0 || dump_on() && listed(crate::queue::presented() + 1)) {
         return;
     }
     let mut targets = TARGETS.lock().unwrap_or_else(|e| e.into_inner());
