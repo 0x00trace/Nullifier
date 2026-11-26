@@ -209,6 +209,12 @@ struct Settings {
     /// `Esc=Menu,Enter=A,...` for the keyboard stand-in pad. Empty = defaults.
     #[serde(default)]
     keyboard: String,
+    #[serde(default)]
+    mouse_look: bool,
+    #[serde(default = "default_mouse_sensitivity")]
+    mouse_sensitivity: f32,
+    #[serde(default)]
+    mouse_invert: bool,
     /// The one-time experimental warning on the Graphics page was acknowledged.
     #[serde(default)]
     game_warning_seen: bool,
@@ -253,6 +259,9 @@ impl Default for Settings {
             planned: Planned::default(),
             show_advanced: false,
             keyboard: String::new(),
+            mouse_look: false,
+            mouse_sensitivity: 0.02,
+            mouse_invert: false,
             game_warning_seen: false,
             root: None,
             reloaded_profile: false,
@@ -303,6 +312,10 @@ impl Settings {
             let _ = std::fs::write(path, text);
         }
     }
+}
+
+fn default_mouse_sensitivity() -> f32 {
+    0.02
 }
 
 fn profile_hash(root: &Path) -> u64 {
@@ -903,6 +916,16 @@ fn launch_command(root: &Path, settings: &Settings, profile_file: &Path) -> Comm
     }
     if !settings.keyboard.trim().is_empty() {
         cmd.env("VICTORY_KEYBOARD", settings.keyboard.trim());
+    }
+    if settings.mouse_look {
+        cmd.env("VICTORY_MOUSE_LOOK", "1");
+        cmd.env(
+            "VICTORY_MOUSE_SENS",
+            format!("{:.3}", settings.mouse_sensitivity),
+        );
+        if settings.mouse_invert {
+            cmd.env("VICTORY_MOUSE_INVERT", "1");
+        }
     }
     for (k, v) in extra_env(settings) {
         cmd.env(k, v);
@@ -2337,14 +2360,46 @@ impl App {
             ui.add_space(4.0);
             card(ui, |ui| {
                 ui.strong("Mouse");
-                ui.label(
-                    egui::RichText::new("Mouse look is not available yet.")
-                        .color(egui::Color32::from_rgb(232, 179, 74)),
-                );
+                let mut changed = false;
+                if ui
+                    .checkbox(
+                        &mut self.settings.mouse_look,
+                        "Mouse look (moves the right stick)",
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+                ui.add_enabled_ui(self.settings.mouse_look, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Sensitivity");
+                        if ui
+                            .add(
+                                egui::Slider::new(
+                                    &mut self.settings.mouse_sensitivity,
+                                    0.005..=0.08,
+                                )
+                                .fixed_decimals(3),
+                            )
+                            .changed()
+                        {
+                            changed = true;
+                        }
+                    });
+                    if ui
+                        .checkbox(&mut self.settings.mouse_invert, "Invert vertical")
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                });
+                if changed {
+                    self.settings.save();
+                }
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new(
-                            "The title reads the right stick for looking. Mapping the mouse to it needs a new host input path and is the next step after this page.",
+                            "Experimental. The cursor is held in the game window and its movement turns the right stick. Only active while no controller is connected; menu navigation with the mouse is not included.",
                         )
                         .small()
                         .color(egui::Color32::GRAY),

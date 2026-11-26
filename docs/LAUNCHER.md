@@ -56,8 +56,10 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   **Check again** button, and the keyboard bindings used while no pad is
   connected. Apply writes `VICTORY_KEYBOARD` for the next run; Accept is a
   normal key name (`Enter`, `Space`, `F1`, or one letter). Sticks and triggers
-  stay W/A/S/D, I/J/K/L, Z/C. Mouse look is not implemented yet and the page
-  says so.
+  stay W/A/S/D, I/J/K/L, Z/C. **Mouse look** is opt-in and experimental: while
+  the game has focus and no pad is connected, the cursor is kept in the window
+  and its movement turns the right stick; sensitivity and inversion are on the
+  same page. Menu navigation with the mouse is not included.
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every

@@ -186,6 +186,17 @@ trait Source: Send {
     fn rumble(&mut self, slot: usize, low: u16, high: u16);
 }
 
+/// Mouse look: right stick from cursor movement, opt-in (see the host module).
+#[cfg(windows)]
+fn mouse_stick() -> (f32, f32) {
+    host::mouse_stick()
+}
+
+#[cfg(not(windows))]
+fn mouse_stick() -> (f32, f32) {
+    (0.0, 0.0)
+}
+
 fn fallback(keys: &[KeyState]) -> PadState {
     let on = |vk: u8| {
         if keys.iter().any(|k| k.virtual_key == vk) {
@@ -194,6 +205,7 @@ fn fallback(keys: &[KeyState]) -> PadState {
             0.0
         }
     };
+    let (mouse_x, mouse_y) = mouse_stick();
     PadState {
         buttons: FALLBACK_BUTTONS
             .iter()
@@ -203,8 +215,8 @@ fn fallback(keys: &[KeyState]) -> PadState {
         right_trigger: on(b'C'),
         left_x: on(b'D') - on(b'A'),
         left_y: on(b'W') - on(b'S'),
-        right_x: on(b'L') - on(b'J'),
-        right_y: on(b'I') - on(b'K'),
+        right_x: (on(b'L') - on(b'J') + mouse_x).clamp(-1.0, 1.0),
+        right_y: (on(b'I') - on(b'K') + mouse_y).clamp(-1.0, 1.0),
     }
 }
 
@@ -1143,6 +1155,11 @@ pub(crate) fn module() -> HleModule {
 mod host {
     use std::time::{Duration, Instant};
 
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::LazyLock;
+
+    use windows_sys::Win32::Foundation::{POINT, RECT};
+    use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
     use windows_sys::Win32::System::Threading::GetCurrentProcessId;
     use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, MAPVK_VK_TO_VSC_EX, MapVirtualKeyW,
@@ -1156,7 +1173,7 @@ mod host {
         XInputSetState,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetForegroundWindow, GetWindowThreadProcessId,
+        GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId, SetCursorPos,
     };
 
     use super::*;
@@ -1306,6 +1323,107 @@ mod host {
             .filter(|&&(at, _)| (at..at + Duration::from_millis(200)).contains(&now))
             .map(|&(_, vk)| vk)
             .collect()
+    }
+
+    /// `VICTORY_MOUSE_LOOK=1`, optional `VICTORY_MOUSE_SENS` (per pixel) and
+    /// `VICTORY_MOUSE_INVERT=1`. Off unless asked for.
+    static MOUSE_LOOK: LazyLock<Option<(f32, bool)>> = LazyLock::new(|| {
+        let on = std::env::var("VICTORY_MOUSE_LOOK")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        if !on {
+            return None;
+        }
+        let sens = std::env::var("VICTORY_MOUSE_SENS")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .unwrap_or(0.02)
+            .clamp(0.001, 0.2);
+        let invert = std::env::var("VICTORY_MOUSE_INVERT")
+            .map(|value| value == "1")
+            .unwrap_or(false);
+        tracing::info!(sens, invert, "mouse look on the right stick");
+        Some((sens, invert))
+    });
+
+    /// The cursor's offset from the window's centre, then recentred. A pad
+    /// connected takes over: the stand-in pad (and this) is only read when no
+    /// host pad exists.
+    pub(super) fn mouse_stick() -> (f32, f32) {
+        let Some((sens, invert)) = *MOUSE_LOOK else {
+            return (0.0, 0.0);
+        };
+        if !focused() {
+            return (0.0, 0.0);
+        }
+        static LAST_LOG: std::sync::Mutex<Option<std::time::Instant>> =
+            std::sync::Mutex::new(None);
+        /// The centre the cursor was last put on. A changed centre (a new
+        /// window, a resize, focus coming back) is recentred without turning
+        /// it into stick movement.
+        static LAST_CENTRE: std::sync::Mutex<Option<(i32, i32)>> =
+            std::sync::Mutex::new(None);
+        /// The poll right after a warp still sees the old position sometimes;
+        /// skip it instead of turning a warp into a flick.
+        static SUPPRESS: AtomicBool = AtomicBool::new(false);
+        let mut rect = RECT::default();
+        let mut point = POINT::default();
+        // SAFETY: plain queries on the foreground window; null is handled.
+        unsafe {
+            let window = GetForegroundWindow();
+            if window.is_null() || GetClientRect(window, &mut rect) == 0 {
+                return (0.0, 0.0);
+            }
+            let mut centre = POINT {
+                x: rect.left + (rect.right - rect.left) / 2,
+                y: rect.top + (rect.bottom - rect.top) / 2,
+            };
+            if ClientToScreen(window, &mut centre) == 0 {
+                return (0.0, 0.0);
+            }
+            let centre_xy = (centre.x, centre.y);
+            if let Ok(mut last) = LAST_CENTRE.lock() {
+                if *last != Some(centre_xy) {
+                    SetCursorPos(centre.x, centre.y);
+                    *last = Some(centre_xy);
+                    SUPPRESS.store(true, Ordering::Relaxed);
+                    return (0.0, 0.0);
+                }
+            }
+            if SUPPRESS.swap(false, Ordering::Relaxed) {
+                return (0.0, 0.0);
+            }
+            if GetCursorPos(&mut point) == 0 {
+                return (0.0, 0.0);
+            }
+            // A jump this large is a warp (the window moved, the title hid
+            // the cursor), not a hand: recentre without turning the view.
+            let raw_x = point.x - centre.x;
+            let raw_y = point.y - centre.y;
+            if raw_x.abs() > 150 || raw_y.abs() > 150 {
+                SetCursorPos(centre.x, centre.y);
+                SUPPRESS.store(true, Ordering::Relaxed);
+                return (0.0, 0.0);
+            }
+            let dx = raw_x.clamp(-80, 80);
+            let dy = raw_y.clamp(-80, 80);
+            if dx != 0 || dy != 0 {
+                SetCursorPos(centre.x, centre.y);
+                SUPPRESS.store(true, Ordering::Relaxed);
+            }
+            let x = (dx as f32 * sens).clamp(-1.0, 1.0);
+            let dy = if invert { dy } else { -dy };
+            let y = (dy as f32 * sens).clamp(-1.0, 1.0);
+            if (dx != 0 || dy != 0) && (x != 0.0 || y != 0.0) {
+                if let Ok(mut last) = LAST_LOG.lock() {
+                    if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
+                        tracing::info!(dx, dy, x, y, "mouse look stick");
+                        *last = Some(std::time::Instant::now());
+                    }
+                }
+            }
+            (x, y)
+        }
     }
 
     /// The foreground window is one of ours (the title's or our fallback).
