@@ -4726,6 +4726,39 @@ impl Host {
             self.settle(&mut submitted, WHY_STALE);
             settled += settling.elapsed();
         }
+        // The textures the lists sample, brought up to date first on
+        // several threads ([`wide_textures`]).
+        if wide_textures() {
+            let mut due: Vec<std::sync::Arc<crate::texture::Staging>> = Vec::new();
+            for list in runs {
+                for step in &list.deferred().copies {
+                    if let Step::Texture(staging) = step
+                        && batch.texture_due(staging)
+                    {
+                        due.push(staging.clone());
+                    }
+                }
+            }
+            if due.len() >= 4 {
+                let refreshing = crate::clock::Stamp::now();
+                let before = PREPARING[2].load(Ordering::Relaxed);
+                let jobs: Vec<Box<dyn FnOnce() + Send>> = due
+                    .into_iter()
+                    .map(|staging| Box::new(move || staging.refresh()) as Box<dyn FnOnce() + Send>)
+                    .collect();
+                crate::shadow::wide_run(jobs);
+                // The time counted is the time it took, not the threads' sum.
+                let summed = PREPARING[2].load(Ordering::Relaxed).saturating_sub(before);
+                PREPARING[2].fetch_sub(
+                    summed.saturating_sub(refreshing.elapsed().as_micros() as u64),
+                    Ordering::Relaxed,
+                );
+            } else {
+                for staging in due {
+                    staging.refresh();
+                }
+            }
+        }
         for list in runs {
             list.run_deferred(&mut batch);
             firsts.push(lists.len());
@@ -6167,6 +6200,25 @@ impl HostList {
 fn wide_refresh() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_WIDE_REFRESH").is_some_and(|v| v == "1"))
+}
+
+/// Whether the textures a submission's lists sample are brought up to date
+/// on several threads before its steps run (`VICTORY_WIDE_TEXTURES=1`; off
+/// by default).
+///
+/// Each staged texture a list samples is checked when the list is
+/// submitted: asked about, read, hashed, and detiled if it changed, one
+/// texture after the other on the submitting thread, in the order of the
+/// lists' steps. In a profile of the world that is about 13 ms a frame of
+/// that thread (docs/FINDINGS.md 2.10: 4.8 ms under
+/// `Staging::refresh_now`, 8 ms of hashing). The textures have nothing to
+/// do with one another. With the switch those due in a submission are
+/// refreshed first, spread over the threads kept for the snapshots
+/// (`crate::shadow::wide`); a step that writes title memory still has the
+/// textures after it checked again, as before.
+fn wide_textures() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_WIDE_TEXTURES").is_some_and(|v| v == "1"))
 }
 
 /// A submission's refreshes not done yet, merged per buffer copy into the
