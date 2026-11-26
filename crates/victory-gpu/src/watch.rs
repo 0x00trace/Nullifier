@@ -254,7 +254,7 @@ fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
     j.found.resize(count.max(j.found.len()), 0);
     let mut granularity = 0;
     #[cfg(feature = "diagnostics")]
-    let started = std::time::Instant::now();
+    let started = crate::clock::Stamp::now();
     // SAFETY: the answer buffer holds `count` entries.
     let mut failed = unsafe {
         GetWriteWatch(
@@ -330,7 +330,7 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
     j.found.resize(count.max(j.found.len()), 0);
     let mut granularity = 0;
     #[cfg(feature = "diagnostics")]
-    let started = std::time::Instant::now();
+    let started = crate::clock::Stamp::now();
     // SAFETY: the answer buffer holds `count` entries.
     let mut failed = unsafe {
         GetWriteWatch(
@@ -355,7 +355,7 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
             return None;
         }
         #[cfg(feature = "diagnostics")]
-        let guarding = std::time::Instant::now();
+        let guarding = crate::clock::Stamp::now();
         let written = guard(first * PAGE, last * PAGE);
         #[cfg(feature = "diagnostics")]
         crate::copystat::add(crate::copystat::C::GuardUs, guarding.elapsed().as_micros() as u64);

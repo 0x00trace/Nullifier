@@ -713,8 +713,8 @@ impl Written {
         let value = match self {
             Written::Value(v) => v,
             Written::GpuTimestamp => {
-                static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-                let elapsed = START.get_or_init(std::time::Instant::now).elapsed();
+                static START: std::sync::OnceLock<crate::clock::Stamp> = std::sync::OnceLock::new();
+                let elapsed = START.get_or_init(crate::clock::Stamp::now).elapsed();
                 (elapsed.as_nanos() / (1_000_000_000 / u128::from(TIMESTAMP_FREQUENCY))) as u64
             }
             Written::SystemTimestamp => system_timestamp(),

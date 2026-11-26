@@ -1443,7 +1443,7 @@ impl State {
         if FRAME.swap(frame, Ordering::Relaxed) == frame {
             return Some(gpu);
         }
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         // Per host heap: the host copy and range each slot's buffer view
         // reads, kept from pass to pass. Only the slots written since the
         // last pass are looked at again (83,000 slots a pass otherwise, 0.1 s
@@ -1666,7 +1666,7 @@ impl State {
         } else {
             (PER_FRAME, SPAN)
         };
-        let began = std::time::Instant::now();
+        let began = crate::clock::Stamp::now();
         for (index, write) in due {
             if SPENT.load(Ordering::Relaxed) >= per_frame || began.elapsed() > span {
                 break;
