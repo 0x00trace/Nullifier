@@ -1674,6 +1674,105 @@ fn give_chunks(chunks: Vec<(Chunk, u64)>) {
     drop(freed);
 }
 
+/// Room in an area for plans, taken in the order the plans are made and
+/// given back in the same order (a submission's plan is done with when the
+/// submission has run and its results were read; with [`relay`] several
+/// are in the air at once). Each plan has one stretch of the area, which
+/// may be empty.
+///
+/// The areas started from their beginning only when no plan was out. With
+/// submissions sent ahead frame after frame that moment may not come for
+/// many frames, and the flights had to be settled, all of them, to make
+/// it come (`Host::card_results_low`).
+#[derive(Default)]
+struct InOrder {
+    size: u64,
+    /// Where the stretch of the plan made last ends.
+    next: u64,
+    /// The stretches of the plans that are out, oldest first.
+    out: std::collections::VecDeque<(u64, u64)>,
+}
+
+impl InOrder {
+    fn new(size: u64) -> Self {
+        InOrder {
+            size,
+            next: 0,
+            out: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// A stretch of `n` units for the next plan: behind the last plan's if
+    /// that is free, else at the beginning; `None` (and no plan counted)
+    /// if neither is free.
+    fn take(&mut self, n: u64) -> Option<u64> {
+        if self.out.is_empty() {
+            self.next = 0;
+        }
+        let free = |from: u64| {
+            from + n <= self.size && self.out.iter().all(|&(a, b)| from + n <= a || from >= b)
+        };
+        let at = if free(self.next) {
+            self.next
+        } else if free(0) {
+            0
+        } else {
+            return None;
+        };
+        self.next = at + n;
+        self.out.push_back((at, at + n));
+        Some(at)
+    }
+
+    /// The oldest plan is done with.
+    fn give(&mut self) {
+        self.out.pop_front();
+    }
+
+    /// Whether more than half of the area is out.
+    fn low(&self) -> bool {
+        self.out.iter().map(|&(a, b)| b - a).sum::<u64>() * 2 > self.size
+    }
+}
+
+#[cfg(test)]
+mod in_order_tests {
+    use super::InOrder;
+
+    /// Stretches follow one another, start again at the beginning when the
+    /// end is reached and the beginning is free, and never lie over one
+    /// that is out; a plan with nothing has a stretch of none.
+    #[test]
+    fn stretches_are_taken_and_given_back_in_order() {
+        let mut room = InOrder::new(100);
+        assert_eq!(room.take(40), Some(0));
+        assert_eq!(room.take(0), Some(40));
+        assert_eq!(room.take(40), Some(40));
+        assert!(room.low());
+        // No stretch of 30 behind the last one, and the beginning is out.
+        assert_eq!(room.take(30), None);
+        assert_eq!(room.out.len(), 3, "a plan that got nothing is not counted");
+        room.give();
+        assert_eq!(room.take(30), Some(0), "the beginning is free again");
+        // Behind it, up to the stretch at 40 that is still out.
+        assert_eq!(room.take(10), Some(30));
+        assert_eq!(room.take(1), None);
+        assert_eq!(room.take(0), Some(40), "a stretch of none is always there");
+        for _ in 0..5 {
+            room.give();
+        }
+        assert!(room.out.is_empty() && !room.low());
+        // With no plan out the area starts from its beginning.
+        assert_eq!(room.take(100), Some(0));
+        assert_eq!(room.take(1), None);
+        room.give();
+        assert_eq!(room.take(101), None, "more than the area holds");
+        // An area of nothing gives stretches of none.
+        let mut none = InOrder::default();
+        assert_eq!((none.take(0), none.take(1)), (Some(0), None));
+    }
+}
+
 /// What the host keeps for copies in the card's own memory
 /// ([`crate::shadow::cards`]): three lists of ours and the compare.
 struct CardWork {
@@ -1694,9 +1793,17 @@ struct CardWork {
     differs: (ID3D12Resource, usize, u64),
     /// Where the pieces that differ are fetched to: PC memory, mapped.
     fetched: Option<(ID3D12Resource, usize, u64)>,
-    /// The dwords of `differs` taken by plans whose results were not read
-    /// yet.
-    taken: u32,
+    /// With [`card_prefetch`]: where the compares' lists bring pieces
+    /// down, PC memory, mapped (buffer, mapping, bytes), made at the first
+    /// use; and the bytes of it the plans that are out have.
+    down: Option<(ID3D12Resource, usize, u64)>,
+    down_room: InOrder,
+    /// By copy: the frame its compares are being counted in, and how many
+    /// it has had in that frame ([`EXPECTED`]).
+    passes: std::collections::HashMap<usize, (u64, u32)>,
+    /// The dwords of `differs` that the plans whose results were not
+    /// read yet have.
+    results: InOrder,
     /// Plans made and not done with (`Host::card_done`).
     out: u32,
 }
@@ -1969,6 +2076,110 @@ pub(crate) fn card_compare_root_signature(
     )
 }
 
+/// Whether the compare's list of a submission sent ahead also brings down
+/// the pieces its compare is expected to flag (`VICTORY_CARD_PREFETCH=1`;
+/// off by default; with [`relay`] only).
+///
+/// With the relay the thread that copies back takes a flight when the
+/// card has run it: the pieces its compare flagged are fetched with a list
+/// of that thread's own, and the list waits on the queue behind every
+/// flight sent since. In a profile of the world (`docs/FINDINGS.md` 2.14)
+/// that thread waited 52 to 86 ms a frame for such fetches, about 8 ms
+/// each, and what the title waits for (bottom-of-pipe values, fences) came
+/// that much later: a frame's submissions were sent in one burst, the
+/// fetch stood behind all of them, the results of two frames came
+/// together, and the title presented two frames 20 to 45 ms apart and
+/// then none for 230 to 440 ms.
+///
+/// The title's frames repeat: the same pass writes the same places. With
+/// the switch a compare's list ends with copies, to the PC's memory, of
+/// the pieces that the same compare of the copy flagged in the last
+/// frames (the n-th compare of a copy in a frame is taken for the same
+/// pass as the n-th of the frame before). When the card has run the flight
+/// the bytes are there, as the card held them behind the flight's own
+/// shaders, and they are merged at once, against the sends of title bytes
+/// up to the plan's own. A flagged piece that was not expected is fetched
+/// as before, and is expected from then on; an expected piece that is not
+/// flagged was copied for nothing.
+///
+/// A plain copy, not a store by the compare's shader: a shader's stores
+/// into the PC's memory cost the card far more than the fetch they save
+/// (one run: 55 MB a frame stored that way, the frame 244 ms against 161).
+pub(crate) fn card_prefetch() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("VICTORY_CARD_PREFETCH").is_some_and(|v| v == "1") && relay()
+    })
+}
+
+/// With [`card_prefetch`]: the most bytes of the PC's memory that hold
+/// what the compares' lists bring down, for the plans in the air
+/// (`VICTORY_CARD_PREFETCH_MB`, 256).
+fn card_prefetch_bytes() -> u64 {
+    static BYTES: OnceLock<u64> = OnceLock::new();
+    *BYTES.get_or_init(|| {
+        std::env::var("VICTORY_CARD_PREFETCH_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .unwrap_or(256)
+            .clamp(16, 2048)
+            << 20
+    })
+}
+
+/// How many frames a piece stays expected after a compare flagged it.
+const EXPECTED_FOR: u64 = 3;
+
+/// With [`card_prefetch`]: by copy (its address) and by which compare of
+/// the copy in its frame (the first, the second...), the pieces that
+/// compare flagged and the frame it last did. Written by the thread that
+/// copies back, read by the thread that submits.
+type Expected = std::collections::HashMap<(usize, u32), std::collections::BTreeMap<u32, u64>>;
+static EXPECTED: Mutex<Option<Expected>> = Mutex::new(None);
+
+/// The pieces of `[first, first + pieces)` of copy `copy` that its
+/// compare number `pass` of a frame is expected to flag in frame `frame`:
+/// those it flagged in one of the [`EXPECTED_FOR`] frames before.
+fn expected_pieces(copy: usize, pass: u32, (first, pieces): (u32, u32), frame: u64) -> Vec<u32> {
+    let expected = EXPECTED.lock().unwrap_or_else(|e| e.into_inner());
+    expected
+        .as_ref()
+        .and_then(|e| e.get(&(copy, pass)))
+        .map_or_else(Vec::new, |seen| {
+            seen.range(first..first.saturating_add(pieces))
+                .filter(|&(_, &last)| last + EXPECTED_FOR >= frame)
+                .map(|(&piece, _)| piece)
+                .collect()
+        })
+}
+
+/// Compare number `pass` of copy `copy` flagged `flagged` in frame
+/// `frame`: they are expected of it from now on. What it has not flagged
+/// for 64 frames is forgotten.
+fn expect_pieces(copy: usize, pass: u32, flagged: &[u32], frame: u64) {
+    if flagged.is_empty() {
+        return;
+    }
+    let mut expected = EXPECTED.lock().unwrap_or_else(|e| e.into_inner());
+    let seen = expected
+        .get_or_insert_with(Default::default)
+        .entry((copy, pass))
+        .or_default();
+    for &piece in flagged {
+        seen.insert(piece, frame);
+    }
+    if seen.len() > 4 * flagged.len() + 256 {
+        seen.retain(|_, last| *last + 64 >= frame);
+    }
+}
+
+/// Since the last frame-rate line, with [`card_prefetch`]: pieces the
+/// compares' lists brought down and their bytes; of them, those merged
+/// (flagged, as expected); and flagged pieces that were not expected and
+/// were fetched.
+static PREFETCHED: [std::sync::atomic::AtomicU64; 4] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 4];
+
 /// Whether the pieces hashed again after ranges were sent up to a copy in
 /// the card's memory are hashed in runs of pieces that touch, each piece
 /// once (`VICTORY_CARD_REHASH_RUNS=1`; off by default), and not in a pass
@@ -2014,6 +2225,8 @@ struct CardRange {
     at: u32,
     /// Whether the card compares it; else every piece is fetched.
     compared: bool,
+    /// Which compare of the copy in its frame this one is ([`EXPECTED`]).
+    pass: u32,
 }
 
 /// What a submission does for copies in the card's memory.
@@ -2027,6 +2240,16 @@ struct CardPlan {
     /// The lists of ours the plan recorded (whether the compare, the
     /// list), given back by `Host::card_done`.
     lists: Vec<(bool, Prelude)>,
+    /// With [`relay`]: the number of the plan's sends of title bytes
+    /// (`QUEUE_ORDER`): the card had received those up to it, and no later
+    /// one, when the plan's compare ran.
+    sent_as: u64,
+    /// The frame the plan was made in.
+    frame: u64,
+    /// With [`card_prefetch`]: the pieces the compare's list brings down
+    /// behind the compare (copy, first offset, last offset), and where in
+    /// `CardWork::down`.
+    down: std::collections::HashMap<(usize, usize, usize), u64>,
     /// Timing run: when the list that brought the copies up to date went
     /// to the card (`Host::submit` waits for it on its own).
     #[cfg(feature = "diagnostics")]
@@ -3238,6 +3461,20 @@ fn late_line(frames: f64) {
             r[3] / 1000.0,
             r[4] / 1000.0,
         );
+        if card_prefetch() {
+            let p: Vec<f64> = PREFETCHED
+                .iter()
+                .map(|p| p.swap(0, Ordering::Relaxed) as f64 / frames)
+                .collect();
+            tracing::info!(
+                "pieces the compares' lists brought down (VICTORY_CARD_PREFETCH=1), per frame: {:.1} pieces {:.1} MB; {:.1} of \
+                 them were flagged and merged with no fetch; {:.1} flagged pieces were not expected and were fetched",
+                p[0],
+                p[1] / (1 << 20) as f64,
+                p[2],
+                p[3],
+            );
+        }
     }
     if late_exact() {
         let [pages, runs, bytes] = crate::shadow::merged_stats().map(|n| n as f64 / frames);
@@ -3702,7 +3939,10 @@ impl Host {
                 pso,
                 differs: (differs, data as usize, RESULTS),
                 fetched: None,
-                taken: 0,
+                down: None,
+                down_room: InOrder::default(),
+                passes: std::collections::HashMap::new(),
+                results: InOrder::new(RESULTS / 4),
                 out: 0,
             })
         }
@@ -3848,17 +4088,22 @@ impl Host {
             used.push((false, sync));
         }
         drop(order);
+        let frame = crate::frame::current();
         let mut plan = CardPlan {
             ranges: Vec::new(),
             check: None,
             _synced: dirty.into_iter().map(|(shadow, _)| shadow).collect(),
             lists: used,
+            sent_as,
+            frame,
+            down: std::collections::HashMap::new(),
             #[cfg(feature = "diagnostics")]
             sync_sent,
         };
         // Each byte once, as the copy-back joins the declared ranges. The
         // results go behind those of plans still in the air.
-        let mut at = work.taken;
+        let mut wanted = Vec::new();
+        let mut needed = 0u64;
         for (shadow, ranges) in &declared {
             let mut sorted = ranges.clone();
             sorted.sort_unstable();
@@ -3870,11 +4115,44 @@ impl Host {
                 }
             }
             let twin = shadow.card_sides().is_some_and(|(_, before, _)| before.is_some());
-            for (from, to) in spans {
-                let Some(span) = shadow.card_span(from, to) else {
-                    continue;
-                };
-                let compared = twin && u64::from(at + span.pieces) * 4 <= work.differs.2;
+            // Which compare of the copy in this frame the plan's is.
+            let pass = {
+                let counted = work
+                    .passes
+                    .entry(Arc::as_ptr(shadow) as usize)
+                    .or_insert((frame, 0));
+                if counted.0 != frame {
+                    *counted = (frame, 0);
+                }
+                counted.1 += 1;
+                counted.1 - 1
+            };
+            let spans: Vec<((usize, usize), crate::shadow::CardSpan)> = spans
+                .into_iter()
+                .filter_map(|(from, to)| shadow.card_span(from, to).map(|span| ((from, to), span)))
+                .collect();
+            if twin {
+                needed += spans
+                    .iter()
+                    .map(|(_, span)| u64::from(span.pieces))
+                    .sum::<u64>();
+            }
+            wanted.push((shadow, pass, twin, spans));
+        }
+        // One stretch of the results for the plan, behind those of the
+        // plans still in the air. Without one nothing is compared, and
+        // every piece of the declared ranges is fetched.
+        let room = match work.results.take(needed) {
+            Some(first) => Some(first as u32),
+            None => {
+                work.results.take(0);
+                None
+            }
+        };
+        let mut at = room.unwrap_or(0);
+        for (shadow, pass, twin, spans) in wanted {
+            for ((from, to), span) in spans {
+                let compared = twin && room.is_some();
                 if compared && card_hash_lanes() {
                     // That compare only sets the dwords of pieces that
                     // differ. No plan in the air has these.
@@ -3893,13 +4171,71 @@ impl Host {
                     span,
                     at,
                     compared,
+                    pass,
                 });
                 if compared {
                     at += span.pieces;
                 }
             }
         }
-        work.taken = at;
+        // With `card_prefetch`: the pieces each compare is expected to
+        // flag come down behind the compares, in the same list. A plan one
+        // compare off in its frame (a submission that is not there in
+        // every frame) is expected to flag its neighbours' pieces too.
+        let mut down: Vec<(Arc<crate::shadow::Shadow>, usize, usize, u64)> = Vec::new();
+        let mut down_bytes = 0u64;
+        if flown && card_prefetch() {
+            if work.down.is_none() {
+                let bytes = card_prefetch_bytes();
+                work.down = self.shared_buffer(bytes).map(|(buffer, data)| {
+                    name(&buffer, || {
+                        "pieces the card compares' lists bring down".into()
+                    });
+                    (buffer, data as usize, bytes)
+                });
+                if work.down.is_some() {
+                    work.down_room = InOrder::new(bytes);
+                }
+            }
+            if work.down.is_some() {
+                let mut seen = std::collections::HashSet::new();
+                for r in plan.ranges.iter().filter(|r| r.compared) {
+                    let copy = Arc::as_ptr(&r.shadow) as usize;
+                    let mut expected: Vec<u32> =
+                        [r.pass.wrapping_sub(1), r.pass, r.pass.wrapping_add(1)]
+                            .into_iter()
+                            .flat_map(|pass| {
+                                expected_pieces(copy, pass, (r.span.first, r.span.pieces), frame)
+                            })
+                            .collect();
+                    expected.sort_unstable();
+                    expected.dedup();
+                    for piece in expected {
+                        let (lo, hi) = r.shadow.card_piece(&r.span, piece - r.span.first);
+                        if lo < hi && seen.insert((copy, lo, hi)) {
+                            down.push((r.shadow.clone(), lo, hi, down_bytes));
+                            down_bytes = (down_bytes + (hi - lo) as u64).next_multiple_of(16);
+                        }
+                    }
+                }
+            }
+        }
+        // One stretch of that memory for the plan; without one nothing
+        // comes down with the compare, and what is flagged is fetched.
+        let first = match work.down_room.take(down_bytes) {
+            Some(first) => first,
+            None => {
+                down.clear();
+                work.down_room.take(0).unwrap_or(0)
+            }
+        };
+        for (shadow, lo, hi, at) in &mut down {
+            *at += first;
+            plan.down
+                .insert((Arc::as_ptr(shadow) as usize, *lo, *hi), *at);
+            PREFETCHED[0].fetch_add(1, Ordering::Relaxed);
+            PREFETCHED[1].fetch_add((*hi - *lo) as u64, Ordering::Relaxed);
+        }
         if plan.ranges.iter().any(|r| r.compared) {
             let Some(check) = work.check.pop().or_else(|| self.make_prelude()) else {
                 fail(format_args!("no host list for the compare of host copies in the card's memory"));
@@ -3936,6 +4272,19 @@ impl Host {
                         list.Dispatch(card_compare_groups(r.span.pieces, card_hash_lanes()), 1, 1);
                         CARD_PASSES[2].fetch_add(1, Ordering::Relaxed);
                     }
+                    // The pieces expected to be flagged, as the card holds
+                    // them behind the submission's shaders (`card_prefetch`).
+                    if let Some((to, _, _)) = work.down.as_ref() {
+                        for (shadow, lo, hi, at) in &down {
+                            list.CopyBufferRegion(
+                                to,
+                                *at,
+                                &shadow.buffer,
+                                *lo as u64,
+                                (*hi - *lo) as u64,
+                            );
+                        }
+                    }
                     list.Close()?;
                     list.cast()
                 })()
@@ -3958,7 +4307,7 @@ impl Host {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
-            .is_some_and(|work| u64::from(work.taken) * 8 > work.differs.2)
+            .is_some_and(|work| work.results.low())
     }
 
     /// The plan's submission has run and its results were read
@@ -3974,11 +4323,11 @@ impl Host {
             if check { work.check.push(list) } else { work.sync.push(list) }
         }
         work.out = work.out.saturating_sub(1);
-        // With the relay other plans may be on the card, their results
-        // not read yet: the area starts again only when none is out.
-        if !relay() || work.out == 0 {
-            work.taken = 0;
-        }
+        // The plan's stretches of the results and of what its compare's
+        // list brought down are free for the plans that follow: plans are
+        // done with in the order they were made.
+        work.results.give();
+        work.down_room.give();
     }
 
     /// The relay's own list, fence, event for [`Host::relay_card_back`].
@@ -4009,11 +4358,28 @@ impl Host {
     /// bytes, which that flight's landing then finds merged already; and
     /// nothing is sent back up.
     fn relay_card_back(&self, plans: &[&CardPlan], fetch: &mut Option<RelayFetch>) {
-        let differs = {
+        let (differs, down) = {
             let work = CARD_WORK.lock().unwrap_or_else(|e| e.into_inner());
-            work.as_ref().map(|work| (work.differs.1, (work.differs.2 / 4) as usize))
+            (
+                work.as_ref()
+                    .map(|work| (work.differs.1, (work.differs.2 / 4) as usize)),
+                work.as_ref()
+                    .and_then(|work| work.down.as_ref().map(|down| down.1)),
+            )
         };
-        let mut pieces: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize, u64)> = Vec::new();
+        // With `card_prefetch` a later plan's pieces are merged against
+        // the sends up to that plan's own: those stay known until it has
+        // been copied back.
+        let back_as = plans.iter().map(|plan| plan.sent_as).max().unwrap_or(0);
+        let fetched_to = |after: u64| {
+            if card_prefetch() {
+                after.min(back_as)
+            } else {
+                after
+            }
+        };
+        let mut pieces: Vec<(std::sync::Arc<crate::shadow::Shadow>, usize, usize, u64)> =
+            Vec::new();
         let mut total = 0u64;
         if let Some((differs, dwords)) = differs {
             // SAFETY: the mapping of the results. The compares of these
@@ -4021,7 +4387,25 @@ impl Host {
             // before these are done with (`card_done`).
             let differs = unsafe { std::slice::from_raw_parts(differs as *const u32, dwords) };
             let mut seen = std::collections::HashSet::new();
+            let mut title = Vec::new();
             for plan in plans {
+                // What each compare flagged is expected of it in the
+                // frames that follow (`card_prefetch`).
+                if card_prefetch() {
+                    for r in plan.ranges.iter().filter(|r| r.compared) {
+                        let flagged: Vec<u32> = (0..r.span.pieces)
+                            .filter(|&p| differs.get((r.at + p) as usize).is_some_and(|&d| d != 0))
+                            .map(|p| r.span.first + p)
+                            .collect();
+                        expect_pieces(
+                            std::sync::Arc::as_ptr(&r.shadow) as usize,
+                            r.pass,
+                            &flagged,
+                            plan.frame,
+                        );
+                    }
+                }
+                let mut merged = std::collections::HashSet::new();
                 let flags: Vec<(usize, u32, bool)> = plan
                     .ranges
                     .iter()
@@ -4040,7 +4424,32 @@ impl Host {
                             continue;
                         }
                         let (lo, hi) = r.shadow.card_piece(&r.span, p);
-                        if lo < hi && seen.insert((copy, lo, hi)) {
+                        if lo >= hi {
+                            continue;
+                        }
+                        // Brought down by the compare's own list: merged
+                        // here, with no fetch, as the card held it behind
+                        // this flight.
+                        if let (Some(&at), Some(down)) = (plan.down.get(&(copy, lo, hi)), down) {
+                            if merged.insert((copy, lo, hi)) {
+                                // SAFETY: the mapping of what the plan's
+                                // list brought down; the copy has run, and
+                                // these bytes are no other plan's until
+                                // this one is done with (`card_done`).
+                                let gpu = unsafe {
+                                    std::slice::from_raw_parts(
+                                        (down + at as usize) as *const u8,
+                                        hi - lo,
+                                    )
+                                };
+                                let written =
+                                    r.shadow.card_merge_relay(lo, gpu, plan.sent_as, &mut title);
+                                COPY_BACK[1].fetch_add(written as u64, Ordering::Relaxed);
+                                PREFETCHED[2].fetch_add(1, Ordering::Relaxed);
+                            }
+                            continue;
+                        }
+                        if seen.insert((copy, lo, hi)) {
                             pieces.push((r.shadow.clone(), lo, hi, total));
                             total += (hi - lo) as u64;
                         }
@@ -4051,9 +4460,12 @@ impl Host {
         }
         if pieces.is_empty() {
             // Nothing to fetch: every send so far is older than the next fetch.
-            crate::shadow::relay_fetched(*QUEUE_ORDER.lock().unwrap_or_else(|e| e.into_inner()));
+            crate::shadow::relay_fetched(fetched_to(
+                *QUEUE_ORDER.lock().unwrap_or_else(|e| e.into_inner()),
+            ));
             return;
         }
+        PREFETCHED[3].fetch_add(pieces.len() as u64, Ordering::Relaxed);
         if fetch.is_none() {
             *fetch = self.make_relay_fetch();
         }
@@ -4118,7 +4530,7 @@ impl Host {
         }
         COPY_BACK[1].fetch_add(written as u64, Ordering::Relaxed);
         // Sends up to `after` are of no use to any later merge.
-        crate::shadow::relay_fetched(after);
+        crate::shadow::relay_fetched(fetched_to(after));
     }
 
     /// [`relay`], on the thread that lands flights: `items` are the first
@@ -6604,7 +7016,7 @@ mod direct_copy {
         unsafe { VirtualProtect(page as *const _, KERNEL_PAGE, info.Protect | PAGE_GUARD, &mut old) };
     }
 
-    fn install() {
+    pub(super) fn install() {
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
             // SAFETY: `on_fault` only intercepts faults inside `victory_try_copy_op`.
@@ -6612,6 +7024,12 @@ mod direct_copy {
                 AddVectoredExceptionHandler(1, Some(on_fault));
             }
         });
+    }
+
+    /// Whether `rip` is inside the copy itself.
+    pub(super) fn copying(rip: u64) -> bool {
+        (&raw const victory_try_copy_op as u64..&raw const victory_try_copy_end as u64)
+            .contains(&rip)
     }
 
     /// Copies `len` bytes from `src` to `dst` in-process, returning `false` on
@@ -6628,9 +7046,266 @@ mod direct_copy {
         install();
         // SAFETY: `victory_try_copy` preserves callee-saved registers and any
         // fault inside `victory_try_copy_op` jumps to `victory_try_copy_fault`.
-        unsafe { victory_try_copy(dst, src, len) != 0 }
+        let copied = unsafe { victory_try_copy(dst, src, len) != 0 };
+        // Diagnostics: pages of the probe that the copy had opened for it.
+        if super::back_probe::every() != 0 {
+            super::back_probe::closed_again();
+        }
+        copied
     }
 }
+
+/// Diagnostics (`VICTORY_BACK_PROBE=N`; off by default): whether the title
+/// touches what shaders wrote before shaders write it again.
+///
+/// What a submission's shaders wrote to host copies is put back into title
+/// memory after it, 65 to 130 MB a frame in the world, because on the
+/// console the card writes the title's memory itself and the title may
+/// read it. Whether the title does read it decides whether those bytes
+/// could stay on the card until they are asked for.
+///
+/// With the switch, one in N of the 4 KiB pages that a put-back has just
+/// written whole (private memory only: the title's heaps; not views, whose
+/// protection the write guards own) is made inaccessible. The first access
+/// to such a page faults into a handler of ours, which opens the page and
+/// counts who it was: a read or a write by code that is not ours (the
+/// title, or a library on its behalf), or code of ours outside the copy.
+/// A copy of ours (a refresh reading the page, `direct_copy`) opens it
+/// for the length of the copy and closes it again, so that it does not
+/// count as the first touch. A page that is still closed when the next
+/// put-back writes it was not touched in between: counted, with the frames
+/// that went by.
+///
+/// It slows the title where it does touch such pages (a fault each time)
+/// and a system call that is handed such a page fails: a diagnostic for a
+/// measured run, not a setting.
+pub(crate) mod back_probe {
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+    use std::sync::{Mutex, OnceLock};
+
+    use windows_sys::Win32::Foundation::{EXCEPTION_ACCESS_VIOLATION, NTSTATUS};
+    use windows_sys::Win32::System::Diagnostics::Debug::{
+        AddVectoredExceptionHandler, EXCEPTION_CONTINUE_EXECUTION, EXCEPTION_CONTINUE_SEARCH,
+        EXCEPTION_POINTERS,
+    };
+    use windows_sys::Win32::System::Memory::{
+        MEM_COMMIT, MEM_PRIVATE, MEMORY_BASIC_INFORMATION, PAGE_NOACCESS, PAGE_READWRITE,
+        VirtualProtect, VirtualQuery,
+    };
+
+    const KERNEL_PAGE: usize = 4096;
+
+    /// One page in this many is probed; 0: none.
+    pub(crate) fn every() -> u64 {
+        static EVERY: OnceLock<u64> = OnceLock::new();
+        *EVERY.get_or_init(|| {
+            std::env::var("VICTORY_BACK_PROBE")
+                .ok()
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(0)
+        })
+    }
+
+    /// The pages made inaccessible, and the frame each was closed in.
+    static CLOSED: Mutex<BTreeMap<usize, u64>> = Mutex::new(BTreeMap::new());
+    /// The last pages a fault opened, each with the faults that may still
+    /// be tried again for it: another thread can stand at the same page.
+    static OPENED: Mutex<Vec<(usize, u8)>> = Mutex::new(Vec::new());
+    /// Since the last line: pages closed; first touched by a read that was
+    /// not ours, by a write that was not ours, by code of ours outside the
+    /// copy; written again by a put-back while still closed, and the
+    /// frames those had been closed for; opened for a copy of ours and
+    /// closed again.
+    static COUNT: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
+
+    thread_local! {
+        /// The pages this thread's running copy had opened for it.
+        static AGAIN: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    fn protect(page: usize, protection: u32) {
+        let mut old = 0;
+        // SAFETY: a page of committed private memory of the title; only its
+        // protection changes.
+        unsafe { VirtualProtect(page as *const _, KERNEL_PAGE, protection, &mut old) };
+    }
+
+    /// A put-back is about to write title memory `[at, at + len)`: pages
+    /// of it that are still closed were not touched since the last one.
+    pub(crate) fn before(at: usize, len: usize) {
+        if every() == 0 || len == 0 {
+            return;
+        }
+        let frame = crate::frame::current();
+        let mut closed = CLOSED.lock().unwrap_or_else(|e| e.into_inner());
+        let pages: Vec<(usize, u64)> = closed
+            .range(at & !(KERNEL_PAGE - 1)..at.saturating_add(len))
+            .map(|(&page, &since)| (page, since))
+            .collect();
+        for (page, since) in pages {
+            closed.remove(&page);
+            protect(page, PAGE_READWRITE);
+            COUNT[4].fetch_add(1, Relaxed);
+            COUNT[5].fetch_add(frame.saturating_sub(since), Relaxed);
+        }
+    }
+
+    /// A put-back has written title memory `[at, at + len)`: one in
+    /// [`every`] of the pages it wrote whole is closed.
+    pub(crate) fn after(at: usize, len: usize) {
+        let every = every();
+        if every == 0 {
+            return;
+        }
+        install();
+        let frame = crate::frame::current();
+        let first = at.next_multiple_of(KERNEL_PAGE);
+        let end = at.saturating_add(len) & !(KERNEL_PAGE - 1);
+        for page in (first..end).step_by(KERNEL_PAGE) {
+            // Another choice of pages in every frame.
+            let pick = ((page / KERNEL_PAGE) as u64)
+                .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+                .wrapping_add(frame.wrapping_mul(0xD6E8_FEB8_6659_FD93))
+                >> 20;
+            if !pick.is_multiple_of(every) {
+                continue;
+            }
+            // SAFETY: plain data filled in by the query.
+            let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+            // SAFETY: a valid out pointer of the right size.
+            let answered =
+                unsafe { VirtualQuery(page as *const _, &mut info, size_of_val(&info)) } != 0;
+            if !answered
+                || info.State != MEM_COMMIT
+                || info.Type != MEM_PRIVATE
+                || info.Protect != PAGE_READWRITE
+            {
+                continue;
+            }
+            let mut closed = CLOSED.lock().unwrap_or_else(|e| e.into_inner());
+            protect(page, PAGE_NOACCESS);
+            closed.insert(page, frame);
+            COUNT[0].fetch_add(1, Relaxed);
+        }
+    }
+
+    /// A copy of ours has ended: the pages it had opened are closed again.
+    pub(super) fn closed_again() {
+        let pages = AGAIN.with(|again| std::mem::take(&mut *again.borrow_mut()));
+        if pages.is_empty() {
+            return;
+        }
+        let closed = CLOSED.lock().unwrap_or_else(|e| e.into_inner());
+        for page in pages {
+            if closed.contains_key(&page) {
+                protect(page, PAGE_NOACCESS);
+            }
+        }
+    }
+
+    fn install() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            // Ahead of the copy's own handler, which takes a fault in the
+            // copy for a page that is not there.
+            super::direct_copy::install();
+            // SAFETY: the headers of our own program's image, as loaded: the
+            // offset of its PE header, and that header's size of the image.
+            unsafe {
+                let base =
+                    windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null())
+                        as usize;
+                let pe = base + ((base + 0x3c) as *const u32).read_unaligned() as usize;
+                let size = ((pe + 24 + 56) as *const u32).read_unaligned() as usize;
+                let _ = super::LAYER.set((base, size));
+            }
+            // SAFETY: the handler touches the probe's own state and the
+            // protection of pages the probe closed.
+            unsafe { AddVectoredExceptionHandler(1, Some(on_access)) };
+        });
+    }
+
+    unsafe extern "system" fn on_access(info: *mut EXCEPTION_POINTERS) -> i32 {
+        // SAFETY: the system passes the exception being dispatched.
+        let (record, context) = unsafe { (&*(*info).ExceptionRecord, &*(*info).ContextRecord) };
+        if record.ExceptionCode != EXCEPTION_ACCESS_VIOLATION as NTSTATUS
+            || record.NumberParameters < 2
+        {
+            return EXCEPTION_CONTINUE_SEARCH;
+        }
+        let page = record.ExceptionInformation[1] & !(KERNEL_PAGE - 1);
+        let mut closed = CLOSED.lock().unwrap_or_else(|e| e.into_inner());
+        if !closed.contains_key(&page) {
+            // Opened a moment ago by another thread's fault: tried again,
+            // a few times at most.
+            let mut opened = OPENED.lock().unwrap_or_else(|e| e.into_inner());
+            return match opened.iter_mut().find(|o| o.0 == page && o.1 > 0) {
+                Some(o) => {
+                    o.1 -= 1;
+                    EXCEPTION_CONTINUE_EXECUTION
+                }
+                None => EXCEPTION_CONTINUE_SEARCH,
+            };
+        }
+        if super::direct_copy::copying(context.Rip) {
+            // A copy of ours: open for its length (`closed_again`).
+            protect(page, PAGE_READWRITE);
+            AGAIN.with(|again| again.borrow_mut().push(page));
+            COUNT[6].fetch_add(1, Relaxed);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        closed.remove(&page);
+        protect(page, PAGE_READWRITE);
+        {
+            let mut opened = OPENED.lock().unwrap_or_else(|e| e.into_inner());
+            if opened.len() >= 64 {
+                opened.remove(0);
+            }
+            opened.push((page, 8));
+        }
+        let ours = super::LAYER
+            .get()
+            .is_some_and(|&(base, size)| (base..base + size).contains(&(context.Rip as usize)));
+        const WRITE: usize = 1;
+        let who = if ours {
+            3
+        } else if record.ExceptionInformation[0] == WRITE {
+            2
+        } else {
+            1
+        };
+        COUNT[who].fetch_add(1, Relaxed);
+        EXCEPTION_CONTINUE_EXECUTION
+    }
+
+    /// With the frame-rate line.
+    pub(super) fn line(frames: f64) {
+        if every() == 0 {
+            return;
+        }
+        let c: Vec<f64> = COUNT.iter().map(|c| c.swap(0, Relaxed) as f64).collect();
+        let still = CLOSED.lock().unwrap_or_else(|e| e.into_inner()).len();
+        tracing::info!(
+            "probe of what shaders wrote (VICTORY_BACK_PROBE={}), per frame: {:.1} pages closed after a put-back; first touched \
+             by a read that is not ours {:.1}, by a write that is not ours {:.1}, by code of ours outside the copy {:.1}; put \
+             back again while still closed {:.1} (after {:.1} frames); opened for a copy of ours and closed again {:.1}; \
+             {still} closed now",
+            every(),
+            c[0] / frames,
+            c[1] / frames,
+            c[2] / frames,
+            c[3] / frames,
+            c[4] / frames,
+            if c[4] > 0.0 { c[5] / c[4] } else { 0.0 },
+            c[6] / frames,
+        );
+    }
+}
+
+/// Where the layer's own program is in memory (base, bytes), for
+/// [`back_probe`]; set by it at the first use.
+static LAYER: OnceLock<(usize, usize)> = OnceLock::new();
 
 /// Copies `len` bytes from `src` to `dst` unless a source page is not
 /// readable.
@@ -7066,6 +7741,7 @@ impl Meter {
         }
         late_line(frames);
         fill_ahead::line(frames);
+        back_probe::line(frames);
         #[cfg(feature = "diagnostics")]
         crate::draw::clamp_line(frames);
         card_clock_line(frames, ms);

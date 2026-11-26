@@ -2059,8 +2059,12 @@ impl Shadow {
         if self.put_back_own(at, bytes) {
             return;
         }
+        // Diagnostics: pages of these that the probe closed after the last
+        // put-back, and those it closes after this one.
+        crate::host::back_probe::before(at, bytes.len());
         crate::watch::writing(at, bytes.len());
         crate::host::write_mapped(at as *mut u8, bytes.as_ptr(), bytes.len());
+        crate::host::back_probe::after(at, bytes.len());
     }
 
     /// With `crate::inplace::back_own` (`VICTORY_BACK_OWN_VIEW=1`): stores
