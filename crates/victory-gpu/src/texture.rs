@@ -385,6 +385,23 @@ fn through_copy() -> bool {
     *ON.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_COPY").is_some_and(|v| v == "1"))
 }
 
+/// A guarded texture in view memory that no write was seen to is hashed
+/// all the same in one frame of this many, by its address, so that the
+/// textures take turns (`VICTORY_TEXTURE_HASH_EVERY`; 8). The hash finds
+/// what the guard cannot see; a change it finds is logged ("a guarded
+/// texture changed and no write to it was seen") and has the texture hashed
+/// at every check for a while.
+fn hash_every() -> u64 {
+    static EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *EVERY.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_HASH_EVERY")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .filter(|&n| n >= 1)
+            .unwrap_or(8)
+    })
+}
+
 /// Calls `f` with the `size` bytes of title memory at `memory`, read
 /// through the kernel into this thread's read buffer; pages that are not
 /// there read as zeros. The bytes are those a read in place would see.
@@ -726,11 +743,12 @@ impl Staging {
         if *GUARD.get_or_init(|| std::env::var_os("VICTORY_TEXTURE_GUARD").is_none_or(|v| v != "0"))
             && let Some((now, written)) = waited(1, || crate::watch::writes(start, start + size, true))
         {
-            const HASH_EVERY: u64 = 8;
             let unwritten = last.asked != 0 && written.iter().all(|&(_, w)| w <= last.asked);
             last.asked = now;
             let frame = crate::frame::current();
-            let turn = frame.wrapping_add((start >> 16) as u64).is_multiple_of(HASH_EVERY);
+            let turn = frame
+                .wrapping_add((start >> 16) as u64)
+                .is_multiple_of(hash_every());
             // Linear pictures of one level are what the processor draws (the
             // planes of a movie), through a view of its own.
             let desc = &self.layout.desc;
