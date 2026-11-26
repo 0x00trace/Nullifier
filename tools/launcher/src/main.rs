@@ -24,6 +24,9 @@ use serde_json::{json, Value};
 const TITLE: &str = "Nullifier";
 const ACCENT: egui::Color32 = egui::Color32::from_rgb(77, 122, 235);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The translation layer's build string. Kept beside `BUILD` in
+/// `crates/victory-gpu/src/host.rs` (bumped by hand there).
+const LAYER_VERSION: &str = "0.003";
 
 
 fn apply_theme(ctx: &egui::Context) {
@@ -166,6 +169,7 @@ fn main() -> eframe::Result<()> {
                 Some("game") => Tab::Graphics,
                 Some("graphics") => Tab::Graphics,
                 Some("controls") => Tab::Controls,
+                Some("community") => Tab::Community,
                 Some("rendering") => Tab::Rendering,
                 Some("advanced") => Tab::Advanced,
                 Some("debug") => Tab::Debug,
@@ -215,6 +219,21 @@ struct Settings {
     mouse_sensitivity: f32,
     #[serde(default)]
     mouse_invert: bool,
+    /// The name shown next to shared runs.
+    #[serde(default)]
+    community_name: String,
+    /// Where the run was (a world section, a mission, a menu).
+    #[serde(default)]
+    community_area: String,
+    /// What looked wrong or different.
+    #[serde(default)]
+    community_notes: String,
+    /// `VICTORY_OUTPUT`: "", "2560x1440" or "1920x1080".
+    #[serde(default)]
+    output: String,
+    /// `VICTORY_RENDER_SCALE`: 0.0 leaves the title's own 2/3.
+    #[serde(default)]
+    render_scale: f32,
     /// The one-time experimental warning on the Graphics page was acknowledged.
     #[serde(default)]
     game_warning_seen: bool,
@@ -262,6 +281,11 @@ impl Default for Settings {
             mouse_look: false,
             mouse_sensitivity: 0.02,
             mouse_invert: false,
+            community_name: String::new(),
+            community_area: String::new(),
+            community_notes: String::new(),
+            output: String::new(),
+            render_scale: 0.0,
             game_warning_seen: false,
             root: None,
             reloaded_profile: false,
@@ -312,6 +336,343 @@ impl Settings {
             let _ = std::fs::write(path, text);
         }
     }
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct CommunityEntry {
+    name: String,
+    version: String,
+    game: String,
+    profile: String,
+    fps: f32,
+    frame_ms: f32,
+    gpu_ms: f32,
+    draws: u32,
+    #[serde(default)]
+    area: String,
+    #[serde(default)]
+    notes: String,
+    #[serde(default)]
+    settings: String,
+    #[serde(default)]
+    hardware: String,
+    /// The launcher that made the entry; `version` is the layer.
+    #[serde(default)]
+    launcher: String,
+    when: u64,
+    log: String,
+    /// From the published board rather than this PC.
+    #[serde(default)]
+    remote: bool,
+}
+
+fn small_label(text: &str) -> egui::RichText {
+    egui::RichText::new(text)
+        .small()
+        .color(egui::Color32::from_rgb(140, 146, 158))
+}
+
+fn filter_block(ui: &mut egui::Ui, width: f32, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 44.0),
+        egui::Layout::top_down(egui::Align::Min),
+        |ui| {
+            ui.label(small_label(label));
+            add(ui);
+        },
+    );
+}
+
+fn field_row(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    hint: &str,
+    width: f32,
+) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(64.0, 28.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.label(small_label(label));
+            },
+        );
+        changed = ui
+            .add_sized(
+                [width, 28.0],
+                egui::TextEdit::singleline(value)
+                    .hint_text(hint)
+                    .vertical_align(egui::Align::Center),
+            )
+            .changed();
+    });
+    changed
+}
+
+fn settings_summary(settings: &Settings, hardware: &Hardware) -> String {
+    let mut parts: Vec<String> = settings
+        .sets
+        .iter()
+        .map(|(key, value)| format!("{key}={value}"))
+        .collect();
+    parts.push(format!(
+        "output={}",
+        if settings.output.is_empty() {
+            "native"
+        } else {
+            &settings.output
+        }
+    ));
+    if settings.render_scale > 0.0 {
+        parts.push(format!("render_scale={:.2}", settings.render_scale));
+    }
+    if settings.mouse_look {
+        parts.push("mouse_look=1".into());
+    }
+    parts.push(format!("profile={}", settings.profile));
+    format!(
+        "{} | {} {:.0} GB VRAM, {}",
+        parts.join(" "),
+        hardware.vendor.to_uppercase(),
+        hardware.vram_mb as f32 / 1024.0,
+        std::env::consts::OS
+    )
+}
+
+fn community_path() -> Option<PathBuf> {
+    data_dir().map(|dir| dir.join("community.json"))
+}
+
+fn known_game(game: &str) -> String {
+    if game.starts_with("unknown") && game.contains("b99f876b") {
+        "v1.0.2.1".to_string()
+    } else {
+        game.to_string()
+    }
+}
+
+fn normalize_community(entries: &mut [CommunityEntry]) {
+    for entry in entries {
+        // Entries made by the launcher before it showed the layer version.
+        if entry.launcher.is_empty() && entry.version.starts_with("0.0.") {
+            entry.launcher = entry.version.clone();
+            entry.version = LAYER_VERSION.to_string();
+        }
+        entry.game = known_game(&entry.game);
+    }
+}
+
+fn load_community() -> Vec<CommunityEntry> {
+    let mut entries: Vec<CommunityEntry> = community_path()
+        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or_default();
+    normalize_community(&mut entries);
+    entries
+}
+
+fn save_community(entries: &[CommunityEntry]) {
+    let Some(path) = community_path() else { return };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let local: Vec<&CommunityEntry> = entries.iter().filter(|entry| !entry.remote).collect();
+    if let Ok(text) = serde_json::to_string_pretty(&local) {
+        let _ = std::fs::write(path, text);
+    }
+}
+
+/// Where the published board lives (a file in the repository, served by
+/// GitHub's raw host: no token, no server, and edits are visible in git).
+const BOARD_URL: &str =
+    "https://raw.githubusercontent.com/iNiKKo/Nullifier/main/community/leaderboard.json";
+
+fn fetch_board() -> Option<Vec<CommunityEntry>> {
+    let url = std::env::var("NULLIFIER_BOARD_URL").unwrap_or_else(|_| BOARD_URL.to_string());
+    let out = if cfg!(windows) {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "try {{ (Invoke-WebRequest -UseBasicParsing -Uri '{url}' -TimeoutSec 8).Content }} catch {{ }}"
+                ),
+            ])
+            .output()
+    } else {
+        Command::new("curl")
+            .args(["-fsSL", "--max-time", "8", &url])
+            .output()
+    }
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut board: Vec<CommunityEntry> = serde_json::from_slice(&out.stdout).ok()?;
+    // A published file is untrusted: keep the page responsive whatever it holds.
+    board.retain(|entry| entry.name.len() <= 80 && entry.log.len() <= 200_000);
+    board.truncate(500);
+    Some(board)
+}
+
+fn date_of(epoch: u64) -> String {
+    let days = (epoch / 86_400) as i64;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = year + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}")
+}
+
+fn mask_ipv4(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let start = i;
+            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'.') {
+                i += 1;
+            }
+            let token = &text[start..i];
+            let parts: Vec<&str> = token.split('.').collect();
+            if parts.len() == 4 && parts.iter().all(|p| !p.is_empty() && p.parse::<u8>().is_ok()) {
+                out.push_str("<ip>");
+            } else {
+                out.push_str(token);
+            }
+        } else {
+            let ch = text[i..].chars().next().unwrap_or(' ');
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
+}
+
+fn mask_emails(line: &str) -> String {
+    line.split_whitespace()
+        .map(|word| {
+            if word.contains('@') && word.contains('.') && !word.starts_with("http") {
+                "<email>"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The log as it is safe to share: paths, the machine's name and addresses
+/// are replaced, and only the interesting lines are kept (header, frame
+/// lines, failures, the resolution patch) so an entry is a few dozen KB.
+fn sanitize_log(raw: &str, settings: &Settings) -> String {
+    let clean = strip_ansi(raw);
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let user = Path::new(&home)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_string();
+    let prefix = data_dir()
+        .map(|dir| dir.display().to_string())
+        .unwrap_or_default();
+    let game = settings.game_dir.trim().to_string();
+    let mut kept: Vec<String> = Vec::new();
+    for (index, line) in clean.lines().enumerate() {
+        let keep = index < 25
+            || line.contains(" fps,")
+            || line.contains("device removed")
+            || line.contains("unhandled exception")
+            || line.contains("panicked")
+            || line.contains(" ERROR ")
+            || line.contains("resolution:")
+            || line.contains("wineserver:")
+            || line.contains("build ");
+        if !keep {
+            continue;
+        }
+        let mut line = line.trim_end().to_string();
+        if !game.is_empty() {
+            line = line.replace(&game, "<game>");
+        }
+        if !prefix.is_empty() {
+            line = line.replace(&prefix, "<prefix>");
+        }
+        if !home.is_empty() {
+            line = line.replace(&home, "<home>");
+        }
+        if !user.is_empty() {
+            line = line.replace(&format!("/home/{user}"), "/home/<user>");
+            line = line.replace(&format!(r"\Users\{user}"), r"\Users\<user>");
+            line = line.replace(&format!("Users\\{user}"), "Users\\<user>");
+        }
+        line = mask_ipv4(&line);
+        line = mask_emails(&line);
+        kept.push(line);
+    }
+    if kept.len() > 240 {
+        let mut cut = kept[..20].to_vec();
+        cut.extend(kept[kept.len() - 220..].iter().cloned());
+        cut.insert(20, format!("... {} lines omitted ...", kept.len() - cut.len()));
+        cut.join("\n")
+    } else {
+        kept.join("\n")
+    }
+}
+
+/// Median of the world frame lines (under 10 fps; menus are 30), with the
+/// last frame time, GPU time and draw count.
+fn world_stats(raw: &str) -> (Option<f32>, Option<f32>, Option<f32>, Option<u32>) {
+    let clean = strip_ansi(raw);
+    let mut values: Vec<f32> = Vec::new();
+    let (mut frame, mut gpu, mut draws) = (None, None, None);
+    for line in clean.lines() {
+        let Some(rest) = after(line, "host: ") else { continue };
+        let line_draws = before(rest, " draws/frame").and_then(last_num).map(|v| v as u32);
+        if let Some(value) = before(rest, " fps,").and_then(|v| v.trim().parse().ok()) {
+            if line_draws.is_some_and(|draws| draws >= 200) {
+                values.push(value);
+            }
+        }
+        if let Some(value) = before(rest, " ms/frame").and_then(last_num) {
+            frame = Some(value);
+        }
+        if let Some(value) = before(rest, " on the GPU").and_then(last_num) {
+            gpu = Some(value);
+        }
+        if let Some(value) = before(rest, " draws/frame").and_then(last_num) {
+            draws = Some(value as u32);
+        }
+    }
+    (median_fps(values), frame, gpu, draws)
+}
+
+fn game_label(raw: &str) -> String {
+    let clean = strip_ansi(raw);
+    for line in clean.lines().take(40) {
+        if let Some(rest) = after(line, "build          ") {
+            let label = known_game(rest.trim());
+            return label.chars().take(40).collect();
+        }
+        if let Some(rest) = after(line, "build ") {
+            if rest.contains('(') {
+                let label = known_game(rest.trim());
+                return label.chars().take(40).collect();
+            }
+        }
+    }
+    "unknown".into()
 }
 
 fn default_mouse_sensitivity() -> f32 {
@@ -935,6 +1296,12 @@ fn launch_command(root: &Path, settings: &Settings, profile_file: &Path) -> Comm
     if !settings.keyboard.trim().is_empty() {
         cmd.env("VICTORY_KEYBOARD", settings.keyboard.trim());
     }
+    if !settings.output.trim().is_empty() {
+        cmd.env("VICTORY_OUTPUT", settings.output.trim());
+    }
+    if settings.render_scale > 0.0 {
+        cmd.env("VICTORY_RENDER_SCALE", format!("{:.2}", settings.render_scale));
+    }
     if settings.mouse_look {
         cmd.env("VICTORY_MOUSE_LOOK", "1");
         cmd.env(
@@ -1001,6 +1368,9 @@ struct App {
     bench: Option<Child>,
     log_path: Option<PathBuf>,
     log_shown: String,
+    log_refreshed: Option<std::time::Instant>,
+    last_run_cache: LastRun,
+    last_run_at: Option<std::time::Instant>,
     status: String,
     picking: bool,
     pick_dir: PathBuf,
@@ -1031,6 +1401,18 @@ struct App {
     keyboard_keys: Vec<String>,
     controllers: Vec<String>,
     controllers_checked: bool,
+    community: Vec<CommunityEntry>,
+    community_open: Option<usize>,
+    community_filter: String,
+    community_game: String,
+    community_area_filter: String,
+    community_version_filter: String,
+    community_sort: u8,
+    community_notes_only: bool,
+    community_status: String,
+    community_rx: Option<std::sync::mpsc::Receiver<Option<Vec<CommunityEntry>>>>,
+    community_fetching: bool,
+    community_checked: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1080,14 +1462,20 @@ enum Tab {
     Play,
     Graphics,
     Controls,
+    Community,
     Rendering,
     Advanced,
     Debug,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct LastRun {
+    /// Median of the in-game frame lines (a few hundred draws or more).
     fps: Option<f32>,
+    /// Median of menu/loading lines, kept to show what the menu runs at.
+    menu_fps: Option<f32>,
+    /// Whether any line was an in-game one (a few hundred draws or more).
+    in_game: bool,
     frame: Option<f32>,
     copies_ms: Option<f32>,
     copies_mb: Option<f32>,
@@ -1098,6 +1486,15 @@ struct LastRun {
     heap_ms: Option<f32>,
     draws: Option<u32>,
     removals: u32,
+}
+
+fn median_fps(mut values: Vec<f32>) -> Option<f32> {
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    match values.len() {
+        0 => None,
+        n if n % 2 == 1 => Some(values[n / 2]),
+        n => Some((values[n / 2 - 1] + values[n / 2]) / 2.0),
+    }
 }
 
 fn before<'a>(text: &'a str, marker: &str) -> Option<&'a str> {
@@ -1199,6 +1596,9 @@ impl App {
             bench: None,
             log_path,
             log_shown,
+            log_refreshed: None,
+            last_run_cache: LastRun::default(),
+            last_run_at: None,
             status: status.into(),
             picking: false,
             pick_dir: home_dir().unwrap_or_else(|| PathBuf::from(".")),
@@ -1229,6 +1629,18 @@ impl App {
             keyboard_keys,
             controllers: Vec::new(),
             controllers_checked: false,
+            community: load_community(),
+            community_open: None,
+            community_filter: String::new(),
+            community_game: String::new(),
+            community_area_filter: String::new(),
+            community_version_filter: String::new(),
+            community_sort: 0,
+            community_notes_only: false,
+            community_status: String::new(),
+            community_rx: None,
+            community_fetching: false,
+            community_checked: false,
         }
     }
 
@@ -1520,27 +1932,59 @@ impl App {
     }
 
     fn refresh_log(&mut self) {
-        let Some(path) = &self.log_path else { return };
-        if let Ok(text) = std::fs::read_to_string(path) {
-            let clean: String = text
-                .lines()
-                .map(strip_ansi)
-                .collect::<Vec<_>>()
-                .join("\n");
-            self.log_shown = tail(&clean, 160);
+        // A 6 MB log read and stripped every frame made the window crawl.
+        // Twice a second at most, and only the tail of the file.
+        if let Some(at) = self.log_refreshed {
+            if at.elapsed() < Duration::from_millis(500) {
+                return;
+            }
         }
+        self.log_refreshed = Some(std::time::Instant::now());
+        let Some(path) = &self.log_path else { return };
+        let Some(text) = read_tail(path, 96 * 1024) else {
+            return;
+        };
+        let clean: String = text.lines().map(strip_ansi).collect::<Vec<_>>().join("\n");
+        self.log_shown = tail(&clean, 160);
     }
 
-    fn last_run(&self) -> LastRun {
+    fn last_run(&mut self) -> LastRun {
+        // Parsing the whole log every frame is also expensive; a change of the
+        // file's bytes is the reason to do it, checked at most every two
+        // seconds.
+        if let Some(at) = self.last_run_at {
+            if at.elapsed() < Duration::from_secs(2) {
+                return self.last_run_cache.clone();
+            }
+        }
+        let run = self.read_last_run();
+        self.last_run_cache = run.clone();
+        self.last_run_at = Some(std::time::Instant::now());
+        run
+    }
+
+    fn read_last_run(&self) -> LastRun {
         let mut run = LastRun::default();
         let Some(path) = &self.log_path else { return run };
-        let Ok(text) = std::fs::read_to_string(path) else { return run };
+        let Some(text) = read_tail(path, 2 * 1024 * 1024) else { return run };
         run.removals = text.matches("device removed").count() as u32;
+        let mut world: Vec<f32> = Vec::new();
+        let mut menus: Vec<f32> = Vec::new();
+        let mut last_fps = None;
         for line in text.lines() {
             let clean = strip_ansi(line);
             let Some(rest) = after(&clean, "host: ") else { continue };
-            if let Some(v) = before(rest, " fps,") {
-                run.fps = v.trim().parse().ok();
+            let mut line_draws = None;
+            if let Some(v) = before(rest, " draws/frame").and_then(last_num) {
+                line_draws = Some(v as u32);
+            }
+            if let Some(v) = before(rest, " fps,").and_then(|v| v.trim().parse::<f32>().ok()) {
+                last_fps = Some(v);
+                if line_draws.is_some_and(|draws| draws >= 200) {
+                    world.push(v);
+                } else {
+                    menus.push(v);
+                }
             }
             if let Some(v) = before(rest, " ms/frame") {
                 run.frame = last_num(v);
@@ -1572,10 +2016,16 @@ impl App {
                     run.heap_ms = Some(v);
                 }
             }
-            if let Some(v) = before(rest, " draws/frame").and_then(last_num) {
-                run.draws = Some(v as u32);
+            if let Some(draws) = line_draws {
+                run.draws = Some(draws);
             }
         }
+        run.in_game = !world.is_empty();
+        run.fps = median_fps(world).or(last_fps);
+        run.menu_fps = median_fps(menus).or_else(|| {
+            // A menu log with no draws recorded still has a 30 fps line.
+            last_fps.filter(|fps| *fps >= 15.0)
+        });
         run
     }
 
@@ -1833,10 +2283,27 @@ impl App {
                             .color(egui::Color32::from_rgb(87, 199, 133)),
                     );
                 } else {
+                    let display = if self.settings.output.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            " · {} output{}",
+                            self.settings.output,
+                            if self.settings.render_scale > 0.0 {
+                                ", scale 1.0"
+                            } else {
+                                ""
+                            }
+                        )
+                    };
                     ui.label(
-                        egui::RichText::new(format!("Measured settings for {vendor}"))
+                        egui::RichText::new(format!("Measured settings for {vendor}{display}"))
                             .small()
-                            .color(egui::Color32::GRAY),
+                            .color(if display.is_empty() {
+                                egui::Color32::GRAY
+                            } else {
+                                egui::Color32::from_rgb(232, 179, 74)
+                            }),
                     );
                     if chip_button(ui, "Settings…").clicked() {
                         self.settings.show_advanced = true;
@@ -2077,7 +2544,17 @@ impl App {
             }
             ui.horizontal(|ui| {
                 ui.heading(format!("{:.1}", run.fps.unwrap_or(0.0)));
-                ui.label("fps");
+                ui.label(if run.in_game { "fps in game" } else { "fps (menu/loading)" });
+                if run.in_game {
+                    if let Some(menu) = run.menu_fps {
+                        ui.add_space(8.0);
+                        ui.label(
+                            egui::RichText::new(format!("menu {menu:.0} fps"))
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    }
+                }
                 if let Some(draws) = run.draws {
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new(format!("{draws} draws a frame")).small().color(egui::Color32::GRAY));
@@ -2458,6 +2935,632 @@ impl App {
         });
     }
 
+    fn save_community_after_fetch(&self) {
+        save_community(&self.community);
+    }
+
+    fn start_community_fetch(&mut self) {
+        if self.community_fetching {
+            return;
+        }
+        self.community_fetching = true;
+        self.community_status = "Checking the published board...".into();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(fetch_board());
+        });
+        self.community_rx = Some(rx);
+    }
+
+    fn share_run(&mut self) -> Option<String> {
+        let Some(path) = self.log_path.clone() else {
+            self.community_status = "No run log yet - play or measure once first.".into();
+            return None;
+        };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            self.community_status = "Could not read the last log.".into();
+            return None;
+        };
+        let name = self.settings.community_name.trim().to_string();
+        if name.is_empty() {
+            self.community_status = "Choose a name first (a nickname is fine).".into();
+            return None;
+        }
+        let (world_fps, frame, gpu, draws) = world_stats(&raw);
+        if world_fps.is_none() {
+            self.community_status =
+                "The last log has no in-game frames (menus run at 30). Play or measure in the world first.".into();
+            return None;
+        }
+        let log = sanitize_log(&raw, &self.settings);
+        let (fps, frame, gpu, draws) = world_stats(&raw);
+        let fps = fps.unwrap_or(0.0);
+        let when = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let entry = CommunityEntry {
+            name: name.clone(),
+            version: LAYER_VERSION.to_string(),
+            game: game_label(&raw),
+            profile: if self.settings.profile.is_empty() {
+                "custom".into()
+            } else {
+                self.settings.profile.clone()
+            },
+            fps,
+            frame_ms: frame.unwrap_or(0.0),
+            gpu_ms: gpu.unwrap_or(0.0),
+            draws: draws.unwrap_or(0),
+            area: self.settings.community_area.trim().to_string(),
+            notes: self.settings.community_notes.trim().to_string(),
+            settings: settings_summary(&self.settings, &self.hardware),
+            launcher: VERSION.to_string(),
+            hardware: format!(
+                "{} {:.0} GB VRAM, {}",
+                self.hardware.vendor.to_uppercase(),
+                self.hardware.vram_mb as f32 / 1024.0,
+                std::env::consts::OS
+            ),
+            when,
+            log: log.clone(),
+            remote: false,
+        };
+        let game = entry.game.clone();
+        let profile = entry.profile.clone();
+        let frame_ms = entry.frame_ms;
+        let gpu_ms = entry.gpu_ms;
+        let draws = entry.draws;
+        let area = entry.area.clone();
+        let notes = entry.notes.clone();
+        let settings_line = entry.settings.clone();
+        let hardware = entry.hardware.clone();
+        self.community.insert(0, entry);
+        save_community(&self.community);
+        self.community_status = format!("Added {name}'s run; a share block is on the clipboard.");
+        let json = serde_json::to_string_pretty(&CommunityEntry {
+            name: name.clone(),
+            version: LAYER_VERSION.to_string(),
+            game,
+            profile: profile.clone(),
+            fps,
+            frame_ms,
+            gpu_ms,
+            draws,
+            area,
+            notes,
+            settings: settings_line,
+            hardware,
+            launcher: VERSION.to_string(),
+            when,
+            log,
+            remote: false,
+        })
+        .unwrap_or_default();
+        Some(format!(
+            "**{name}** · Nullifier v{VERSION} · **{fps:.1} fps**\n\
+             {draws} draws/frame · frame {frame_ms:.1} ms · GPU {gpu_ms:.1} ms · profile {profile}\n\
+             Paste this whole block in the GitHub form.\n\
+             \n```json\n{json}\n```\n"
+        ))
+    }
+
+    fn community_page(&mut self, ui: &mut egui::Ui) {
+        if !self.community_checked {
+            self.community_checked = true;
+            self.start_community_fetch();
+        }
+        ui.heading("Community");
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(
+                    "Share how it runs. Nothing leaves this PC unless you paste the copied block.",
+                )
+                .small()
+                .color(egui::Color32::GRAY),
+            )
+            .wrap(),
+        );
+        // Fields need to read as fields on this dark page.
+        ui.visuals_mut().extreme_bg_color = egui::Color32::from_rgb(30, 33, 40);
+        ui.visuals_mut().widgets.inactive.bg_stroke =
+            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 66, 78));
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            card(ui, |ui| {
+                ui.strong("Your entry");
+                let mut changed = false;
+                changed |= field_row(
+                    ui,
+                    "Name",
+                    &mut self.settings.community_name,
+                    "a nickname",
+                    360.0,
+                );
+                changed |= field_row(
+                    ui,
+                    "Where",
+                    &mut self.settings.community_area,
+                    "prologue cell, boat mission, city street…",
+                    360.0,
+                );
+                changed |= field_row(
+                    ui,
+                    "Notes",
+                    &mut self.settings.community_notes,
+                    "pop-in, flicker, HUD, crashes…",
+                    360.0,
+                );
+                if changed {
+                    self.settings.save();
+                }
+                ui.add_space(6.0);
+                let (world_fps, _, _, world_draws) = world_stats(&self.log_shown);
+                let in_world = world_fps.is_some();
+                let run = self.last_run();
+                let fps = if in_world { world_fps } else { run.fps };
+                let draws = world_draws.or(run.draws).unwrap_or(0);
+                ui.horizontal(|ui| {
+                    let can = self.log_path.is_some()
+                        && !self.settings.community_name.trim().is_empty()
+                        && !self.running();
+                    if ui
+                        .add_enabled(can, primary("Share last run", 140.0, 32.0))
+                        .clicked()
+                    {
+                        if let Some(markdown) = self.share_run() {
+                            ui.ctx().copy_text(markdown);
+                        }
+                    }
+                    if ui.add(secondary("Copy settings", 130.0, 32.0)).clicked() {
+                        ui.ctx()
+                            .copy_text(settings_summary(&self.settings, &self.hardware));
+                    }
+                    if let Some(fps) = fps {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{fps:.1} fps {} · {draws} draws · {}",
+                                if in_world { "in the world" } else { "(last log, maybe a menu)" },
+                                if run.removals == 0 {
+                                    "no crashes"
+                                } else {
+                                    "crashes"
+                                }
+                            ))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                        );
+                    }
+                });
+                if !self.community_status.is_empty() {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.community_status)
+                                .small()
+                                .color(egui::Color32::from_rgb(160, 166, 178)),
+                        )
+                        .wrap(),
+                    );
+                }
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "The log is filtered; home paths, the game folder, emails and IP addresses are replaced.",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 126, 138)),
+                    )
+                    .wrap(),
+                );
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                let local = self.community.iter().filter(|entry| !entry.remote).count();
+                let remote = self.community.len() - local;
+                ui.horizontal(|ui| {
+                    ui.strong("Shared runs");
+                    ui.label(
+                        egui::RichText::new(format!("{local} local · {remote} GitHub"))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if self.community_fetching {
+                            ui.add_enabled(false, egui::Button::new("Checking board…").small());
+                        } else if ui.add(secondary("Refresh board", 120.0, 28.0)).clicked() {
+                            self.start_community_fetch();
+                        }
+                        if ui.add(secondary("Open folder", 105.0, 28.0)).clicked() {
+                            if let Some(dir) =
+                                community_path().and_then(|p| p.parent().map(Path::to_path_buf))
+                            {
+                                open_path(&dir);
+                            }
+                        }
+                    });
+                });
+                ui.add_space(2.0);
+                egui::Grid::new("community filters")
+                    .num_columns(3)
+                    .spacing([12.0, 8.0])
+                    .show(ui, |ui| {
+                    ui.spacing_mut().interact_size.y = 28.0;
+                    filter_block(ui, 270.0, "Search", |ui| {
+                        ui.add_sized(
+                            [260.0, 28.0],
+                            egui::TextEdit::singleline(&mut self.community_filter)
+                                .hint_text("name, area, note, settings")
+                                .vertical_align(egui::Align::Center),
+                        );
+                    });
+                    let mut games: Vec<String> =
+                        self.community.iter().map(|e| e.game.clone()).collect();
+                    games.sort();
+                    games.dedup();
+                    filter_block(ui, 160.0, "Game", |ui| {
+                        let current = if self.community_game.is_empty() {
+                            "All".to_string()
+                        } else {
+                            self.community_game.clone()
+                        };
+                        egui::ComboBox::from_id_salt("community game")
+                            .selected_text(current)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(self.community_game.is_empty(), "All")
+                                    .clicked()
+                                {
+                                    self.community_game.clear();
+                                }
+                                for game in &games {
+                                    if ui
+                                        .selectable_label(self.community_game == *game, game)
+                                        .clicked()
+                                    {
+                                        self.community_game = game.clone();
+                                    }
+                                }
+                            });
+                    });
+                    let mut areas: Vec<String> = self
+                        .community
+                        .iter()
+                        .map(|entry| entry.area.clone())
+                        .filter(|area| !area.is_empty())
+                        .collect();
+                    areas.sort();
+                    areas.dedup();
+                    filter_block(ui, 160.0, "Area", |ui| {
+                        let current = if self.community_area_filter.is_empty() {
+                            "All".to_string()
+                        } else {
+                            self.community_area_filter.clone()
+                        };
+                        egui::ComboBox::from_id_salt("community area")
+                            .selected_text(current)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(self.community_area_filter.is_empty(), "All")
+                                    .clicked()
+                                {
+                                    self.community_area_filter.clear();
+                                }
+                                for area in &areas {
+                                    if ui
+                                        .selectable_label(self.community_area_filter == *area, area)
+                                        .clicked()
+                                    {
+                                        self.community_area_filter = area.clone();
+                                    }
+                                }
+                            });
+                    });
+                    ui.end_row();
+                    let mut versions: Vec<String> =
+                        self.community.iter().map(|entry| entry.version.clone()).collect();
+                    versions.sort();
+                    versions.dedup();
+                    filter_block(ui, 160.0, "Version", |ui| {
+                        let current = if self.community_version_filter.is_empty() {
+                            "All".to_string()
+                        } else {
+                            format!("v{}", self.community_version_filter)
+                        };
+                        egui::ComboBox::from_id_salt("community version")
+                            .selected_text(current)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(
+                                        self.community_version_filter.is_empty(),
+                                        "All",
+                                    )
+                                    .clicked()
+                                {
+                                    self.community_version_filter.clear();
+                                }
+                                for version in &versions {
+                                    if ui
+                                        .selectable_label(
+                                            self.community_version_filter == *version,
+                                            format!("v{version}"),
+                                        )
+                                        .clicked()
+                                    {
+                                        self.community_version_filter = version.clone();
+                                    }
+                                }
+                            });
+                    });
+                    filter_block(ui, 160.0, "Options", |ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(150.0, 28.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.checkbox(&mut self.community_notes_only, "Notes only");
+                            },
+                        );
+                    });
+                    filter_block(ui, 160.0, "Sort", |ui| {
+                        egui::ComboBox::from_id_salt("community sort")
+                            .selected_text(if self.community_sort == 1 {
+                                "Fastest"
+                            } else {
+                                "Newest"
+                            })
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                if ui
+                                    .selectable_label(self.community_sort == 0, "Newest")
+                                    .clicked()
+                                {
+                                    self.community_sort = 0;
+                                }
+                                if ui
+                                    .selectable_label(self.community_sort == 1, "Fastest")
+                                    .clicked()
+                                {
+                                    self.community_sort = 1;
+                                }
+                            });
+                    });
+                });
+                ui.add_space(4.0);
+                let needle = self.community_filter.to_lowercase();
+                let mut shown: Vec<usize> = self
+                    .community
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, e)| {
+                        (self.community_game.is_empty() || e.game == self.community_game)
+                            && (self.community_area_filter.is_empty()
+                                || e.area == self.community_area_filter)
+                            && (self.community_version_filter.is_empty()
+                                || e.version == self.community_version_filter)
+                            && (!self.community_notes_only || !e.notes.is_empty())
+                            && (needle.is_empty()
+                                || e.name.to_lowercase().contains(&needle)
+                                || e.game.to_lowercase().contains(&needle)
+                                || e.profile.to_lowercase().contains(&needle)
+                                || e.area.to_lowercase().contains(&needle)
+                                || e.notes.to_lowercase().contains(&needle)
+                                || e.settings.to_lowercase().contains(&needle))
+                    })
+                    .map(|(index, _)| index)
+                    .collect();
+                if self.community_sort == 1 {
+                    let entries = &self.community;
+                    shown.sort_by(|a, b| {
+                        entries[*b]
+                            .fps
+                            .partial_cmp(&entries[*a].fps)
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                }
+                let mut open = self.community_open;
+                if shown.is_empty() {
+                    ui.label(
+                        egui::RichText::new(if self.community.is_empty() {
+                            "Nothing shared yet. Play once, then press Share last run."
+                        } else {
+                            "No run matches the filter."
+                        })
+                        .color(egui::Color32::GRAY),
+                    );
+                }
+                {
+                    {
+                        for index in shown {
+                            let entry = &self.community[index];
+                            egui::Frame::group(ui.style())
+                                .inner_margin(egui::Margin::symmetric(10, 8))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.add_sized(
+                                            [110.0, 20.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(&entry.name).strong(),
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.add_sized(
+                                            [48.0, 20.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(format!("v{}", entry.version))
+                                                    .small()
+                                                    .color(egui::Color32::GRAY),
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.add_sized(
+                                            [62.0, 20.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(format!(
+                                                    "{:.1} fps",
+                                                    entry.fps
+                                                ))
+                                                .strong()
+                                                .color(egui::Color32::from_rgb(87, 199, 133)),
+                                            ),
+                                        );
+                                        let where_at = if entry.area.is_empty() {
+                                            entry.game.clone()
+                                        } else {
+                                            entry.area.clone()
+                                        };
+                                        ui.add_sized(
+                                            [ui.available_width() - 78.0, 20.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(where_at).small(),
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                if chip_button(ui, "Log").clicked() {
+                                                    open = Some(index);
+                                                }
+                                                if entry.remote {
+                                                    ui.label(
+                                                        egui::RichText::new("GitHub")
+                                                            .small()
+                                                            .color(egui::Color32::from_rgb(
+                                                                120, 165, 240,
+                                                            )),
+                                                    );
+                                                }
+                                            },
+                                        );
+                                    });
+                                    ui.horizontal(|ui| {
+                                        ui.add_sized(
+                                            [190.0, 16.0],
+                                            egui::Label::new(
+                                                egui::RichText::new(format!(
+                                                    "{} · {}",
+                                                    entry.profile, entry.game
+                                                ))
+                                                .small()
+                                                .color(egui::Color32::GRAY),
+                                            )
+                                            .truncate(),
+                                        );
+                                        if !entry.notes.is_empty() {
+                                            let notes: String = if entry.notes.chars().count() > 90 {
+                                                format!(
+                                                    "{}…",
+                                                    entry.notes.chars().take(90).collect::<String>()
+                                                )
+                                            } else {
+                                                entry.notes.clone()
+                                            };
+                                            ui.add_sized(
+                                                [ui.available_width() - 78.0, 16.0],
+                                                egui::Label::new(
+                                                    egui::RichText::new(notes)
+                                                        .small()
+                                                        .color(egui::Color32::from_rgb(
+                                                            232, 179, 74,
+                                                        )),
+                                                )
+                                                .truncate(),
+                                            );
+                                        }
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    egui::RichText::new(date_of(entry.when))
+                                                        .small()
+                                                        .color(egui::Color32::GRAY),
+                                                );
+                                            },
+                                        );
+                                    });
+                                });
+                        }
+                    }
+                }
+                self.community_open = open;
+            });
+        });
+
+        if let Some(index) = self.community_open {
+            let mut open = true;
+            let mut remove = false;
+            if let Some(entry) = self.community.get(index) {
+                let title = format!("{} · {:.1} fps · {}", entry.name, entry.fps, entry.game);
+                egui::Window::new(title)
+                    .open(&mut open)
+                    .collapsible(false)
+                    .default_size([640.0, 460.0])
+                    .show(ui.ctx(), |ui| {
+                        ui.horizontal(|ui| {
+                            if chip_button(ui, "Copy log").clicked() {
+                                ui.ctx().copy_text(entry.log.clone());
+                            }
+                            if !entry.remote && chip_button(ui, "Remove").clicked() {
+                                remove = true;
+                            }
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "Layer v{} · launcher v{} · profile {} · {} draws · frame {:.1} ms · GPU {:.1} ms",
+                                    entry.version,
+                                    if entry.launcher.is_empty() { "-" } else { &entry.launcher },
+                                    entry.profile,
+                                    entry.draws,
+                                    entry.frame_ms,
+                                    entry.gpu_ms
+                                ))
+                                .small()
+                                .color(egui::Color32::GRAY),
+                            );
+                        });
+                        if !entry.area.is_empty() {
+                            ui.label(format!("Where: {}", entry.area));
+                        }
+                        if !entry.notes.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!("Notes: {}", entry.notes))
+                                    .color(egui::Color32::from_rgb(232, 179, 74)),
+                            );
+                        }
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("Hardware: {}", entry.hardware))
+                                    .small()
+                                    .color(egui::Color32::GRAY),
+                            )
+                            .wrap(),
+                        );
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(format!("Settings: {}", entry.settings))
+                                    .small()
+                                    .color(egui::Color32::GRAY),
+                            )
+                            .wrap(),
+                        );
+                        ui.separator();
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            ui.monospace(&entry.log);
+                        });
+                    });
+            }
+            if remove {
+                self.community.remove(index);
+                save_community(&self.community);
+                self.community_open = None;
+            } else if !open {
+                self.community_open = None;
+            }
+        }
+    }
+
     fn rendering(&mut self, ui: &mut egui::Ui) {
         ui.heading("Rendering");
         ui.add(
@@ -2470,6 +3573,9 @@ impl App {
         let warn = warnings(&self.settings, &self.hardware);
         warnings_card(ui, &warn);
         let mut info = None;
+        let mut output = self.settings.output.clone();
+        let mut render_scale = self.settings.render_scale;
+        let mut display_changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
             let sets = &mut self.settings.sets;
             card(ui, |ui| {
@@ -2481,6 +3587,84 @@ impl App {
                 let asked = number_info(ui, sets, "VICTORY_FPS_CAP", 0..=240, 30);
                 if info.is_none() {
                     info = asked;
+                }
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Display output (experimental): the title renders at this size and upscales. The HUD and some effects can look wrong away from native.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Output");
+                    let current = match output.as_str() {
+                        "2560x1440" => "2560 x 1440",
+                        "1920x1080" => "1920 x 1080",
+                        _ => "Native (3840 x 2160)",
+                    };
+                    egui::ComboBox::from_id_salt("output resolution")
+                        .selected_text(current)
+                        .width(190.0)
+                        .show_ui(ui, |ui| {
+                            for (label, value) in [
+                                ("Native (3840 x 2160)", ""),
+                                ("2560 x 1440 (experimental)", "2560x1440"),
+                                ("1920 x 1080 (experimental)", "1920x1080"),
+                            ] {
+                                if ui
+                                    .selectable_label(output == value, label)
+                                    .clicked()
+                                {
+                                    output = value.to_string();
+                                    display_changed = true;
+                                }
+                            }
+                        });
+                    ui.label("Render scale");
+                    let current = if render_scale > 0.0 {
+                        "1.0 (native)"
+                    } else {
+                        "Title default (2/3)"
+                    };
+                    egui::ComboBox::from_id_salt("render scale")
+                        .selected_text(current)
+                        .width(160.0)
+                        .show_ui(ui, |ui| {
+                            for (label, value) in
+                                [("Title default (2/3)", 0.0_f32), ("1.0 (native)", 1.0)]
+                            {
+                                if ui
+                                    .selectable_label(
+                                        (render_scale - value).abs() < 0.001,
+                                        label,
+                                    )
+                                    .clicked()
+                                {
+                                    render_scale = value;
+                                    display_changed = true;
+                                }
+                            }
+                        });
+                });
+                if !output.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "Active: {} output{} · the picture may look softer or the HUD wrong",
+                            output,
+                            if render_scale > 0.0 {
+                                ", render scale 1.0"
+                            } else {
+                                ""
+                            }
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(232, 179, 74)),
+                    );
                 }
             });
             ui.add_space(4.0);
@@ -2520,6 +3704,11 @@ impl App {
                 if info.is_none() { info = asked; }
             });
         });
+        if display_changed {
+            self.settings.output = output;
+            self.settings.render_scale = render_scale;
+            self.settings.save();
+        }
         if let Some(key) = info {
             self.info = Some(key);
         }
@@ -2810,6 +3999,30 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rx) = &self.community_rx {
+            if let Ok(board) = rx.try_recv() {
+                self.community_rx = None;
+                self.community_fetching = false;
+                match board {
+                    Some(mut board) => {
+                        for entry in &mut board {
+                            entry.remote = true;
+                        }
+                        normalize_community(&mut board);
+                        let shared = board.len();
+                        self.community.retain(|entry| !entry.remote);
+                        self.community.extend(board);
+                        let _ = shared;
+                        self.community_status.clear();
+                    }
+                    None => {
+                        self.community_status =
+                            "Could not reach the published board (offline?).".into();
+                    }
+                }
+                self.save_community_after_fetch();
+            }
+        }
         if let Some(rx) = &self.update_rx {
             if let Ok(tag) = rx.try_recv() {
                 self.update_tag = tag;
@@ -2859,15 +4072,24 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new("Nullifier").size(19.0).strong());
+                ui.label(
+                    egui::RichText::new(format!("layer v{LAYER_VERSION}"))
+                        .size(11.0)
+                        .color(egui::Color32::GRAY),
+                );
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(format!("v{VERSION}")).size(11.0).color(egui::Color32::GRAY));
+                    ui.label(
+                        egui::RichText::new(format!("launcher {VERSION}"))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgb(120, 126, 138)),
+                    );
                     if let Some(tag) = self.update_tag.clone() {
                         if is_newer(&tag, VERSION) {
                             let dot = ui
                                 .add(
                                     egui::Label::new(
                                         egui::RichText::new("● update")
-                                            .size(10.5)
+                                            .size(10.0)
                                             .color(ACCENT),
                                     )
                                     .sense(egui::Sense::click()),
@@ -2887,6 +4109,7 @@ impl eframe::App for App {
                     (Tab::Play, "Play"),
                     (Tab::Graphics, "Graphics"),
                     (Tab::Controls, "Controls"),
+                    (Tab::Community, "Community"),
                 ];
                 if self.settings.show_advanced {
                     tabs.extend([
@@ -2894,7 +4117,10 @@ impl eframe::App for App {
                         (Tab::Advanced, "Advanced"),
                         (Tab::Debug, "Tools"),
                     ]);
-                } else if !matches!(self.tab, Tab::Play | Tab::Graphics | Tab::Controls) {
+                } else if !matches!(
+                    self.tab,
+                    Tab::Play | Tab::Graphics | Tab::Controls | Tab::Community
+                ) {
                     self.tab = Tab::Play;
                 }
                 for (tab, label) in tabs {
@@ -3002,6 +4228,7 @@ impl eframe::App for App {
             Tab::Play => self.play(ui),
             Tab::Graphics => self.game_page(ui),
             Tab::Controls => self.controls(ui),
+            Tab::Community => self.community_page(ui),
             Tab::Rendering => self.rendering(ui),
             Tab::Advanced => self.advanced(ui),
             Tab::Debug => self.debug(ui),
@@ -3468,6 +4695,12 @@ fn help_button(ui: &mut egui::Ui) -> egui::Response {
     response.on_hover_cursor(egui::CursorIcon::Help)
 }
 
+fn secondary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
+    egui::Button::new(egui::RichText::new(text).color(egui::Color32::from_rgb(210, 214, 222)))
+        .fill(egui::Color32::from_rgb(40, 43, 50))
+        .min_size(egui::vec2(width, height))
+}
+
 fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).strong().color(egui::Color32::WHITE))
         .fill(ACCENT)
@@ -3923,6 +5156,23 @@ fn home_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+fn read_tail(path: &Path, max: usize) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(max as u64);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).ok()?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    if start > 0 {
+        // The first line is cut: drop it.
+        Some(text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or(text))
+    } else {
+        Some(text)
+    }
+}
+
 fn tail(text: &str, lines: usize) -> String {
     let all: Vec<&str> = text.lines().collect();
     let start = all.len().saturating_sub(lines);
@@ -3944,4 +5194,54 @@ fn strip_ansi(line: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod community_tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_log_has_no_home_paths_addresses_or_mail() {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/tester".into());
+        let mut settings = Settings::default();
+        settings.game_dir = "/games/title".into();
+        let raw = format!(
+            "6.7 fps, 150.0 ms/frame at {home}/secret/file and /games/title/x\n\
+             contact bob@example.com from 192.168.1.42 and 10.0.0.7\n"
+        );
+        let out = sanitize_log(&raw, &settings);
+        assert!(!out.contains(&home), "{out}");
+        assert!(!out.contains("/games/title"), "{out}");
+        assert!(!out.contains("bob@example.com"), "{out}");
+        assert!(!out.contains("192.168.1.42"), "{out}");
+        assert!(out.contains("<ip>"), "{out}");
+        assert!(out.contains("6.7 fps"), "{out}");
+    }
+
+    #[test]
+    fn shared_stats_take_world_frames_only() {
+        let raw = "\
+30.0 fps, 33.3 ms/frame (0.1 preparing: copies 0.1 ms 0.1 MB; 0.2 on the GPU; 0.0 copying back), 2 draws/frame\n\
+INFO victory_gpu::host: 6.6 fps, 151.0 ms/frame (60.0 preparing: copies 50.0 ms 200.0 MB; 30.0 on the GPU; 0.0 copying back), 2904 draws/frame\n\
+INFO victory_gpu::host: 4.4 fps, 227.0 ms/frame (90.0 preparing: copies 70.0 ms 245.0 MB; 35.0 on the GPU; 0.0 copying back), 3000 draws/frame\n";
+        let (fps, frame, gpu, draws) = world_stats(raw);
+        assert!((fps.unwrap() - 5.5).abs() < 0.01, "{fps:?}");
+        assert_eq!(frame, Some(227.0));
+        assert_eq!(gpu, Some(35.0));
+        assert_eq!(draws, Some(3000));
+    }
+
+    #[test]
+    fn menus_are_not_in_game_frames() {
+        let raw = "INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (0.1 preparing; 0.2 on the GPU), 2 draws/frame\n";
+        assert_eq!(world_stats(raw).0, None);
+        let mixed = "INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame, 2 draws/frame\n                     INFO victory_gpu::host: 4.4 fps, 227.0 ms/frame, 3000 draws/frame\n";
+        assert_eq!(world_stats(mixed).0, Some(4.4));
+    }
+
+    #[test]
+    fn dates_are_civil() {
+        assert_eq!(date_of(0), "1970-01-01");
+        assert_eq!(date_of(1_700_000_000), "2023-11-14");
+    }
 }

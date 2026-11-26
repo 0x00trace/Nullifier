@@ -11,12 +11,13 @@ developer or publisher.
 
 | | World fps |
 |---|---|
-| Linux · RX 9070 XT | **6.6–6.7** |
+| Linux · RX 9070 XT | **5.5–6.6** |
 | Linux · RTX 5080 | **5.2–5.3** |
 | Windows · reported | 3–5 |
 
-About 150 ms a frame on the 9070 XT, stable, picture correct — measured with
-the view-tree wineserver and the shipped profiles.
+About 170–180 ms a frame on the 9070 XT in the scene after the opening save
+(150 ms at the opening), stable, picture correct — measured with the view-tree
+wineserver and the shipped profiles.
 
 Works: menus, cutscene, prologue, world, audio, input, saves.
 Missing: the title's ray-traced light, so shadowed areas are black. Not yet

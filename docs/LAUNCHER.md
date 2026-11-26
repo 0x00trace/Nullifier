@@ -41,7 +41,9 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   any `.exe`, two folders deep). If the engine has not been built yet, one
   **Set up now** button runs `tools/setup.sh` in the background with a live
   tail, plain progress text and a Cancel button. No terminal is needed.
-* **Play** — the chosen game with a green "game found", the measured settings
+* **Play** — the last run's numbers separate **in-game** frames (a few hundred
+  draws or more) from menu/loading frames: the heading is the in-game median,
+  with the menu's rate beside it. The chosen game has a green "game found", the measured settings
   for this card, and one big **Play**. **Change…** reopens the picker,
   **Settings…** opens Rendering, and the three plain-language presets
   (Recommended, Low memory, Safe) plus the last run's numbers sit below. The
@@ -60,10 +62,26 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   the game has focus and no pad is connected, the cursor is kept in the window
   and its movement turns the right stick; sensitivity and inversion are on the
   same page. Menu navigation with the mouse is not included.
+* **Community** — each run records the **translation layer** version (the
+  title window's `v0.003` build string) and the launcher version separately;
+  a nickname, **where** in the game the run was and **notes**
+  (pop-in, flicker, HUD, crashes), then **Share last run**: it adds a local
+  entry and copies a JSON block. Each entry keeps the Nullifier version, title
+  build, profile, fps, frame and GPU time, draws, the full set of active
+  settings, the GPU/OS and the sanitized log. The list has two-line rows and
+  filters for name/area/note/settings text, game build, area and version,
+  "with notes only", and newest/fastest sorting; the log window shows the settings and hardware too.
+  **Refresh board** reads the published `community/leaderboard.json` from
+  `main` (raw GitHub, no token or server) and marks those rows **GitHub**;
+  local entries stay in `~/.local/share/nullifier/community.json`.
+  `NULLIFIER_BOARD_URL` points at another copy for testing.
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every
   number shows examples (`2048, 3072 or 4096 (MB)`) under its description.
+  **Display output** (experimental) picks a smaller output size and/or a
+  native render scale; the active choice is repeated in amber on Play, because
+  it is easy to forget and it changes how the picture looks.
 * **Warnings** — values that cannot work on this machine are called out in a
   yellow panel: a texture budget above the card's VRAM, world memory over half
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
@@ -210,6 +228,29 @@ it got.
 
 Measured on an RTX 5080, six runs in turn: 3.55 / 3.45 / 3.50 fps with the
 built server, 0.60 / 0.65 / 0.70 with Proton's own.
+
+## Display output and render scale (experimental)
+
+`VICTORY_OUTPUT=1920x1080|2560x1440` patches the title's own screen-size block
+(byte-checked; another build is left alone) and `VICTORY_RENDER_SCALE=1` uses
+the title's own upscaler at 1.0 instead of its 2/3. The title still applies
+its own scale, so output 1920x1080 with the default scale renders at 1280x720.
+
+Measured on the opening scene here, 1024 MB card buffers:
+
+| output | render scale | render size | median |
+|---|---|---|---|
+| 3840x2160 | 2/3 (default) | 2560x1440 | 5.5 fps |
+| 2560x1440 | 2/3 | 1707x960 | 6.7 fps |
+| 1920x1080 | 2/3 | 1280x720 | 7.1–7.4 fps |
+| 1920x1080 | 1.0 | 1920x1080 | 6.1 fps |
+
+The 1080p/720p combination is softer and its materials looked worse in play;
+the title's HUD and menus are authored for 4K and were reported wrong at a
+smaller output, so **native output stays the default**. The 1080p pause menu
+and a native-scale 1080p prologue looked correct in captures here; the in-game
+HUD at a smaller output has not been checked yet. Do not ship this on by
+default until that is answered.
 
 ## Shaders and pipelines
 
