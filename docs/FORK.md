@@ -82,6 +82,8 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | + guard pages left unread by copies (`c7e6f5f`) | profile | 0.90 / 1.20 / 0.70 | 40 / 41 / 40 | 0 | world renders (eight captures of 1.0–2.3 MB, one black); one sampled frame looks right, the others have a black face or a low-detail figure |
 | + loops given one latch each (`fa7ea8d`) | profile | 0.90 / 0.80 / 0.80 | 35 / 37 / 40 | 0 | world renders (four world captures of 1.5–1.7 MB); defects as before: in one, hair drawn as a ball of strands over a face, in another a figure lit in a dot pattern |
 | + an empty pipeline library asked for with no blob (`42466d5`) | profile, library kept from an earlier run | 0.85 / 1.30 / 1.40 | 42 / 44 / 44 | 0 | world renders (159 world captures of over 1 MB); faces and hair right in the 22 looked at; left: low-detail figures in one shot, one or two black frames at shot changes, arm hair drawn like fur |
+| + a streamed texture's host copy made with the mips its view shows (`d038121`) | profile, library kept | 1.00 / 1.30 / 0.70 | 44 / 44 / 40 | 0 | world renders (201 world captures, every second one looked at); both leads' faces have their textures from their first shots in all three runs; left: a dark patch around one eye in one shot of the third run, video panels drawn green in some frames, and the defects of the row above |
+| same build with `VICTORY_SHOWN_MIPS=0` (every mip, as before), run in turn with the row above | profile, library kept | 0.90 / 0.90 / 1.15 | 42 / 41 / 44 | 0 | world renders (232 world captures, every second one of the first 180 frames looked at); a lead's face black for the whole of the second run and dark in the first shots of the third; right in the first |
 
 * **Before:** each run ended on a breakpoint of the title's own
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
@@ -138,6 +140,30 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   by ±40 %): this is a picture fix, not a speed claim. Run after a restart
   of the machine (kernel 7.3.5 to 7.3.6, same driver), with
   `VICTORY_CAPTURE_WORLD=1` (a picture of two frames in every eight).
+* **The sixth row (`d038121`) and the seventh, its baseline:** the copy on
+  the card of a texture the title streams was made with every mip the title
+  describes, while the title has memory for the small ones first and its
+  view says from which mip on. In one run of this scene the texture pass
+  uploaded 30,931 such textures whose views showed 2,563 MB, into copies of
+  11,205 MB (counted on a diagnostics branch). The copies took the card to
+  nine tenths of its budget within seconds of the world's start, and past
+  that the pass makes no more: thousands of texture views waited for
+  minutes, a lead's face among them. A view from a later mip on now gets a
+  copy of its own that holds the mips from there. The two rows are six runs
+  of one build, the change on and off in turn (`VICTORY_SHOWN_MIPS=0` is
+  off). Off, the card stood at 74–98, 90–99 and 90–97 % of its budget from
+  second 13 to 200 of the world, 228, 260 and 334 passes made no copy for
+  lack of room, no texture was uploaded for 57, 162 and 68 s at a stretch,
+  and 12,225, 11,760 and 9,835 views were still waiting at the end; the
+  NVIDIA kernel module logged three mapping errors
+  (`intermapRegisterDmaMapping`). On, the card stood at 52–63, 50–61 and
+  49–62 %, no pass lacked room, uploads never paused, 1,017, 1,118 and 4,263
+  views waited at the end, and the module logged nothing. The medians
+  overlap: this is a picture fix, not a speed claim. What a frame's time
+  goes to did change: the texture phase takes 155–321 ms of it (38–52 ms
+  off), because there is now something to upload in every frame. The layer
+  also keeps more texture resources (109–124 thousand after 245 s of world,
+  39–58 thousand off): one for each first mip a copy holds.
 
 ### The texture ask (P0 probe, 2026-11-25)
 
