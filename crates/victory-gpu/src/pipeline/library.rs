@@ -453,9 +453,26 @@ fn library() -> Option<&'static Library> {
 /// adapter or driver change, damage).
 fn open(device: &ID3D12Device1, blob: Blob) -> Option<Library> {
     let make = |bytes: &[u8]| -> windows::core::Result<ID3D12PipelineLibrary1> {
-        // SAFETY: the bytes outlive the library (kept beside it).
+        // An empty library is asked for with no blob at all. An empty
+        // slice's pointer is not null, and vkd3d-proton refuses a blob of
+        // no length (E_INVALIDARG, `d3d12_pipeline_library_init`), where
+        // Windows takes it: under Wine no library was ever made, so no
+        // pipeline was kept and no early list written.
+        let blob = if bytes.is_empty() { std::ptr::null() } else { bytes.as_ptr().cast() };
+        let mut library = std::ptr::null_mut();
+        // SAFETY: the device's own method, called as the binding calls it;
+        // the bytes outlive the library (kept beside it), and a library
+        // it returns is ours to release.
         unsafe {
-            device.CreatePipelineLibrary::<ID3D12PipelineLibrary>(bytes)?.cast()
+            (Interface::vtable(device).CreatePipelineLibrary)(
+                Interface::as_raw(device),
+                blob,
+                bytes.len(),
+                &ID3D12PipelineLibrary::IID,
+                &mut library,
+            )
+            .ok()?;
+            ID3D12PipelineLibrary::from_raw(library).cast()
         }
     };
     if !blob.bytes().is_empty() {
@@ -735,6 +752,19 @@ mod tests {
         // SAFETY: a plain query on a live library.
         assert!(unsafe { library.library.GetSerializedSize() } > 0);
         assert!(matches!(library._blob, Blob::None));
+    }
+
+    /// What a first run does: no file yet, so an empty library is made, and
+    /// the host has to take the request (vkd3d-proton refused it with a
+    /// pointer and no length).
+    #[test]
+    fn a_first_run_starts_an_empty_library() {
+        let Some(device) = crate::host::host().and_then(|h| h.device.cast::<ID3D12Device1>().ok()) else {
+            return; // no host GPU here
+        };
+        let library = open(&device, Blob::None).expect("an empty library");
+        // SAFETY: a plain query on a live library.
+        assert!(unsafe { library.library.GetSerializedSize() } > 0);
     }
 
     /// A mapped file reads as the file's bytes, a file written through a
