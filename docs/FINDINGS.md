@@ -466,6 +466,141 @@ textures 15, copy-back 22, unaccounted 8. Real frames (3.7 MB), no device
 removal and the same three untranslated pixel shaders as before. Enabled for
 the Linux AMD and NVIDIA profiles.
 
+## 2.9 Where the submitting thread stops for the card, and `VICTORY_LATE_WAIT=3` on NVIDIA under Linux (2026-11-26)
+
+Same machine as 2.6 to 2.8. Build `6f3375d` (`main`, version 0.003), with the
+`linux-nvidia` profile as shipped there (`VICTORY_CARD_HASH_LANES=1`,
+`VICTORY_LATE_WAIT=1`).
+
+**The question was why about 62 submissions a frame are each waited for.**
+They are not. With `VICTORY_LATE_WAIT=1` a submission is sent and the thread
+goes on; the submissions in the air are settled together at the points where
+the title or the layer can see what they did (`late` in `host.rs` lists
+them). The frame line counts those points. Per frame, medians of each run's
+world lines:
+
+| settled for | profile | and `VICTORY_INDIRECT_RUNS=1` | and `VICTORY_LATE_WAIT=3` |
+|---|---|---|---|
+| a fill of upload memory read title memory that a flight's shaders may write | 13.0 to 14.2 | 14.0 to 14.2 | 13.6 to 14.5 |
+| the title changed memory under a flight's shader writes | 4.5 to 4.6 | 4.4 to 4.6 | 0 |
+| a present (or another submission that is waited for) | 1.0 | 1.0 | 0.2 |
+| 128 lists in the air | 0 | 0 | 1.0 |
+| all | 19.8 to 20.5 | 20.4 to 20.6 | 14.9 to 15.7 |
+| time waited for the card, a frame | 114 to 117 ms | 77 to 78 ms | 58 to 59 ms |
+
+Most of the waiting was at the second kind: four or five settles a frame with 84 to
+86 ms of the card's work still to run (53 to 55 ms with runs on). Stage 2 of
+the switch puts the title's changed bytes into the copy beside the flights'
+writes and does not settle; its log line says it looked at about eight pages
+a frame and found no changed run in any of them, in every line of the three
+runs. Stage 3 also sends the present as a flight. The fills still settle, but
+by then little of the card's work is left to wait for (17 to 20 ms a frame
+for 14 settles), and the one settle a frame at 128 lists in the air waits 28
+to 29 ms.
+
+**Nine runs of `6f3375d`, three settings in turn**, fitted against draws a
+frame as in 2.6:
+
+| | median fps | n | frame at 3,000 draws | wait for the card at 3,000 draws | card busy | removals |
+|---|---|---|---|---|---|---|
+| `linux-nvidia` as shipped | 4.30 / 4.30 / 4.30 | 47 / 47 / 47 | 226 ms | 110.3 ms | 57 / 59 / 60 % | 0 |
+| and `VICTORY_INDIRECT_RUNS=1` | 5.20 / 5.20 / 5.20 | 47 / 47 / 46 | 189 ms | 75.7 ms | 51 / 51 / 51 % | 0 |
+| and `VICTORY_LATE_WAIT=3` | **6.20 / 5.85 / 5.75** | 48 / 46 / 46 | **169 ms** | **57.5 ms** | 58 / 57 / 58 % | 0 |
+
+No device removal, no unhandled exception and no failed clamp in the nine,
+and the NVIDIA module logged nothing new. A tenth run, 20 minutes long, with
+the profile chosen by the launcher itself, gave 6.30 fps (n=208) and no
+removal; after the opening it stands in the first scene the player controls,
+with no input sent. Six more runs of 300 s with stage 3 followed (below), one
+of them served by Proton's own wineserver, and none lost the device. After
+`main` had moved to `b91fd2e` (lint changes and a keyboard pad in `crates/`),
+three runs with the profile chosen by the launcher gave 5.60 / 5.70 / 5.90
+fps (n = 47 each, 175 ms at 3,000 draws), again with no removal.
+
+**`VICTORY_LATE_WAIT=2` and `3` were not safe on Linux** where they were
+tried before: on an RX 9070 XT under RADV they remove the device within
+minutes (section 4 and `launcher/profiles.json`). That was with Proton's own
+wineserver, at under 1 fps. Here, on NVIDIA, stage 3 ran for 300 s nine
+times on `6f3375d`, three times on `b91fd2e` and nine times on the builds
+before them that night, and for 20 minutes once, without a removal. What
+differs between the two cases is not known, so the value goes into a profile
+for this kind of machine only
+(`linux-nvidia-16gb`), and `VICTORY_LATE_WAIT=1` is the first thing to try if
+a session there loses the device.
+
+**Tried and left out: fills that do not wait.** A port of the fills-ahead of
+fxceless/victory-fork `f85101b` (a fill of upload memory reads title memory
+without settling the flights; what the flights then write is compared with
+what it read) takes the first row of the table to 0 and the wait for the
+card to about 26 ms a frame, with no fill ever found to have read bytes a
+flight then changed. The frame rate did not follow: 5.40, 5.40 and 5.45 fps
+with it against 5.40 and 5.60 without (single runs of work-in-progress
+builds, with stage 3, 512 lists in the air and the hash lanes off). With
+fewer waits inside its submissions the title waits between them instead
+(below). The port is not in this tree.
+
+**What holds the frame when the card is not waited for** (`perf`, one run of
+a work-in-progress build with the runs, stage 3, the hash lanes and the
+fills that do not wait: 6.40 fps without captures; a 12 s window of
+scheduler events, 30 s of samples, 20 s of system calls):
+
+* The thread that submits runs 41 % of the time and waits for the card 5 %.
+  It waits for the title's main thread 42 %. Of its samples, 41 % are in the
+  layer (`victory_try_copy_op` 10 %, BLAKE3 2 %, `watch::writes` 2 %) and
+  59 % outside it, in Wine's `ntdll.so`, libc, the driver and the kernel. It
+  makes 68,000 `rt_sigprocmask` calls a second and 7,700 `mprotect`. My
+  reading, not checked in Wine's source: Wine blocks signals around each of
+  its virtual-memory calls, so those are about 34,000 such calls a second,
+  5,300 a frame (`NtGetWriteWatch`, `get_basic_memory_info` and
+  `NtProtectVirtualMemory` are in its samples). Reading the clock is about
+  7 % of its samples.
+* The title's main thread runs 56 % of the time, and 77 % of its samples
+  are in Wine and the kernel: it calls `SwitchToThread` 12,500 times a
+  second, which under Wine is `sched_yield` between two `getrusage` calls.
+  What it waits for in that loop was not found. It also sleeps 29 % of the
+  time waiting for its five recording threads.
+* The five recording threads run 20 % each. Of one such thread's samples,
+  46 % are in the layer, and 7.7 % of all of them in a contended mutex of
+  the layer's (which one was not found).
+
+So taking the remaining waits for the card away does not shorten the frame:
+the card is no longer what it waits for most. The next gains are on the
+processor's side of the layer: fewer virtual-memory calls in the submit
+path, the lock the recording threads
+share, and what the title's main thread spins for.
+
+**The scene after the opening, and what was tried there.** The 20-minute run
+passed the opening, and the title saved its progress. Every run after that
+started from the save, in a scene that stands still: about 4,850 draws a
+frame, and frame-rate lines within a few tenths of each other. The bench rows
+of this tree are from the opening, so that save has to be moved aside before
+a measured set (`AGENTS.md` §6); it was, after the runs below. One run each
+in that scene, medians of the last 30 lines:
+
+| | fps | removals |
+|---|---|---|
+| the profile | 6.2 to 6.3 | 0 |
+| and `VICTORY_LATE_WAIT_LISTS=512` | 5.4 | 0 |
+| and `VICTORY_RELAY=1` | 6.6 to 6.7 | 0 |
+| and `VICTORY_RELAY=2` | 6.8 | 0 |
+| the profile, served by Proton's own wineserver | 3.8 over the run, with lines down to 0.2 | 0 |
+
+These are single runs. The relay looks worth a measured set, and more lists
+in the air does not. The profile sets neither.
+
+Picture, from 100 captures of each of the nine runs (30 spread over the run,
+its first 42, and 28 around the car scene): the title cards, the street, the
+car, the interior and the video panels are drawn, and both leads have their
+face textures from their first shots, in all nine. The man's face is black
+in the car interior (the defect of 2.8) in the first run with runs on, for
+the first shots of that scene, and in the second run with stage 3, for the
+whole scene; it is right in the other seven, and in the three runs on
+`b91fd2e`. With the six runs of 2.8 that is 3 runs of 18 where it shows:
+3 of the 15 with `VICTORY_INDIRECT_RUNS=1`, and none of the 3 without. The
+defect was seen before that switch existed, and three runs without it are
+too few to say that the switch makes it more frequent; it is the first thing
+to look at if it does.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask

@@ -39,7 +39,7 @@ page marking and texture refresh.
 | Platform | State | Evidence |
 |---|---|---|
 | Linux + AMD | works, 0.7–0.9 fps | measured here (RX 9070 XT, Mesa 26.3.1) |
-| Linux + NVIDIA | works, 3.5 fps with the wineserver from `tools/build-wineserver.sh`, 0.6–1.4 with Proton's own | measured here (RTX 5080, below); 1.85–1.97 fps in issue #6 (RTX 5070 Ti); profile is `reported` |
+| Linux + NVIDIA | works, 5.60–6.20 fps on a 16 GB card with the wineserver from `tools/build-wineserver.sh` and the `linux-nvidia-16gb` profile (4.30 with `linux-nvidia`), 0.6–1.4 with Proton's own | measured here (RTX 5080, below); 1.85–1.97 fps in issue #6 (RTX 5070 Ti); `linux-nvidia-16gb` is `measured`, `linux-nvidia` is `reported` |
 | Windows + AMD | works, ~1 fps | issue #3 (RX 9070 XT, needs skips) |
 | Windows + NVIDIA | works, 2–4 fps | upstream README, issue #417 |
 | Linux + Intel | untested | profile `untested` |
@@ -92,6 +92,10 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | the same build with `VICTORY_INDIRECT_RUNS=1`, run in turn with the row above | profile + `VICTORY_INDIRECT_RUNS=1`, library kept | **4.50 / 4.40 / 4.40** | 47 / 47 / 47 | 0 | world renders (924 captures of over 50 KB; 72 of each run looked at, as above); faces, street, car, interior, title cards and video panels as in the rows above; the woman's top is white in the three runs |
 | + a piece of a card copy hashed by a group of 64 threads (`7b4ffa4`), switch off, built server | profile + `VICTORY_INDIRECT_RUNS=1`, library kept | 4.40 / 4.60 / 4.65 | 47 / 48 / 48 | 0 | world renders (927 captures of over 50 KB; 100 of each run looked at: 30 spread over the run, its first 42 and 28 around the car scene); faces, street, car, interior, title cards and video panels as in the rows above, but in the third run the man's face is black in the car interior (a defect from before these changes that comes and goes from run to run); the woman's top is grey in the first run and white in the other two |
 | the same build with `VICTORY_CARD_HASH_LANES=1` too, run in turn with the row above | profile + `VICTORY_INDIRECT_RUNS=1 VICTORY_CARD_HASH_LANES=1`, library kept | **5.30 / 5.25 / 5.30** | 47 / 48 / 47 | 0 | world renders (1,054 captures of over 50 KB; 100 of each run looked at, as above); faces, street, car, interior, title cards and video panels as in the rows above, the man's face right in the car interior in all three; the woman's top is grey in the first run and white in the other two |
+| `main` @ `6f3375d` (version 0.003, with all of the above and `VICTORY_CARD_HASH_LANES=1` in the profile), built server | profile, library kept | 4.30 / 4.30 / 4.30 | 47 / 47 / 47 | 0 | world renders (887 captures of over 50 KB; 100 of each run looked at: 30 spread over the run, its first 42 and 28 around the car scene); faces, street, car, interior, title cards and video panels as in the rows above; the man's face right in the car interior in all three |
+| the same build with `VICTORY_INDIRECT_RUNS=1`, run in turn with the row above | profile + `VICTORY_INDIRECT_RUNS=1`, library kept | 5.20 / 5.20 / 5.20 | 47 / 47 / 46 | 0 | world renders (1,061 captures of over 50 KB; 100 of each run looked at, as above); as the row above, but in the first run the man's face is black in the first shots of the car interior and right in the later ones |
+| the same build with `VICTORY_INDIRECT_RUNS=1 VICTORY_LATE_WAIT=3` (what `linux-nvidia-16gb` sets), run in turn with the two rows above | profile + both, library kept | **6.20 / 5.85 / 5.75** | 48 / 46 / 46 | 0 | world renders (1,188 captures of over 50 KB; 100 of each run looked at, as above); as the rows above, but in the second run the man's face is black through the car interior |
+| `main` @ `b91fd2e`, with the `linux-nvidia-16gb` profile chosen by the launcher, built server | profile, library kept | 5.60 / 5.70 / 5.90 | 47 / 47 / 47 | 0 | world renders (1,138 captures of over 50 KB; 58 of each run looked at: 30 spread over the run and 28 around the car scene); as the rows above, and the man's face right in the car interior in all three |
 
 | the merged stack (#1–#5, #6 docs) on this AMD machine | `linux-amd-16gb`, library kept | 1.70 / 1.40 / 1.40 | 15 / 16 / 15 | 0 | world renders (captures 3.2–4.2 MB); card 6.1–6.3 GB of 15.2; texture refresh 94–281 ms, mostly the write-watch ask |
 | + the wineserver from `tools/build-wineserver.sh` (Wine's view tree) | same | **3.25 / 3.10 / 3.20** | 10 / 9 / 9 | 0 | world renders (captures 3.7–4.1 MB); frame ~310 ms; copies 47–50, textures 14–19; card 6.3–6.4 GB |
@@ -277,6 +281,34 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   no unhandled exception and no failed clamp in the six, and the NVIDIA
   module logged nothing new. Off by default, as the row above. Evidence
   and method: `docs/FINDINGS.md` 2.8.
+
+* **The last four rows:** `main` after all of the above was merged, with
+  the `linux-nvidia` profile as it is there (the hash lanes on, the runs
+  off, `VICTORY_LATE_WAIT=1`), and then with two more values, nine runs in
+  turn. `VICTORY_INDIRECT_RUNS=1` is the change of the twelfth and
+  thirteenth rows. `VICTORY_LATE_WAIT=3` is not new code: at stage 1 the
+  submissions sent ahead are settled about 20 times a frame, five of those
+  because the title changed memory under their shaders' writes, with 84 to
+  86 ms of the card's work still to wait for (53 to 55 ms with the runs on);
+  stage 2 puts the title's bytes in beside those writes without settling
+  (its log shows about eight pages looked at a frame and no changed run in
+  any of them, in the three runs), and stage 3 also sends the present ahead. At 3,000 draws the frame is
+  226 ms, 189 ms and 169 ms, and the wait for the card 110.3, 75.7 and
+  57.5 ms. Stages 2 and 3 remove the device on the RX 9070 XT above, so
+  they were never set on Linux. On this card stage 3 ran for 300 s twenty-one
+  times (nine of them on `6f3375d`, three on `b91fd2e`) and for 20 minutes
+  once, with the profile chosen by the launcher itself (6.30 fps, n=208), and
+  never lost the device, also not in one run served by Proton's own
+  wineserver. The fourth of these rows is the profile again after `main` had
+  moved (lint changes and a keyboard pad in `crates/`). The profile
+  `linux-nvidia-16gb` now sets both values for NVIDIA cards of 13 GB or
+  more under Linux; `linux-nvidia` is as it was. The man's face is black
+  in the car interior in two of the first nine runs, both with the runs on;
+  with the six runs of the two rows before and the three of the fourth row,
+  that is three runs of fifteen with the runs on and none of three without,
+  which is too few to say that the runs make it more frequent (it was seen
+  before they existed). Evidence
+  and method: `docs/FINDINGS.md` 2.9.
 
 ### The texture ask (P0 probe, 2026-11-25)
 

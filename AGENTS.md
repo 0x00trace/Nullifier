@@ -151,6 +151,7 @@ and `VICTORY_WINESERVER=0` runs with Proton's own.
 |---|---|
 | Linux + AMD | `TEXTURE_NO_WAIT=1 LATE_WAIT=1 WIDE_BACK=1 CARD_BUFFERS_MIN_MB=1 CARD_BUFFERS_MB=1024` |
 | Linux + NVIDIA | same + `VKD3D_DISABLE_EXTENSIONS=VK_NV_raw_access_chains` |
+| Linux + NVIDIA, 13 GB or more | the row above with `LATE_WAIT=3`, + `INDIRECT_RUNS=1 CARD_HASH_LANES=1` (`linux-nvidia-16gb`; 5.60–6.20 fps against 4.30 on an RTX 5080) |
 | Windows + AMD | `LATE_WAIT=3 WIDE_BACK=1 CARD_BUFFERS_MIN_MB=1 CARD_BUFFERS_MB=1024`; add `SHADER_OPT=59` if the driver compiler crashes |
 | Windows + NVIDIA | `RELAY=2`, or the `LATE_WAIT=3` combo |
 | VRAM < 10 GB | `CARD_BUFFERS_MB=512` (or 409); do not exceed 1024 on 12 GB — it corrupts the picture |
@@ -218,7 +219,17 @@ standalone and fine on lavapipe: it is a driver crash, not our translation.
 
 **`device removed 0x887A0005` after minutes.** Submissions sent ahead of the
 fence outrun the driver. → `LATE_WAIT>=2`, `JOIN_COPIES=1` and `RELAY` are not
-safe on Linux. Default `LATE_WAIT=1`.
+safe on Linux with AMD (RADV). Default `LATE_WAIT=1`. The one exception that
+is measured: `LATE_WAIT=3` on an RTX 5080 with the built wineserver
+(`linux-nvidia-16gb`, `docs/FINDINGS.md` 2.9); go back to 1 there first if a
+session loses the device.
+
+**Every bench run starts in another scene, with about 4,850 steady draws a
+frame.** A run longer than about six minutes passes the opening, and the title
+saves its progress; later runs load that save. The bench rows are from the
+opening. → Before a measured set, move the newest container aside under
+`<prefix>/pfx/drive_c/users/steamuser/AppData/Local/nullifier/data/*/saves/*/*/`
+(the one that is neither the settings nor the player container).
 
 **`unhandled exception 0x80000001` (guard page).** On current upstream, PR #154's
 VEH copy collides with upstream's own page-guard machinery. → do not apply #154
@@ -298,6 +309,17 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   `VICTORY_INDIRECT_RUNS=1`. To compare the two forms without the title:
   `cargo test -p victory-gpu --lib indirect::card_hash -- --ignored
   --nocapture`.
+
+* **The submissions were never waited for one by one (2.9).** At
+  `LATE_WAIT=1` they are settled together about 20 times a frame; five of
+  those, where the title changed memory under shader writes, held most of
+  the waiting. `LATE_WAIT=3` removes them and the present's settle: 5.60-6.20
+  fps against 5.20 on an RTX 5080 (and 4.30 without the runs). Taking the
+  remaining waits away too (fills that do not wait: tried, left out) did not
+  raise the frame rate: the submitting thread then spends over half of its
+  running time in Wine's virtual-memory calls and the kernel, and the
+  title's main thread spins on `SwitchToThread`. Profile the processor side
+  before the card side from here on.
 
 The next wins are on the copy lane — copy-back through the layer's own view,
 joined submission parts — measured in fxceless/victory-fork and not yet ported

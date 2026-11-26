@@ -3048,7 +3048,7 @@ fn example(key: &str) -> Option<&'static str> {
         "VICTORY_TEXTURE_BUDGET_MB" => Some("2048, 3072 or 4096 (MB)"),
         "VICTORY_CARD_BUFFERS_MB" => Some("256, 512 or 1024 (MB)"),
         "VICTORY_CARD_BUFFERS_MIN_MB" => Some("1 (MB)"),
-        "VICTORY_LATE_WAIT" => Some("0, 1 or 2"),
+        "VICTORY_LATE_WAIT" => Some("0 to 3"),
         "VICTORY_CARD_REHASH_RUNS" => Some("0, 1 or 2"),
         "VICTORY_INDIRECT_RUNS" | "VICTORY_INDIRECT_WINDOW" => Some("1"),
         "VICTORY_RELAY" => Some("0, 1 or 2"),
@@ -3113,8 +3113,8 @@ fn describe(key: &str) -> Option<Desc> {
         ),
         "VICTORY_LATE_WAIT" => d(
             "Frames prepared ahead",
-            "Frames handed to the card ahead of the last. 2 and above can crash on Linux.",
-            "0 or 1. 2 and above is known to crash on Linux.",
+            "Frames handed to the card ahead of the last. 2 and above can crash on Linux with an AMD card.",
+            "0 or 1 with an AMD card on Linux. 3 is measured with a 16 GB NVIDIA card on Linux (linux-nvidia-16gb), and is what the Windows profiles set.",
         ),
         "VICTORY_TEXTURE_NO_WAIT" => d(
             "Do not wait for textures",
@@ -3203,8 +3203,12 @@ fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
         }
     }
     if let Some(late) = setting_value(sets, "VICTORY_LATE_WAIT") {
-        if late >= 2 {
-            out.push("Frames prepared ahead is 2 or more: this is known to remove the device on Linux. Use 0 or 1.".into());
+        // On Linux with an AMD card (RADV) 2 and 3 remove the device within
+        // minutes. With an NVIDIA card 3 is the measured value of the
+        // linux-nvidia-16gb profile (docs/FORK.md), and the Windows
+        // profiles set 3.
+        if late >= 2 && !cfg!(windows) && hw.vendor != "nvidia" {
+            out.push("Frames prepared ahead is 2 or more: this is known to remove the device on Linux with an AMD card. Use 0 or 1.".into());
         }
     }
     if sets.contains_key("VICTORY_JOIN_COPIES") {
