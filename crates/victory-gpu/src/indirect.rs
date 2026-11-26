@@ -952,6 +952,8 @@ fn uav_barrier() -> D3D12_RESOURCE_BARRIER {
 /// The benchmark of the clamp and its barriers (ignored by default).
 #[cfg(test)]
 mod bench;
+#[cfg(test)]
+mod card_hash;
 
 #[cfg(test)]
 mod tests {
@@ -2555,6 +2557,7 @@ void main() {
         for (name, src, entry, target) in [
             ("clamp", SOURCE, s!("main"), s!("cs_5_1")),
             ("card_compare", crate::host::CARD_COMPARE, s!("main"), s!("cs_5_1")),
+            ("card_compare_lanes", crate::host::CARD_COMPARE_LANES, s!("main"), s!("cs_5_1")),
             ("plane_corners", crate::host::PLANE_CORNERS, s!("corner"), s!("vs_5_1")),
             ("plane_steps", crate::host::PLANE_STEPS, s!("plane"), s!("ps_5_1")),
             ("plane_floats", crate::host::PLANE_FLOATS, s!("plane"), s!("ps_5_1")),

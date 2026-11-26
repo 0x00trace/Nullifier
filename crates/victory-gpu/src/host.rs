@@ -1699,6 +1699,105 @@ void main(uint3 id : SV_DispatchThreadID) {
 }
 "#;
 
+/// [`CARD_COMPARE`] with a group of 64 threads to a piece and a hash for
+/// each thread (`VICTORY_CARD_HASH_LANES=1`; off by default).
+///
+/// With a thread a piece, a pass hashes its 64 KiB pieces in 4,096 steps
+/// one after the other, so it takes the time of one piece however few its
+/// pieces are: the card waits on one load at a time. The passes run before
+/// every submission's lists (hashes after ranges were sent up) and after
+/// them (compares): `docs/FINDINGS.md` 2.8 has their numbers and what each
+/// form costs.
+///
+/// Here a piece has a group, and thread `t` of the group hashes the
+/// piece's 16-byte steps `t`, `t + 64`, `t + 128`... into a hash of its
+/// own (neighbouring threads read neighbouring bytes): 64 hashes a piece,
+/// 64 steps deep, a KiB of hashes for 64 KiB of a copy
+/// (`crate::shadow::card_hash_bytes`). No thread waits for another. A
+/// thread whose hash is not the one stored writes 1 to the piece's dword in
+/// `differs` and nothing else is written there, so the dwords of a compare
+/// are zeroed when it is planned (`Host::card_before`). Every writer of a
+/// dword stores the same value, so no atomic is needed (one on memory the
+/// CPU maps is slow, `docs/FINDINGS.md` 2.7).
+///
+/// fxceless/victory-fork 5557224 gives a piece a group too and folds the 64
+/// hashes into one, through group-shared memory behind a group barrier.
+/// This tree tried that on RADV and lost the device in two runs of five
+/// (`docs/FINDINGS.md` 3.17, the barrier suspected), so this form has no
+/// memory the threads share and no barrier.
+///
+/// It is another hash than [`CARD_COMPARE`]'s, so one process uses one of
+/// them for every hash it stores and compares (it is chosen once). Copies
+/// are under 1 GiB (`crate::shadow`'s `card_for`): at most 16,385 pieces,
+/// one group each, within a dispatch's 65,535.
+pub(crate) const CARD_COMPARE_LANES: &str = r#"
+cbuffer Span : register(b0) {
+    uint first;    // the first piece
+    uint skew;     // where the copy starts in its piece 0
+    uint size;     // the copy's buffer, in bytes (a multiple of 64 KiB)
+    uint pieces;
+    uint out_at;   // the first piece's dword in `differs`, in bytes
+    uint compare;  // 0: the hashes are stored; else compared with those stored (2: and then stored)
+};
+StructuredBuffer<uint> now : register(t0);
+// 16 bytes for each of the 64 threads of a piece of the copy: the hash of
+// the thread's bytes when they were last sent up (or hashed whole, the
+// first time).
+RWStructuredBuffer<uint> hashes : register(u0);
+RWStructuredBuffer<uint> differs : register(u1);
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint i = id.x / 64u;
+    uint t = id.x % 64u;
+    if (i >= pieces) return;
+    uint piece = first + i;
+    uint lo = piece * 65536u;
+    lo = lo > skew ? lo - skew : 0u;
+    uint hi = min((piece + 1u) * 65536u - skew, size);
+    lo = lo & ~15u;
+    hi = (hi + 15u) & ~15u;
+    uint4 h = uint4(0x9E3779B9u, 0x85EBCA6Bu, 0xC2B2AE35u, 0x27D4EB2Fu);
+    for (uint at = lo + t * 16u; at < hi; at += 1024u) {
+        uint w = at / 4u;
+        uint4 v = uint4(now[w], now[w + 1u], now[w + 2u], now[w + 3u]);
+        h = (h ^ v) * uint4(0x01000193u, 0x9E3779B1u, 0x85EBCA77u, 0xC2B2AE3Du);
+        h = h.yzwx ^ (h >> 15);
+    }
+    uint hw = (piece * 64u + t) * 4u;
+    bool store = compare == 0u;
+    if (compare != 0u) {
+        uint4 old = uint4(hashes[hw], hashes[hw + 1u], hashes[hw + 2u], hashes[hw + 3u]);
+        if (any(h != old)) {
+            differs[(out_at / 4u) + i] = 1u;
+            // With the copy-back on its own thread: the next compare of
+            // the piece finds what is written from here on.
+            store = compare == 2u;
+        }
+    }
+    if (store) {
+        hashes[hw] = h.x;
+        hashes[hw + 1u] = h.y;
+        hashes[hw + 2u] = h.z;
+        hashes[hw + 3u] = h.w;
+    }
+}
+"#;
+
+/// Whether [`CARD_COMPARE_LANES`] is the compare
+/// (`VICTORY_CARD_HASH_LANES=1`). Chosen once: stored and compared hashes
+/// must agree.
+pub(crate) fn card_hash_lanes() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_CARD_HASH_LANES").is_some_and(|v| v == "1"))
+}
+
+/// The groups a pass of the compare over `pieces` pieces is dispatched
+/// with: a group a piece with `lanes` ([`CARD_COMPARE_LANES`]), else a
+/// thread a piece.
+pub(crate) fn card_compare_groups(pieces: u32, lanes: bool) -> u32 {
+    if lanes { pieces } else { pieces.div_ceil(64) }
+}
+
 pub(crate) fn root_param_constants(
     shader_register: u32,
     num_32bit_values: u32,
@@ -3200,12 +3299,17 @@ impl Host {
         use windows::Win32::Graphics::Direct3D::ID3DBlob;
         let mut code: Option<ID3DBlob> = None;
         let mut errors: Option<ID3DBlob> = None;
+        let source = if card_hash_lanes() {
+            CARD_COMPARE_LANES
+        } else {
+            CARD_COMPARE
+        };
         // SAFETY: the source and names live through the call; the out
         // pointer is ours.
         let compiled = unsafe {
             D3DCompile(
-                CARD_COMPARE.as_ptr().cast(),
-                CARD_COMPARE.len(),
+                source.as_ptr().cast(),
+                source.len(),
                 windows::core::s!("card compare"),
                 None,
                 None,
@@ -3384,7 +3488,7 @@ impl Host {
                         for run in runs {
                             let constants = [run.first, run.skew, size as u32, run.pieces, 0, 0];
                             list.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
-                            list.Dispatch(run.pieces.div_ceil(64), 1, 1);
+                            list.Dispatch(card_compare_groups(run.pieces, card_hash_lanes()), 1, 1);
                         }
                     }
                     list.Close()?;
@@ -3429,6 +3533,18 @@ impl Host {
                     continue;
                 };
                 let compared = twin && u64::from(at + span.pieces) * 4 <= work.differs.2;
+                if compared && card_hash_lanes() {
+                    // That compare only sets the dwords of pieces that
+                    // differ. No plan in the air has these.
+                    // SAFETY: inside the mapped results (checked above).
+                    unsafe {
+                        std::ptr::write_bytes(
+                            (work.differs.1 as *mut u32).add(at as usize),
+                            0,
+                            span.pieces as usize,
+                        )
+                    };
+                }
                 plan.ranges.push(CardRange {
                     shadow: shadow.clone(),
                     declared: (from, to),
@@ -3475,7 +3591,7 @@ impl Host {
                         list.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
                         list.SetComputeRootShaderResourceView(1, r.shadow.buffer.GetGPUVirtualAddress());
                         list.SetComputeRootUnorderedAccessView(2, before.GetGPUVirtualAddress());
-                        list.Dispatch(r.span.pieces.div_ceil(64), 1, 1);
+                        list.Dispatch(card_compare_groups(r.span.pieces, card_hash_lanes()), 1, 1);
                         CARD_PASSES[2].fetch_add(1, Ordering::Relaxed);
                     }
                     list.Close()?;
