@@ -361,12 +361,16 @@ fn bench_card_hash_passes() {
         return;
     };
     const RUNS: usize = 9;
-    // A copy of 256 MB in the card's memory.
-    const ALL: u32 = 4096;
+    // A copy of 768 MB in the card's memory: every compare pass of the frame
+    // has pieces of its own. (Passes over the same pieces, one after the
+    // other, read part of them from the card's cache: 80 passes over a
+    // third as many pieces took 0.30 ms with a group a piece.)
+    const ALL: u32 = 12288;
     const HASH_PASSES: u32 = 520;
     const HASH_PIECES: u32 = 2;
     const COMPARE_PASSES: u32 = 80;
     const COMPARE_PIECES: u32 = 144;
+    const _: () = assert!(COMPARE_PASSES * COMPARE_PIECES <= ALL);
     // The ranges sent up before the hash passes, one for each pass: 65 MB.
     const SENT_BYTES: u64 = (HASH_PIECES as u64) * PIECE as u64;
     #[derive(Clone, Copy, PartialEq, Eq)]
@@ -470,7 +474,7 @@ fn bench_card_hash_passes() {
                     }
                     What::Compares => {
                         for k in 0..COMPARE_PASSES {
-                            let first = (k * 49) % (ALL - COMPARE_PIECES);
+                            let first = k * COMPARE_PIECES;
                             pass(
                                 list,
                                 *lanes,
@@ -507,7 +511,7 @@ fn bench_card_hash_passes() {
                 What::Hashes { barrier_every: 13 },
             ),
             ("80 compare passes of 144 pieces", What::Compares),
-            ("256 MB hashed in one pass", What::Whole),
+            ("768 MB hashed in one pass", What::Whole),
         ];
         // The hashes of every piece first (the compares then find nothing
         // changed, as nearly all of the title's do), then the cases in
