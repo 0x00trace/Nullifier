@@ -46,7 +46,8 @@ cargo build --manifest-path tools/launcher/Cargo.toml
   reveals them itself.
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
-  plain words. Every switch has a `?` that explains it and a safe value.
+  plain words. Every switch has a small round `?` that explains it, and every
+  number shows examples (`2048, 3072 or 4096 (MB)`) under its description.
 * **Warnings** — values that cannot work on this machine are called out in a
   yellow panel: a texture budget above the card's VRAM, world memory over half
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.

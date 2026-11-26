@@ -205,6 +205,9 @@ struct Settings {
     /// Show the technical tabs (Rendering, Advanced, Tools).
     #[serde(default)]
     show_advanced: bool,
+    /// The one-time experimental warning on the Graphics page was acknowledged.
+    #[serde(default)]
+    game_warning_seen: bool,
     #[serde(skip)]
     root: Option<PathBuf>,
     #[serde(skip)]
@@ -245,6 +248,7 @@ impl Default for Settings {
             profiles_hash: 0,
             planned: Planned::default(),
             show_advanced: false,
+            game_warning_seen: false,
             root: None,
             reloaded_profile: false,
         }
@@ -859,6 +863,7 @@ struct App {
     prep_log: Option<PathBuf>,
     prep_started: Option<std::time::Instant>,
     toast: Option<(String, std::time::Instant)>,
+    game_advanced_open: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1047,6 +1052,7 @@ impl App {
             prep_log: None,
             prep_started: None,
             toast: None,
+            game_advanced_open: false,
         }
     }
 
@@ -1617,32 +1623,23 @@ impl App {
                 )
             };
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("Measured settings for {vendor}"))
-                        .small()
-                        .color(egui::Color32::GRAY),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.running() {
+                    ui.label(
+                        egui::RichText::new("Running - Esc pauses the game")
+                            .color(egui::Color32::from_rgb(87, 199, 133)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(format!("Measured settings for {vendor}"))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
                     if chip_button(ui, "Settings…").clicked() {
                         self.settings.show_advanced = true;
                         self.tab = Tab::Rendering;
                         self.settings.save();
                     }
-                });
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(if self.running() {
-                        "Running - Esc pauses the game"
-                    } else if self.prep.is_some() {
-                        "Setting up…"
-                    } else {
-                        "Ready"
-                    })
-                    .small()
-                    .color(egui::Color32::GRAY),
-                );
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let button = if self.running() {
                         egui::Button::new(
@@ -1943,6 +1940,7 @@ impl App {
         );
         let running = self.running();
         let mut reload = false;
+        let mut advanced_open = self.game_advanced_open;
         let Some(game) = self.game.as_mut() else {
             card(ui, |ui| {
                 ui.label("Not found yet. Start the game once so it writes its settings, then press Reload.");
@@ -1955,6 +1953,7 @@ impl App {
             }
             return;
         };
+        let planned = &mut self.settings.planned;
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(!running, egui::Button::new("Apply"))
@@ -1980,36 +1979,99 @@ impl App {
             }
         });
         ui.label(egui::RichText::new(&game.note).small().color(egui::Color32::GRAY));
-        ui.add_space(4.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
-            let mut current = String::new();
-            for setting in &mut game.settings {
-                if setting.key.starts_with("version") {
-                    continue;
-                }
-                if setting.section != current {
-                    if !current.is_empty() {
-                        ui.add_space(6.0);
+            section_header(ui, "Display");
+            render_pairs(ui, game, DISPLAY_KEYS);
+
+            section_header(ui, "Graphics");
+            render_pairs(ui, game, GRAPHICS_KEYS);
+
+            section_header(ui, "Shadows and water");
+            render_pairs(ui, game, SHADOW_KEYS);
+
+            // Everything the game writes that is not in the short lists above.
+            let rest: Vec<usize> = game
+                .settings
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| {
+                    !s.key.starts_with("version")
+                        && !is_curated(&s.section, &s.key)
+                        && !s.key.is_empty()
+                })
+                .map(|(i, _)| i)
+                .collect();
+            ui.add_space(14.0);
+            let arrow = if advanced_open { "\u{25be}" } else { "\u{25b8}" };
+            let button = egui::Button::new(
+                egui::RichText::new(format!(
+                    "{arrow}  Advanced graphics settings  ({})",
+                    rest.len()
+                ))
+                .strong(),
+            )
+            .fill(egui::Color32::from_rgb(32, 35, 42))
+            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(55, 60, 70)))
+            .min_size(egui::vec2(ui.available_width(), 32.0));
+            if ui.add(button).clicked() {
+                advanced_open = !advanced_open;
+            }
+            if advanced_open {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Less common values, mostly for troubleshooting. The defaults are a good starting point.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
+                let mut current = String::new();
+                for index in rest {
+                    let section = game.settings[index].section.clone();
+                    if section != current {
+                        if !current.is_empty() {
+                            ui.add_space(8.0);
+                        }
+                        current = section.clone();
+                        section_header(ui, section_title(&section));
                     }
-                    current = setting.section.clone();
-                    ui.label(
-                        egui::RichText::new(section_title(&current))
-                            .strong()
-                            .size(15.0),
-                    );
-                    ui.separator();
-                }
-                let changed = game_row(ui, setting);
-                if changed {
-                    let line = format!(
-                        "{}<{} value=\"{}\" />",
-                        setting.indent, setting.key, setting.value
-                    );
-                    game.lines[setting.line] = line;
-                    game.dirty = true;
+                    render_index(ui, game, index);
                 }
             }
+
+            ui.add_space(14.0);
+            egui::Frame::group(ui.style())
+                .fill(egui::Color32::from_rgb(28, 31, 37))
+                .inner_margin(egui::Margin::symmetric(14, 12))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(egui::RichText::new("Not available yet").strong());
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "These need engine work. Switching them on here does nothing yet.",
+                            )
+                            .small()
+                            .color(egui::Color32::GRAY),
+                        )
+                        .wrap(),
+                    );
+                    ui.add_space(4.0);
+                    ui.add_enabled(false, egui::Checkbox::new(&mut planned.fsr, "FSR upscaling"));
+                    ui.add_enabled(false, egui::Checkbox::new(&mut planned.ray_tracing, "Ray-traced light"));
+                    ui.add_enabled(
+                        false,
+                        egui::Slider::new(&mut planned.render_scale, 0.5..=1.0).text("Render scale"),
+                    );
+                    ui.add_enabled(
+                        false,
+                        egui::Slider::new(&mut planned.lod, 0.5..=2.0).text("LOD distance"),
+                    );
+                });
         });
+        self.game_advanced_open = advanced_open;
         if reload {
             self.game = load_game_settings();
         }
@@ -2108,19 +2170,21 @@ impl App {
                             [300.0, 22.0],
                             egui::Label::new(egui::RichText::new(&key).monospace()),
                         );
-                        if describe(&key).is_some() {
-                            if chip_button(ui, "?").on_hover_text("What this does").clicked() {
-                                info = Some(key.clone());
-                            }
-                        } else {
-                            ui.add_enabled(false, egui::Button::new("?").small());
+                        if describe(&key).is_some() && help_button(ui).clicked() {
+                            info = Some(key.clone());
                         }
                         if chip_button(ui, "×").clicked() {
                             remove = Some(key.clone());
                         }
                         let mut v = value.clone();
+                        let hint = example(&key).unwrap_or("value");
                         if ui
-                            .add_sized([100.0, 22.0], egui::TextEdit::singleline(&mut v))
+                            .add_sized(
+                                [100.0, 22.0],
+                                egui::TextEdit::singleline(&mut v)
+                                    .hint_text(hint)
+                                    .vertical_align(egui::Align::Center),
+                            )
                             .changed()
                         {
                             self.settings.sets.insert(key.clone(), v);
@@ -2136,7 +2200,11 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label("Add");
                     ui.add(egui::TextEdit::singleline(&mut self.new_key).desired_width(220.0).hint_text("VICTORY_…"));
-                    ui.add(egui::TextEdit::singleline(&mut self.new_value).desired_width(80.0).hint_text("1"));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.new_value)
+                            .desired_width(110.0)
+                            .hint_text("e.g. 1 or 2048"),
+                    );
                     if ui.button("Add").clicked() && !self.new_key.trim().is_empty() {
                         self.settings
                             .sets
@@ -2155,22 +2223,6 @@ impl App {
                         .desired_rows(4)
                         .hint_text("VICTORY_EXAMPLE=1"),
                 );
-            });
-
-            ui.add_space(4.0);
-            card(ui, |ui| {
-                ui.strong("Coming later");
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new("These will arrive with engine work; they cannot be turned on yet.")
-                            .small()
-                            .color(egui::Color32::GRAY),
-                    ),
-                );
-                ui.add_enabled(false, egui::Checkbox::new(&mut self.settings.planned.fsr, "FSR upscaling"));
-                ui.add_enabled(false, egui::Checkbox::new(&mut self.settings.planned.ray_tracing, "Ray-traced light"));
-                ui.add_enabled(false, egui::Slider::new(&mut self.settings.planned.render_scale, 0.5..=1.0).text("Render scale"));
-                ui.add_enabled(false, egui::Slider::new(&mut self.settings.planned.lod, 0.5..=2.0).text("LOD distance"));
             });
 
             ui.add_space(4.0);
@@ -2359,21 +2411,6 @@ impl eframe::App for App {
             self.toast = Some((self.status.clone(), std::time::Instant::now()));
         }
 
-        egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.add_space(2.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if self.running() || self.bench_running() {
-                        if ui.add(egui::Button::new("Stop").min_size(egui::vec2(90.0, 32.0))).clicked() {
-                            self.stop();
-                        }
-                    } else if self.tab != Tab::Play && ui.add(primary("Launch", 96.0, 32.0)).clicked() {
-                        self.launch();
-                    }
-                });
-            });
-        });
-
         egui::SidePanel::left("rail")
             .exact_width(150.0)
             .resizable(false)
@@ -2503,7 +2540,7 @@ impl eframe::App for App {
 
         if self.tab == Tab::Graphics && !self.game_warned {
             self.game_warned = true;
-            self.game_warning_open = true;
+            self.game_warning_open = !self.settings.game_warning_seen;
         }
         if self.game_warning_open {
             let mut open = true;
@@ -2562,10 +2599,14 @@ impl eframe::App for App {
                     ui.add_space(4.0);
                     if ui.button("Understood").clicked() {
                         self.game_warning_open = false;
+                        self.settings.game_warning_seen = true;
+                        self.settings.save();
                     }
                 });
             if !open {
                 self.game_warning_open = false;
+                self.settings.game_warning_seen = true;
+                self.settings.save();
             }
         }
 
@@ -2688,6 +2729,57 @@ struct Desc {
     name: &'static str,
     plain: &'static str,
     safe: &'static str,
+}
+
+/// What a sensible value looks like, for fields that take a bare number.
+fn example(key: &str) -> Option<&'static str> {
+    match key {
+        "VICTORY_TEXTURE_BUDGET_MB" => Some("2048, 3072 or 4096 (MB)"),
+        "VICTORY_CARD_BUFFERS_MB" => Some("256, 512 or 1024 (MB)"),
+        "VICTORY_CARD_BUFFERS_MIN_MB" => Some("1 (MB)"),
+        "VICTORY_LATE_WAIT" => Some("0, 1 or 2"),
+        "VICTORY_CARD_REHASH_RUNS" => Some("0, 1 or 2"),
+        "VICTORY_INDIRECT_RUNS" | "VICTORY_INDIRECT_WINDOW" => Some("1"),
+        "VICTORY_RELAY" => Some("0, 1 or 2"),
+        "VICTORY_FPS_CAP" => Some("30, 60, 120 or 0 for unlimited"),
+        "VICTORY_VSYNC" => Some("1 = on"),
+        "gamma" => Some("1-50; 15 is the default"),
+        "hdrIntensity" => Some("0-100; 50 is the default"),
+        "hdrBlackLevels" => Some("0-100; 50 is the default"),
+        "hdrPeakBrightness" => Some("600-1600 nits"),
+        "anisotropicFiltering" => Some("0, 4, 8 or 16"),
+        "frameRateLimit" => Some("30, 60, 120 or 0 for unlimited"),
+        "desiredFPS" => Some("30 or 60"),
+        "vSync" => Some("0 = off, 1 = on, 2 = adaptive"),
+        "fsrQuality" => Some("0 = off, 1 = quality, 2 = balanced, 3 = performance"),
+        "fsrSharpen" => Some("0.0 to 1.0 (0.2 is the default)"),
+        "sharpenIntensity" => Some("0.0 to 2.0 (1.0 is the default)"),
+        "lodScale" | "grassLod" => Some("1.0 is the default; lower is faster"),
+        "texLodScale_Global" => Some("1.0 is the default"),
+        "texLodScale_LOD" => Some("2.0 is the default"),
+        "texLodScale_SLOD1" => Some("4.0 is the default"),
+        "texLodScale_SLOD2" => Some("8.0 is the default"),
+        "texLodScale_SLOD3" => Some("16.0 is the default"),
+        "texLodScale_SLOD4" => Some("32.0 is the default"),
+        "texLodScale_Mat_High" => Some("0.25 is the default"),
+        "texLodScale_Mat_Med" => Some("0.5 is the default"),
+        "texLodScale_Mat_Low" => Some("1.0 is the default"),
+        "texLodScale_Buildings" | "texLodScale_Objects" | "texLodScale_HD"
+        | "texLodScale_OrphanHD" => Some("1.0 is the default"),
+        "vehicleLodBias" => Some("0.0 is the default"),
+        "manualMipBias" => Some("0.0 is the default; negative is sharper"),
+        "waterReflectionResX" => Some("256, 512 or 1024"),
+        "waterReflectionResY" => Some("128, 256 or 512"),
+        "width" => Some("1920, 2560 or 3840"),
+        "height" => Some("1080, 1440 or 2160"),
+        "motionBlurLimit" => Some("8, 16 or 32"),
+        "motionBlurScale" => Some("0.5 to 2.0 (1.0 is the default)"),
+        "maxTexUpgradesPerFrame" => Some("5 is the default"),
+        "ssroSampleCount" => Some("2 or 4"),
+        "vehicleHDCount" => Some("1, 2 or 4"),
+        "lensFlaresScreenResDivExponent" => Some("2 is the default"),
+        _ => None,
+    }
 }
 
 fn describe(key: &str) -> Option<Desc> {
@@ -2884,6 +2976,25 @@ fn chip_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     )
 }
 
+fn help_button(ui: &mut egui::Ui) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+    let color = if response.hovered() {
+        egui::Color32::from_rgb(120, 165, 240)
+    } else {
+        egui::Color32::from_rgb(96, 132, 196)
+    };
+    ui.painter()
+        .circle_stroke(rect.center(), 8.5, egui::Stroke::new(1.2_f32, color));
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "?",
+        egui::FontId::proportional(10.5),
+        color,
+    );
+    response.on_hover_cursor(egui::CursorIcon::Help)
+}
+
 fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).strong().color(egui::Color32::WHITE))
         .fill(ACCENT)
@@ -2933,32 +3044,46 @@ fn number_info(
     };
     let mut value = setting_value(sets, key).unwrap_or(*range.start());
     let mut asked = None;
-    ui.horizontal(|ui| {
-        ui.label(desc.as_ref().map(|d| d.name).unwrap_or(key));
-        if desc.is_some() && chip_button(ui, "?").clicked() {
-            asked = Some(key.to_string());
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_sized(
-                    [92.0, 26.0],
-                    egui::DragValue::new(&mut value)
-                        .range(range.clone())
-                        .speed(step as f64)
-                        .suffix(suffix),
-                )
-                .changed()
-            {
-                sets.insert(key.to_string(), value.to_string());
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.horizontal(|ui| {
+            ui.label(desc.as_ref().map(|d| d.name).unwrap_or(key));
+            if desc.is_some() && help_button(ui).clicked() {
+                asked = Some(key.to_string());
             }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add_sized(
+                        [92.0, 26.0],
+                        egui::DragValue::new(&mut value)
+                            .range(range.clone())
+                            .speed(step as f64)
+                            .suffix(suffix),
+                    )
+                    .changed()
+                {
+                    sets.insert(key.to_string(), value.to_string());
+                }
+            });
         });
+        if let Some(d) = &desc {
+            ui.add(
+                egui::Label::new(egui::RichText::new(d.plain).small().color(egui::Color32::GRAY))
+                    .wrap(),
+            );
+            if let Some(eg) = example(key) {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("Examples: {eg}"))
+                            .small()
+                            .color(egui::Color32::from_rgb(120, 126, 138)),
+                    )
+                    .wrap(),
+                );
+            }
+        }
     });
-    if let Some(d) = &desc {
-        ui.add(
-            egui::Label::new(egui::RichText::new(d.plain).small().color(egui::Color32::GRAY))
-                .wrap(),
-        );
-    }
+    ui.add_space(8.0);
     asked
 }
 
@@ -2971,25 +3096,104 @@ fn switch_info(
     let desc = describe(key);
     let mut on = sets.contains_key(key);
     let mut asked = None;
-    ui.horizontal(|ui| {
-        if ui.checkbox(&mut on, desc.as_ref().map(|d| d.name).unwrap_or(key)).changed() {
-            if on {
-                sets.insert(key.to_string(), "1".into());
-            } else {
-                sets.remove(key);
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.horizontal(|ui| {
+            if ui.checkbox(&mut on, desc.as_ref().map(|d| d.name).unwrap_or(key)).changed() {
+                if on {
+                    sets.insert(key.to_string(), "1".into());
+                } else {
+                    sets.remove(key);
+                }
             }
-        }
-        if desc.is_some() && chip_button(ui, "?").clicked() {
-            asked = Some(key.to_string());
+            if desc.is_some() && help_button(ui).clicked() {
+                asked = Some(key.to_string());
+            }
+        });
+        if let Some(d) = &desc {
+            ui.add(
+                egui::Label::new(egui::RichText::new(d.plain).small().color(egui::Color32::GRAY))
+                    .wrap(),
+            );
         }
     });
-    if let Some(d) = &desc {
-        ui.add(
-            egui::Label::new(egui::RichText::new(d.plain).small().color(egui::Color32::GRAY))
-                .wrap(),
-        );
-    }
+    ui.add_space(8.0);
     asked
+}
+
+/// The settings a player looks for first, in the order they normally appear in
+/// a game's options. Everything else goes under Advanced graphics settings.
+const DISPLAY_KEYS: &[(&str, &str)] = &[
+    ("video/resolutionFullscreen", "width"),
+    ("video/resolutionFullscreen", "height"),
+    ("video", "frameRateLimit"),
+    ("video", "vSync"),
+    ("advancedGraphics", "motionBlur"),
+];
+
+const GRAPHICS_KEYS: &[(&str, &str)] = &[
+    ("graphics", "graphicsQualityPreset"),
+    ("graphics", "hdr"),
+    ("graphics", "gamma"),
+    ("graphics", "anisotropicFiltering"),
+    ("graphics", "fsrQuality"),
+    ("advancedGraphics", "fsrSharpen"),
+    ("advancedGraphics", "sharpenEnabled"),
+    ("advancedGraphics", "sharpenIntensity"),
+    ("advancedGraphics", "lodScale"),
+    ("advancedGraphics", "grassLod"),
+    ("advancedGraphics", "texLodScale_Global"),
+    ("advancedGraphics", "treeTessellationEnabled"),
+];
+
+const SHADOW_KEYS: &[(&str, &str)] = &[
+    ("advancedGraphics", "directionalScreenSpaceShadowQuality"),
+    ("advancedGraphics", "worldHeightShadowQuality"),
+    ("advancedGraphics", "waterReflectionResX"),
+    ("advancedGraphics", "waterReflectionResY"),
+    ("advancedGraphics", "waterReflectionSSR"),
+];
+
+fn is_curated(section: &str, key: &str) -> bool {
+    DISPLAY_KEYS
+        .iter()
+        .chain(GRAPHICS_KEYS)
+        .chain(SHADOW_KEYS)
+        .any(|(s, k)| *s == section && *k == key)
+}
+
+fn render_index(ui: &mut egui::Ui, game: &mut GameSettings, index: usize) {
+    let changed = {
+        let setting = &mut game.settings[index];
+        game_row(ui, setting)
+    };
+    if changed {
+        let setting = &game.settings[index];
+        let line = format!(
+            "{}<{} value=\"{}\" />",
+            setting.indent, setting.key, setting.value
+        );
+        game.lines[setting.line] = line;
+        game.dirty = true;
+    }
+}
+
+fn render_pairs(ui: &mut egui::Ui, game: &mut GameSettings, pairs: &[(&str, &str)]) {
+    for (section, key) in pairs {
+        if let Some(index) = game
+            .settings
+            .iter()
+            .position(|s| s.section == *section && s.key == *key)
+        {
+            render_index(ui, game, index);
+        }
+    }
+}
+
+fn section_header(ui: &mut egui::Ui, title: &str) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(title).strong().size(15.0));
+    ui.separator();
 }
 
 fn apply_game(game: &mut GameSettings) -> std::io::Result<()> {
@@ -3034,6 +3238,13 @@ fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.label(label_of(setting));
+        if let Some(eg) = example(&setting.key) {
+            ui.label(
+                egui::RichText::new(format!("· {eg}"))
+                    .small()
+                    .color(egui::Color32::from_rgb(120, 126, 138)),
+            );
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if setting.value == "true" || setting.value == "false" {
                 let mut on = setting.value == "true";
