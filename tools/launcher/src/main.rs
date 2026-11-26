@@ -87,6 +87,9 @@ fn main() -> eframe::Result<()> {
     let start_tab = std::env::args()
         .position(|a| a == "--tab")
         .and_then(|i| std::env::args().nth(i + 1));
+    let start_info = std::env::args()
+        .position(|a| a == "--info")
+        .and_then(|i| std::env::args().nth(i + 1));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -108,6 +111,7 @@ fn main() -> eframe::Result<()> {
                 Some("debug") => Tab::Debug,
                 _ => Tab::Play,
             };
+            app.info = start_info;
             Ok(Box::new(app))
         }),
     )
@@ -571,6 +575,7 @@ struct App {
     pick_dir: PathBuf,
     new_key: String,
     new_value: String,
+    info: Option<String>,
 }
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
@@ -636,6 +641,7 @@ impl App {
             pick_dir: home_dir().unwrap_or_else(|| PathBuf::from(".")),
             new_key: String::new(),
             new_value: String::new(),
+            info: None,
         }
     }
 
@@ -806,6 +812,8 @@ impl App {
 
     fn play(&mut self, ui: &mut egui::Ui) {
         ui.heading("Play");
+        let warn = warnings(&self.settings, &self.hardware);
+        warnings_card(ui, &warn);
         ui.add_space(4.0);
         egui::ScrollArea::vertical().show(ui, |ui| {
             card(ui, |ui| {
@@ -1054,35 +1062,51 @@ impl App {
         ui.heading("Graphics");
         ui.add(
             egui::Label::new(
-                egui::RichText::new("The switches this build reads. Off is absence, not =0.")
+                egui::RichText::new("Fine tuning. Hover a ? for what it does and a safe value.")
                     .small()
                     .color(egui::Color32::GRAY),
             ),
         );
+        let warn = warnings(&self.settings, &self.hardware);
+        warnings_card(ui, &warn);
+        let mut info = None;
         egui::ScrollArea::vertical().show(ui, |ui| {
             let sets = &mut self.settings.sets;
             card(ui, |ui| {
                 ui.strong("Memory and copies");
-                number(ui, sets, "VICTORY_TEXTURE_BUDGET_MB", "Texture budget", 0..=8192, 256, "MB · 4096 shipped; texture phase 350 → 40 ms");
-                number(ui, sets, "VICTORY_CARD_BUFFERS_MB", "Card buffers", 0..=4096, 64, "MB · 512 shipped");
-                switch(ui, sets, "VICTORY_TEXTURE_NO_WAIT", "Do not wait for textures", "the faster choice under Wine");
-                switch(ui, sets, "VICTORY_WIDE_BACK", "Wide copy-back", "copy whole ranges instead of pieces");
-                switch(ui, sets, "VICTORY_CARD_REHASH_RUNS", "Rehash changed runs", "only runs that changed");
+                let asked = number_info(ui, sets, "VICTORY_TEXTURE_BUDGET_MB", 0..=8192, 256);
+                if info.is_none() { info = asked; }
+                let asked = number_info(ui, sets, "VICTORY_CARD_BUFFERS_MB", 0..=4096, 64);
+                if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_TEXTURE_NO_WAIT");
+                if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_WIDE_BACK");
+                if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_CARD_REHASH_RUNS");
+                if info.is_none() { info = asked; }
             });
             ui.add_space(4.0);
             card(ui, |ui| {
                 ui.strong("Draw path");
-                switch(ui, sets, "VICTORY_INDIRECT_WINDOW", "Indirect draw windows", "measured +25% here");
-                switch(ui, sets, "VICTORY_INDIRECT_RUNS", "Indirect runs", "measured +18% here");
+                let asked = switch_info(ui, sets, "VICTORY_INDIRECT_WINDOW");
+                if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_INDIRECT_RUNS");
+                if info.is_none() { info = asked; }
             });
             ui.add_space(4.0);
             card(ui, |ui| {
-                ui.strong("Timing (measured, with a history)");
-                number(ui, sets, "VICTORY_LATE_WAIT", "Send-ahead", 0..=3, 1, "0 or 1; 2+ removes the device");
-                switch(ui, sets, "VICTORY_JOIN_COPIES", "Join copies", "has removed the device before");
-                number(ui, sets, "VICTORY_RELAY", "Relay", 0..=2, 2, "0 or 2; has removed the device");
+                ui.strong("Timing (tested, with a history)");
+                let asked = number_info(ui, sets, "VICTORY_LATE_WAIT", 0..=3, 1);
+                if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_JOIN_COPIES");
+                if info.is_none() { info = asked; }
+                let asked = number_info(ui, sets, "VICTORY_RELAY", 0..=2, 2);
+                if info.is_none() { info = asked; }
             });
         });
+        if let Some(key) = info {
+            self.info = Some(key);
+        }
     }
 
     fn advanced(&mut self, ui: &mut egui::Ui) {
@@ -1098,6 +1122,7 @@ impl App {
                     ),
                 );
                 let mut remove = None;
+                let mut info = None;
                 let entries: Vec<(String, String)> = self
                     .settings
                     .sets
@@ -1110,6 +1135,13 @@ impl App {
                             [300.0, 22.0],
                             egui::Label::new(egui::RichText::new(&key).monospace()),
                         );
+                        if describe(&key).is_some() {
+                            if ui.small_button("?").on_hover_text("What this does").clicked() {
+                                info = Some(key.clone());
+                            }
+                        } else {
+                            ui.add_enabled(false, egui::Button::new("?").small());
+                        }
                         if ui.small_button("×").clicked() {
                             remove = Some(key.clone());
                         }
@@ -1124,6 +1156,9 @@ impl App {
                 }
                 if let Some(key) = remove {
                     self.settings.sets.remove(&key);
+                }
+                if let Some(key) = info {
+                    self.info = Some(key);
                 }
                 ui.horizontal(|ui| {
                     ui.label("Add");
@@ -1333,6 +1368,34 @@ impl eframe::App for App {
             Tab::Debug => self.debug(ui),
         });
 
+        if let Some(key) = self.info.clone() {
+            let mut open = true;
+            let desc = describe(&key);
+            egui::Window::new(desc.as_ref().map(|d| d.name).unwrap_or("This switch"))
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .default_width(420.0)
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(&key).monospace().small().color(egui::Color32::GRAY));
+                    ui.add_space(4.0);
+                    match &desc {
+                        Some(d) => {
+                            ui.label(d.plain);
+                            ui.add_space(6.0);
+                            ui.label(egui::RichText::new(format!("Safe: {}", d.safe)).small().color(egui::Color32::from_rgb(87, 199, 133)));
+                        }
+                        None => {
+                            ui.label("This build does not document this switch. It is likely ignored, or reserved for a future version.");
+                            ui.label(egui::RichText::new("Check docs/FINDINGS.md or the source before relying on it.").small().color(egui::Color32::GRAY));
+                        }
+                    }
+                });
+            if !open {
+                self.info = None;
+            }
+        }
+
         if self.picking {
             let mut open = true;
             egui::Window::new("Choose the game folder")
@@ -1388,6 +1451,127 @@ impl eframe::App for App {
     }
 }
 
+// ---------------------------------------------------------------- words
+
+struct Desc {
+    name: &'static str,
+    plain: &'static str,
+    safe: &'static str,
+}
+
+fn describe(key: &str) -> Option<Desc> {
+    let d = |name, plain, safe| Some(Desc { name, plain, safe });
+    match key {
+        "VICTORY_TEXTURE_BUDGET_MB" => d(
+            "Texture memory budget",
+            "The most texture data the game may keep on your graphics card at once. Higher can look sharper when you move fast; lower leaves room for other apps.",
+            "2048–4096 MB on a 16 GB card. Never more than your card's VRAM.",
+        ),
+        "VICTORY_CARD_BUFFERS_MB" => d(
+            "World memory kept on the card",
+            "How much of the game's own working memory is mirrored inside the card. Too much competes with textures.",
+            "512 MB measured best on 16 GB; 256 MB on an 8 GB card.",
+        ),
+        "VICTORY_CARD_BUFFERS_MIN_MB" => d(
+            "Smallest buffer kept on the card",
+            "Buffers at least this large are mirrored in card memory.",
+            "1 MB. Leave it.",
+        ),
+        "VICTORY_LATE_WAIT" => d(
+            "Frames prepared ahead",
+            "How many frames the game may hand to the card before the previous one has finished. More can smooth short hitches, but Linux drivers can lose the device.",
+            "0 or 1. 2 and above is known to crash on Linux.",
+        ),
+        "VICTORY_TEXTURE_NO_WAIT" => d(
+            "Do not wait for textures",
+            "Show the frame without waiting for a texture that is still uploading. Faster; a texture can pop in a moment late.",
+            "On. Turn it off only if textures look wrong.",
+        ),
+        "VICTORY_WIDE_BACK" => d(
+            "Copy results back in whole ranges",
+            "When shaders write memory the game reads on the processor, copy whole ranges back instead of many small pieces.",
+            "On.",
+        ),
+        "VICTORY_CARD_REHASH_RUNS" => d(
+            "Re-check only changed ranges",
+            "Only re-read card copies that changed, instead of all of them every frame.",
+            "On is safe; the effect is small.",
+        ),
+        "VICTORY_INDIRECT_WINDOW" => d(
+            "Batch indirect draws",
+            "Handle many draw records in windows instead of one pass per draw. Measured about 25% faster on this machine.",
+            "On.",
+        ),
+        "VICTORY_INDIRECT_RUNS" => d(
+            "Batch single draw records",
+            "Clamp a run of single draw records in one pass instead of one pass each. Measured about 18% faster here.",
+            "On.",
+        ),
+        "VICTORY_JOIN_COPIES" => d(
+            "Join neighbouring copies",
+            "Send adjacent memory copies as one. It has crashed the graphics driver before, so it is off by default.",
+            "Off unless you are testing.",
+        ),
+        "VICTORY_RELAY" => d(
+            "Hand results back beside writes",
+            "Copy what shaders wrote back into the game's memory next to the write guards. 2 is faster but has crashed before; 0 turns it off.",
+            "0, or 2 if your machine stays stable with it.",
+        ),
+        "VICTORY_LOG" => d(
+            "Log detail",
+            "How much the layer writes to the log. debug and trace are for bug reports and are much slower.",
+            "info for play; warn if you want quiet.",
+        ),
+        _ => None,
+    }
+}
+
+fn setting_value(sets: &BTreeMap<String, String>, key: &str) -> Option<u32> {
+    sets.get(key).and_then(|v| v.trim().parse().ok())
+}
+
+/// Values that cannot do what the player expects on this machine.
+fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
+    let sets = &settings.sets;
+    let vram = hw.vram_mb;
+    let mut out = Vec::new();
+    if let Some(budget) = setting_value(sets, "VICTORY_TEXTURE_BUDGET_MB") {
+        if budget == 0 {
+            out.push("Texture budget is 0: no texture can be copied, the world will stay untextured.".into());
+        } else if vram > 0 && budget > vram {
+            out.push(format!(
+                "Texture budget is {budget} MB, more than your card's {vram} MB. It spills into system memory and can stall or fail."
+            ));
+        } else if budget < 1024 {
+            out.push("Texture budget below 1024 MB: textures may arrive late or stay black. 2048 MB or more is safer.".into());
+        }
+    }
+    if let Some(buffers) = setting_value(sets, "VICTORY_CARD_BUFFERS_MB") {
+        if vram > 0 && buffers > vram / 2 {
+            out.push(format!(
+                "World memory on the card is {buffers} MB, over half of your {vram} MB. Textures will have little room left."
+            ));
+        }
+    }
+    if let Some(late) = setting_value(sets, "VICTORY_LATE_WAIT") {
+        if late >= 2 {
+            out.push("Frames prepared ahead is 2 or more: this is known to remove the device on Linux. Use 0 or 1.".into());
+        }
+    }
+    if sets.contains_key("VICTORY_JOIN_COPIES") {
+        out.push("Joined copies can crash the graphics driver; it did before on this project.".into());
+    }
+    if setting_value(sets, "VICTORY_RELAY") == Some(2) {
+        out.push("Relay 2 has crashed the driver before. If a run dies, set it to 0.".into());
+    }
+    for key in sets.keys() {
+        if key.starts_with("VICTORY_") && describe(key).is_none() {
+            out.push(format!("{key} is not a switch this build knows; it will be ignored."));
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------- widgets
 
 fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
@@ -1403,6 +1587,89 @@ fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
             ui.set_width(ui.available_width());
             add(ui);
         });
+}
+
+fn warnings_card(ui: &mut egui::Ui, list: &[String]) {
+    if list.is_empty() {
+        return;
+    }
+    egui::Frame::group(ui.style())
+        .fill(egui::Color32::from_rgb(45, 38, 24))
+        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(120, 95, 45)))
+        .inner_margin(egui::Margin::symmetric(12, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.label(egui::RichText::new("Check these").strong().color(egui::Color32::from_rgb(240, 200, 120)));
+            for line in list {
+                ui.label(egui::RichText::new(format!("• {line}")).color(egui::Color32::from_rgb(225, 210, 180)));
+            }
+        });
+    ui.add_space(4.0);
+}
+
+/// A numeric switch with its plain name, a ? and its safe range.
+fn number_info(
+    ui: &mut egui::Ui,
+    sets: &mut BTreeMap<String, String>,
+    key: &str,
+    range: std::ops::RangeInclusive<u32>,
+    step: u32,
+) -> Option<String> {
+    let desc = describe(key);
+    let mut value = setting_value(sets, key).unwrap_or(*range.start());
+    let mut asked = None;
+    ui.horizontal(|ui| {
+        ui.label(desc.as_ref().map(|d| d.name).unwrap_or(key));
+        if desc.is_some() && ui.small_button("?").clicked() {
+            asked = Some(key.to_string());
+        }
+        if ui
+            .add(egui::DragValue::new(&mut value).range(range.clone()).speed(step as f64))
+            .changed()
+        {
+            sets.insert(key.to_string(), value.to_string());
+        }
+        if let Some(d) = &desc {
+            ui.label(egui::RichText::new(d.safe.split('.').next().unwrap_or("")).small().color(egui::Color32::GRAY));
+        }
+    });
+    if let Some(d) = &desc {
+        ui.add(
+            egui::Label::new(egui::RichText::new(d.plain).small().color(egui::Color32::GRAY))
+                .wrap(),
+        );
+    }
+    asked
+}
+
+/// A switch with its plain name, a ? and a one-line reason.
+fn switch_info(
+    ui: &mut egui::Ui,
+    sets: &mut BTreeMap<String, String>,
+    key: &str,
+) -> Option<String> {
+    let desc = describe(key);
+    let mut on = sets.contains_key(key);
+    let mut asked = None;
+    ui.horizontal(|ui| {
+        if ui.checkbox(&mut on, desc.as_ref().map(|d| d.name).unwrap_or(key)).changed() {
+            if on {
+                sets.insert(key.to_string(), "1".into());
+            } else {
+                sets.remove(key);
+            }
+        }
+        if desc.is_some() && ui.small_button("?").clicked() {
+            asked = Some(key.to_string());
+        }
+    });
+    if let Some(d) = &desc {
+        ui.add(
+            egui::Label::new(egui::RichText::new(d.plain).small().color(egui::Color32::GRAY))
+                .wrap(),
+        );
+    }
+    asked
 }
 
 fn number(
