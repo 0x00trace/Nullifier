@@ -236,6 +236,104 @@ grey in two of the three default runs, as it is in the three runs of 2.5,
 and white in every capture of that shot looked at in the three runs with
 windows.
 
+## 2.7 One clamp pass for a run of draws: about 500 passes a frame where there were 3,000 (2026-11-26)
+
+Same machine and settings as 2.6. Build `7754069`.
+
+**Where the records lie.** With windows on (2.6), 1,727 indirect commands a
+frame still had a pass of their own. A run with `VICTORY_CAPTURE_WORLD=1`
+saves a listing of four world frames, one line per command and list. In
+eight such frames (two runs of `9e8bcd8`): 1,292 to 3,403 single draw records
+a frame, eight or nine in ten of them mesh records. In two of the frames,
+counted list by list:
+
+* Most lists begin with compute passes and then draw. Only 26 and 34 % of
+  the records lie before any dispatch of their list. That is the part a
+  clamp in the list's prelude can serve (the "gather" of
+  fxceless/victory-fork `465b94f`, which reports that it serves about 600
+  of the 1,600 draws that miss a window there).
+* The draws come in long runs: 34 and 49 runs a frame between two commands
+  that may write arguments, the longest of 401 draws. Within a run the
+  records are scattered through one argument buffer, which is why a window
+  of records one step apart misses half of them.
+
+**The change** (`VICTORY_INDIRECT_RUNS=1`, off by default). The first single
+record after a command that may write arguments gets a pass that clamps a
+run: that record and the ones the draws after it read, wherever they lie in
+the same argument buffer, up to 64. The pass cannot know those records when
+it is recorded, so it reads them from a table in the list's upload memory:
+a count and, for each slot, the offset of its record. The table is filled
+as the draws are recorded and is complete when the list is submitted. The
+draws read their records from the run's slots with no pass and no barrier.
+A run ends at a compute dispatch, at a draw whose shaders can store to
+buffers, at an indirect call with a count buffer or more than one record,
+at a record of another kind or argument buffer, at another host list, and
+when it is full; the next single record begins another.
+
+* What a draw reads is what a pass in front of it would have clamped: the
+  run's pass runs behind everything recorded before it, and nothing that
+  may write arguments lies between it and the run's draws.
+* Every draw has a slot of its own, also a draw of a record drawn before
+  (91 to 412 draws a frame in the saved frames). The pass charges the
+  list's budget for each slot, so the guard against garbage records counts
+  a record once for each draw of it, as before.
+
+**The budget word.** Every thread of a pass charges the same word of the
+list's budget with a compare and swap, and the list kept that word in memory
+the CPU maps. With one record a pass that costs nothing that can be seen.
+With many it is most of the pass (`indirect::bench`, 3,200 draws, on the
+card):
+
+| the 3,200 draws | budget in mapped memory | budget in the card's memory |
+|---|---|---|
+| a pass for each | 21.1 ms | 21.1 ms |
+| windows of 32 | 2.8 ms | 1.2 ms |
+| runs of 64 | 4.8 ms | 1.0 ms |
+| one pass for all | 95.8 ms | 1.4 ms |
+
+So a list now keeps its budget in the card's own memory when runs or windows
+are on (`VICTORY_INDIRECT_CARD_BUDGET`, after fxceless/victory-fork, where
+it is always there): the list zeroes it before its first clamp and copies
+the clamp's notes out when it closes. It is also why a run stops at 64
+records, one group of the clamp's threads, though runs of 256 would make
+somewhat fewer passes.
+
+**Six runs of `7754069`, the switch off and on in turn**, as in 2.6:
+
+| | median fps | n | frame at 3,000 draws | wait for the card at 3,000 draws | per 1,000 draws | passes of ours a frame | removals |
+|---|---|---|---|---|---|---|---|
+| `9e8bcd8` (2.5) | 3.55 / 3.45 / 3.50 | 46 / 46 / 47 | 279 ms | 152.6 ms | 28.2 ms | about 3,000 | 0 |
+| `7754069`, default | 3.80 / 3.80 / 3.80 | 47 / 47 / 47 | 253 ms | 138.0 ms | 23.8 ms | 3,026 / 2,997 / 3,007 | 0 |
+| `7754069`, `VICTORY_INDIRECT_RUNS=1` | **4.50 / 4.40 / 4.40** | 47 / 47 / 47 | **215 ms** | **101.3 ms** | 10.3 ms | 496 / 495 / 492 | 0 |
+
+(The passes are the frame line's "indirect commands bounded".) With the
+switch, per frame at the median of a run, by the line that says what became
+of each command's clamp: 2,598 to 2,637 commands read their record from a
+run, 103 to 105 commands opened one, and 397 to 414 others had a pass of
+their own (388 to 405 dispatches, 4 draws whose shaders can store). 96 of
+100 single records are served without a pass of their own. The card is busy 57 % of the time by the layer's count (62 to 64 %
+without). No device removal, no unhandled exception and no failed clamp in
+the six, and the NVIDIA module logged nothing new.
+
+**Checked in the title.** One more run with
+`VICTORY_INDIRECT_WINDOW_CHECK=1`: every draw served from a run has its
+record clamped again in front of it, and the two are compared on the card.
+2,210,845 draws in 300 s, none differed (3.70 fps with the check's passes,
+n=47, no removal).
+
+Picture, from 72 captures of each of the six runs (30 spread over the run
+and its first 42): the title cards, the street, the car, the interior and
+the video panels are drawn, and both leads have their face textures from
+their first shots, with the switch off and on. The woman's top in the shot
+with raised hands (2.6) is white in the three runs with the switch, and
+white, grey and dark in the three without.
+
+**What is left on the card.** At 3,000 draws the frame is 215 ms: 101 ms of
+waiting for the card, 70 ms of preparing, about 20 ms of copying back. The
+wait no longer grows much with the draws (10.3 ms per 1,000); 70 ms of it
+are there at any number of draws. The 400 passes left are in front of the
+title's indirect dispatches, each of which may write the next one's record.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask

@@ -273,12 +273,16 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   the card's time on the title's commands. `02d27de` took one of the three
   barriers around a draw away, and `VICTORY_INDIRECT_WINDOW=1` then serves
   under half of the records from windows: 3.60-3.70 fps by default and
-  3.90-4.10 with windows on, against 3.45-3.55, on an RTX 5080. To see what
-  the card runs, take a timing run (`VICTORY_GPU_TIMING=1
+  3.90-4.10 with windows on, against 3.45-3.55, on an RTX 5080.
+  `VICTORY_INDIRECT_RUNS=1` (`7754069`, 2.7) clamps a run of up to 64
+  single records with one pass, wherever they lie: about 500 passes a frame
+  where there were 3,000, and 4.40-4.50 fps against 3.80 with it off. To
+  see what the card runs, take a timing run (`VICTORY_GPU_TIMING=1
   VICTORY_D3D12_DRED=1`: every list waited for on its own, a timestamp
   before each command). To compare ways of recording a draw without the
   title: `cargo test -p victory-gpu --lib indirect::bench -- --ignored
-  --nocapture`.
+  --nocapture`. Compare runs at equal draws a frame, not by medians alone:
+  the wait for the card grows with the draws (2.6).
 
 The next wins are on the copy lane (copy-back through the layer's own view,
 joined submission parts) and the draw lane (indirect records clamped once per

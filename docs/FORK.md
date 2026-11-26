@@ -88,6 +88,8 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | the same build served by Proton's own wineserver, run in turn with the row above | profile, library kept | 0.60 / 0.65 / 0.70 | 41 / 40 / 42 | 0 | world renders (146 captures of over 50 KB; the first 30 to 42 world captures of each run looked at); a lead's face black in the first shot of the first run; in the third, late shots drawn before their parts have streamed in (a figure as a glowing outline, the things of a room in the air over the city) |
 | + an indirect draw's scratch buffer left readable, no barrier after each draw (`02d27de`), built server | profile, library kept | 3.65 / 3.70 / 3.60 | 46 / 47 / 47 | 0 | world renders (758 captures of over 50 KB; 72 of each run looked at: 30 spread over the run and its first 42); both leads' faces have their textures from their first shots; the street, the car, the interior, the title cards and the video panels are drawn; the woman's top is dark grey in the first captures of the shot with raised hands in two of the runs, as in the three runs two rows up |
 | the same build with `VICTORY_INDIRECT_WINDOW=1`, run in turn with the row above | profile + `VICTORY_INDIRECT_WINDOW=1`, library kept | **4.00 / 3.90 / 4.10** | 47 / 47 / 47 | 0 | world renders (817 captures of over 50 KB; 72 of each run looked at, as above); faces, street, car, interior, title cards and video panels as in the row above; the woman's top is white in every capture of that shot looked at |
+| + a run of single indirect records clamped by one pass (`7754069`), switch off, built server | profile, library kept | 3.80 / 3.80 / 3.80 | 47 / 47 / 47 | 0 | world renders (783 captures of over 50 KB; 72 of each run looked at: 30 spread over the run and its first 42); faces, street, car, interior, title cards and video panels as in the rows above; the woman's top in the shot with raised hands is white, grey and dark in the three runs |
+| the same build with `VICTORY_INDIRECT_RUNS=1`, run in turn with the row above | profile + `VICTORY_INDIRECT_RUNS=1`, library kept | **4.50 / 4.40 / 4.40** | 47 / 47 / 47 | 0 | world renders (924 captures of over 50 KB; 72 of each run looked at, as above); faces, street, car, interior, title cards and video panels as in the rows above; the woman's top is white in the three runs |
 
 * **Before:** each run ended on a breakpoint of the title's own
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
@@ -219,6 +221,31 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
   default: under half of the title's records lie one step apart, and 1,727
   commands a frame still had a pass of their own. Evidence and method:
   `docs/FINDINGS.md` 2.6.
+
+* **The twelfth row and the thirteenth:** with windows on, 1,727 indirect
+  commands a frame still had a clamp pass of their own. Saved frame
+  listings show why: the title draws in runs of up to some hundreds of
+  single records between two of its compute passes, each record somewhere
+  else in one argument buffer, and most lists begin with compute passes, so
+  neither a window of records one step apart nor a clamp ahead of the list
+  serves them. `VICTORY_INDIRECT_RUNS=1` gives the first single record after
+  a command that may write arguments a pass that clamps a run: that record
+  and the ones the draws after it read, up to 64, found by a table that is
+  filled as those draws are recorded. Per frame, 2,598 to 2,637 commands
+  then read their record from a run, and about 500 passes are left where
+  there were about 3,000 (400 of them in front of the title's indirect
+  dispatches). With it a list's budget moves to the card's own memory: all
+  the threads of a pass charge that one word, and in memory the CPU maps
+  that cost 4.8 ms for 3,200 records in runs of 64 against 1.0 ms on the
+  card (95.8 ms against 1.4 ms in one pass). The two rows are six runs of
+  one build, the switch off and on in turn: at 3,000 draws the frame is
+  253 ms off and 215 ms on, the wait for the card 138.0 and 101.3 ms. One
+  more run compared every draw served from a run with a fresh clamp of its
+  record, on the card: 2,210,845 draws, none differed. No removal, no
+  unhandled exception and no failed clamp in the seven, and the NVIDIA
+  module logged nothing new. Off by default: one machine and one scene are
+  not enough to change a profile. Evidence and method:
+  `docs/FINDINGS.md` 2.7.
 
 ### The texture ask (P0 probe, 2026-11-25)
 
