@@ -262,11 +262,14 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   `./tools/build-wineserver.sh` builds that Proton's server with it and the
   launcher starts it. On an RTX 5080, six runs in turn: **3.55 / 3.45 / 3.50
   fps** with it, 0.60 / 0.65 / 0.70 without, frame 285-292 ms against
-  1,503-1,694, and the card 63-64 % busy against 10-12 %. Build it before you
-  measure anything on Linux, and say in a bench row which server served.
+  1,503-1,694, and the card 63-64 % busy against 10-12 %. On the RX 9070 XT
+  here, the same A/B on the merged stack: **3.25 / 3.10 / 3.20 fps** against
+  1.10 on one run, frame ~310 against 930 ms, copies 47-50 against 336, textures
+  14-19 against 196. Build it before you measure anything on Linux, and say in a
+  bench row which server served.
 * Linux ceiling observed across reports: 0.16 fps (3090), 1.85–1.97 (5070 Ti),
-  1.1–1.3 here. Windows on the same build: 2–4 fps. The gap is Wine, not the
-  hardware.
+  1.1–1.3 here before the view tree, 3.1–3.3 after. Windows on the same build:
+  2–4 fps. The gap was Wine's server, not the hardware.
 
 The next wins are on the copy lane (copy-back through the layer's own view,
 joined submission parts) and the draw lane (indirect records clamped once per

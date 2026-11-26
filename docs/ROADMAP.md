@@ -4,13 +4,15 @@ Ordered by "what actually changes the frame rate". Everything here is a
 candidate for a PR; read [`AGENTS.md`](../AGENTS.md) first, and bring a bench
 row.
 
-Current baseline: **1.1–1.3 fps** median in the world on an RX 9070 XT (Linux,
-Mesa 26.3.1, Wine 11), frame 750–950 ms, stable, picture correct, no device
-removals. GPU ~55 ms a frame (7 %), one busy thread.
+Current baseline: **3.1–3.3 fps** median in the world on an RX 9070 XT (Linux,
+Mesa 26.3.1, Wine 11) with the wineserver built by `tools/build-wineserver.sh`,
+frame ~310 ms, stable, picture correct, no device removals; 1.1–1.3 fps and
+750–950 ms with Proton's own server, so **build the server before measuring**.
 
-Where a frame's time goes now (`tools/frames.py`): **copies 122–306 ms**,
-**copy-back ~69 ms**, **textures 34–51 ms**, **unaccounted ~38 ms**, GPU ~55 ms;
-the rest is the title plus Wine's server. The order below follows that.
+Where a frame's time goes now (`tools/frames.py`, built server): **copies
+47–50 ms**, **textures 14–19 ms**, card ~6.3 GB of the 15.2 GB budget; the rest
+is the title, waits for the card and Wine's server. The order below follows
+that.
 
 **Read 2.5 of the findings before you pick from this list.** On Linux those
 phases were mostly waits for Wine's server, which walked a list of every view

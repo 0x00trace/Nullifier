@@ -87,6 +87,9 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 | the same build (`9e8bcd8`), served by the wineserver from `tools/build-wineserver.sh` (Wine's view tree) | profile, library kept | **3.55 / 3.45 / 3.50** | 46 / 46 / 47 | 0 | world renders (704 captures of over 50 KB; 72 of each run looked at: 30 spread over the run, 42 from its first 300 world frames); both leads' faces have their skin from their first shot in all three runs; the street, the car, the interior, the title cards and the video panels are drawn; in the third run the man's beard is missing for his first 290 world frames and there from the car scene on (there from the start in the other two) |
 | the same build served by Proton's own wineserver, run in turn with the row above | profile, library kept | 0.60 / 0.65 / 0.70 | 41 / 40 / 42 | 0 | world renders (146 captures of over 50 KB; the first 30 to 42 world captures of each run looked at); a lead's face black in the first shot of the first run; in the third, late shots drawn before their parts have streamed in (a figure as a glowing outline, the things of a room in the air over the city) |
 
+| the merged stack (#1–#5, #6 docs) on this AMD machine | `linux-amd-16gb`, library kept | 1.70 / 1.40 / 1.40 | 15 / 16 / 15 | 0 | world renders (captures 3.2–4.2 MB); card 6.1–6.3 GB of 15.2; texture refresh 94–281 ms, mostly the write-watch ask |
+| + the wineserver from `tools/build-wineserver.sh` (Wine's view tree) | same | **3.25 / 3.10 / 3.20** | 10 / 9 / 9 | 0 | world renders (captures 3.7–4.1 MB); frame ~310 ms; copies 47–50, textures 14–19; card 6.3–6.4 GB |
+| the same binary, served by Proton's own wineserver (A/B, one run) | same | 1.10 | 11 | 0 | world renders (capture 3.2 MB); frame 930 ms; copies 336, textures 196 |
 * **Before:** each run ended on a breakpoint of the title's own
   (`+0x23d8f03` twice, `+0x22106e0` once), at most 0.3 s after
   `dstorage: request failed: copying … hr=0x800703e6`: the kernel would not
@@ -218,7 +221,8 @@ Every cause and its evidence lives in [`docs/FINDINGS.md`](FINDINGS.md).
 | RTX 5070 Ti | Linux/Proton | 1.85–1.97 |
 | RTX 5070 Ti laptop / 4060 Ti | Windows | 2–4 |
 | RX 9070 XT | Windows (issue #3) | ~1.0 with pipeline skips |
-| RX 9070 XT | **this fork, Linux** | **0.7–0.9** |
+| RX 9070 XT | **this fork, Linux, view-tree wineserver** | **3.1–3.3** |
+| RX 9070 XT | this fork, Linux, Proton's wineserver | 1.1–1.3 |
 
 ---
 

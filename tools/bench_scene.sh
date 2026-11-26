@@ -18,9 +18,9 @@ LABEL="${1:-run}"; shift || true
 
 GAME="${VICTORY_GAME_DIR:-$HOME/Downloads/GTA6.Xbox.v1.0.2.1-CYBERLEEK}"
 BIN="${VICTORY_BIN:-$HERE/target/x86_64-pc-windows-msvc/diag/victory.exe}"
-WINDOW="${VICTORY_WINDOW:-60}"          # seconds measured once the world runs
-WARMUP="${VICTORY_WARMUP:-20}"          # seconds after world entry discarded
-TOTAL="${VICTORY_TOTAL:-260}"
+WINDOW="${VICTORY_WINDOW:-35}"          # seconds measured once the world runs
+WARMUP="${VICTORY_WARMUP:-10}"          # seconds after world entry discarded
+TOTAL="${VICTORY_TOTAL:-200}"
 LOG="${VICTORY_BENCH_LOG:-/tmp/opencode/scene-$(date +%H%M%S).log}"
 export VICTORY_KEYS="${VICTORY_KEYS:-15:Enter,22:Enter,30:Enter,38:Enter,46:Enter,55:Enter,65:Enter,75:Enter,90:Enter,110:Enter,130:Enter}"
 
@@ -42,7 +42,11 @@ ENTRY=""
 for _ in $(seq 1 "$TOTAL"); do
   sleep 1
   if grep -qE '[0-9.]+ fps' "$LOG" 2>/dev/null; then
-    if sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -oE '[0-9.]+ fps' | tr -d ' fps' | awk '$1 < 2 {f=1} END{exit !f}'; then
+    # Two samples below 10 fps: menus are 30, and a faster server (the view
+    # tree, docs/FINDINGS.md 2.5) puts the world at 3-5 fps, so a fixed
+    # "below 2" gate would never fire. One sample is a loading dip.
+    if sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -oE '[0-9.]+ fps' | tr -d ' fps' \
+        | tail -2 | paste -sd' ' | awk 'NF == 2 && $1 < 10 && $2 < 10 {ok = 1} END {exit !ok}'; then
       ENTRY=$(date +%s); break
     fi
   fi

@@ -144,9 +144,10 @@ CURRENT STATE (do not contradict it without evidence)
   is_valid_view_addr ~19% and req_unmap_view ~10% of CPU: that is the TITLE's
   own page remaps (CopyPageMappingsBatchX), not our layer's views, after
   section views removed ours (docs/FINDINGS.md 3.27).
-  With the wineserver from tools/build-wineserver.sh that profile is gone and
-  an RTX 5080 runs the world at 3.5 fps, frame 285-292 ms: 157-163 ms waiting
-  for the card (busy 63-64 %), copies 43-46, textures 11-14, copy-back 21-24.
+  With the wineserver from tools/build-wineserver.sh that profile is gone: an
+  RTX 5080 runs the world at 3.5 fps, frame 285-292 ms (157-163 ms waiting for
+  the card, copies 43-46, textures 11-14), and an RX 9070 XT at 3.1-3.3 fps,
+  frame ~310 ms (copies 47-50, textures 14-19, card 6.3 GB of 15.2).
   Next candidates, in order of measured value in fxceless/victory-fork:
   VICTORY_BACK_OWN_VIEW (~9%), VICTORY_JOIN_PARTS (~6%), VICTORY_INDIRECT_GATHER
   (104 -> 97 ms a frame, the biggest but a real port). None of them exist in
