@@ -20,6 +20,7 @@ frames (`fps < 10`).
 | `device removed 0x887A0005` after minutes | submissions sent ahead of the fence | `device removed after 31 submissions sent ahead (VICTORY_LATE_WAIT=1)` | `LATE_WAIT ≤ 1` on Linux; `--safe` if needed |
 | `unhandled exception 0x80000001` | guard-page violation; seen when delaying guard resets, and when PR #154's VEH copy meets newer upstream page guards | `unhandled exception 0x80000001 at victory.exe+…` | not on `reference/upstream`, no #154 there; see §3 |
 | ~30 fps menus, 0.2–1 fps world | per-frame texture bookkeeping and copies, not GPU work | GPU 4–6 % busy; one busy thread of 103 | §2 |
+| World under 1.5 fps under Wine, the frame thread asleep most of the time, `wineserver` at a whole core | Wine's server walks a list of every view of the process at each map and unmap, and the title keeps tens of thousands | `perf`: `is_valid_view_addr` and `req_unmap_view` are all of `wineserver`'s time; 3.55 / 3.45 / 3.50 fps with the tree against 0.60 / 0.65 / 0.70 | `tools/build-wineserver.sh` (2.5), until Proton has Wine commit 3217449b1f71 |
 
 ## 2. Where the frame time goes
 
@@ -41,6 +42,101 @@ Two facts that keep getting rediscovered:
 * **Bandwidth is not the problem.** Victory's own accounting shows 1961 MB
   copied in 7.2 ms when measured directly, against hundreds of ms of wall time
   in the frame budget. The cost is coordination and per-object overhead.
+
+## 2.5 Most of that was waiting for Wine's server, which walked a list of every view (2026-11-26)
+
+RTX 5080 (16 GB), NVIDIA 620.73.04, Ryzen 9 9900X, kernel 7.3.6, Proton
+Experimental 11.0-20261112, `linux-nvidia` profile, build `9e8bcd8`.
+
+The budget above is what the layer's clocks show, and it is wrong about why.
+3.20 found `is_valid_view_addr` and `req_unmap_view` on top of the profile,
+and 3.27 took the layer's own views out of them. What stayed was put down to
+"the title's own page remaps" and left. It was most of the frame.
+
+**What was measured.** One run, in the world: `perf record -a -g -F 499` for
+32 s, then `perf trace -s` on the title for 20 s, then the scheduler's switch
+and wake-up events for 12 s.
+
+* `wineserver` used a whole core for the whole window: 32.6 s of processor
+  time in 32.2 s. Those two functions are 16.13 of its 16.52 % of the machine's
+  samples.
+* In the 12 s of scheduler events it ran 84 % of the time and was woken 43,489
+  times, 39,265 of them by two threads of the title's process, the ones that
+  map and unmap its views: 3,270 requests a second, 231 µs of the server's
+  time each.
+* The thread that prepares and submits the frame ran 10 % of the time. It
+  slept 10.8 s of the 12, and 8.5 s of that were 30,709 sleeps of about 277 µs,
+  each one ended by one of those two threads. 0.9 s were waits for the card.
+* The process had 38,999 mappings, 27,646 of them views of the title's pages.
+
+**Why that is the frame.** The title maps its tiled heap one 64 KiB page per
+view (`map_alias` in `xmem.rs`) and keeps tens of thousands of views. Wine's server
+kept a process's views in a list: a map walked all of it to look for an
+overlap, an unmap walked it to find the view. Wine also holds its
+virtual-memory lock while the server answers either request
+(`virtual_map_section` and `unmap_view_of_section` in ntdll), and
+`GetWriteWatch` and `VirtualProtect` take that lock. A frame of ours makes
+about 2,900 askings and 4,400 protection changes, and each one waited for the
+remap then in progress. That is the thread section 2 calls "blocked, not
+computing" and 3.9 "parked", and the reason no switch of ours moved the
+phases: they were waiting.
+
+**The fix is Wine's.** Upstream commit 3217449b1f71 of 2026-11-25, "server:
+Store per-process memory views in an rbtree" (Wine bug 60868), makes both
+walks a tree search. Proton Experimental 11.0-20261112 does not have it.
+`tools/build-wineserver.sh` builds that Proton's server from Valve's source,
+at the commit that Proton was built from, with this one commit carried over
+(`tools/wine/server-view-tree.patch`). It checks that the result speaks the
+protocol of Proton's own server and installs it outside Proton; the launcher
+starts it before wine (`docs/LAUNCHER.md`). Nothing of Proton's is changed.
+
+**Six runs of one build, the two servers in turn** (`tools/bench.sh`, 300 s
+each, `VICTORY_CAPTURE_WORLD=1`; phases are medians over a run's world frames,
+in ms):
+
+| server | median fps | n | frame | copies | textures | GPU | copy-back | removals |
+|---|---|---|---|---|---|---|---|---|
+| Proton's own | 0.60 / 0.65 / 0.70 | 41 / 40 / 42 | 1,694 / 1,571 / 1,503 | 492-698 | 314-364 | 100-116 | 80-93 | 0 |
+| **built, views in a tree** | **3.55 / 3.45 / 3.50** | 46 / 46 / 47 | **285 / 292 / 287** | 43-46 | 11-14 | 157-163 | 21-24 | 0 |
+
+No device removal, no unhandled exception and no failed clamp in any of the
+six. Picture, from 72 captures of each run with the built server (30 spread
+over the run, 42 from its first 300 world frames): both leads' faces have
+their textures from their first shot, and the street, the car, the interior,
+the title cards and the video panels are drawn. With Proton's own server a
+lead's face is black in the first shot of run 1, and late shots of run 3 are
+drawn before their parts have streamed in (a figure as a glowing outline, the
+things of a room hanging in the air over the city): the title streams by the
+clock, and at 0.6 fps the frames do not keep up with it. One difference
+among the runs with the built server: in the third the man's beard is missing
+for his first 290 world frames and there from the car scene on, and it is
+there from the start in the other two. The cause was not looked for; the
+pipelines dropped are the same in all six runs.
+
+The same three measurements with the built server (one run, 3.50 fps): the
+server ran 1.3 % of the time for as many requests (44,070 wake-ups in 12 s,
+under 4 µs each); the frame thread ran 35 % of the time, and 6.98 s of the
+7.71 s it slept were waits for the card.
+
+**What this changes in the rest of this file.**
+
+* The phases on the frame line were waits. With no change to the layer,
+  copies fell to a twelfth, textures to a twenty-fifth and copy-back to a
+  quarter (table), the write-watch askings from 517-668 ms a frame to 32-35 ms
+  for the same 2,900 to 3,050 askings, the pass over the heap from 261-303 ms
+  to 28 ms, and the time from a present to the title's first list call from
+  374-506 ms to 11-12 ms. Every other phase time in this file was measured
+  under a server that walked the list: it says how long the phase waited
+  there, not what it costs.
+* The run-to-run noise of 3.12 was largely the server's too: three runs
+  within 3 % of each other here, against ±40 %.
+* The card is now the larger part. 157-163 ms of a 285-292 ms frame are waits
+  for it, and by the layer's own count it is busy 63-64 % of the time at the
+  median of a run (10-12 % under Proton's server). The next step is on that
+  side: what the card runs, and how many of the frame's 62 submissions wait
+  for it one by one.
+* `bench.sh` counts frame lines under 10 fps as the world. The fastest lines
+  of these runs are 7.7 to 8.6 fps: the limit will need raising soon.
 
 ## 3. The ask throttle (P0 probe)
 

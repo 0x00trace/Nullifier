@@ -136,6 +136,15 @@ The launcher detects GPU vendor and VRAM, picks settings, checks that
 vkd3d-proton is new enough, warns about VRAM hogs, and starts the title under
 the right Proton. Everything it sets can be overridden by exporting it first.
 
+On Linux, build the wineserver once first, and again after Proton updates:
+
+```bash
+./tools/build-wineserver.sh          # Wine's server with its view tree (§7, docs/LAUNCHER.md)
+```
+
+The launcher starts it for the prefix; `--detect` says which server a run gets
+and `VICTORY_WINESERVER=0` runs with Proton's own.
+
 ### Settings matrix (measured, see docs/FORK.md)
 
 | Platform | Settings |
@@ -221,6 +230,12 @@ or a software adapter. Check `host mesh shader support mesh=true`.
 **Out of VRAM.** A local LLM on `-ngl 99` will take 11+ GB and push the title
 into GTT, which costs ~10× frame time. Stop it before benchmarking.
 
+**World under 1.5 fps on Linux, `wineserver` at a whole core.** Wine's server
+walks a list of every view of the process at each map and unmap, and the title
+keeps tens of thousands. → `./tools/build-wineserver.sh` (Wine commit
+3217449b1f71, not in Proton Experimental 11.0-20261112). Check: the log's
+`wineserver:` line names the built server.
+
 ---
 
 ## 7. Where the time goes today (do not re-derive this)
@@ -239,6 +254,16 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   `req_unmap_view` ~10 %: those are the **title's own** page remaps
   (`CopyPageMappingsBatchX`), which fxceless tried twice to join and reverted
   (black/red faces). Do not repeat it.
+* **Those two functions were most of the frame, and the fix is Wine's
+  (2.5).** Wine's server walked a list of every view of the process at each
+  map and unmap, with Wine's memory lock held meanwhile, so the phases above
+  were mostly waits. Wine commit 3217449b1f71 (2026-11-25) makes it a tree;
+  Proton Experimental 11.0-20261112 does not have it.
+  `./tools/build-wineserver.sh` builds that Proton's server with it and the
+  launcher starts it. On an RTX 5080, six runs in turn: **3.55 / 3.45 / 3.50
+  fps** with it, 0.60 / 0.65 / 0.70 without, frame 285-292 ms against
+  1,503-1,694, and the card 63-64 % busy against 10-12 %. Build it before you
+  measure anything on Linux, and say in a bench row which server served.
 * Linux ceiling observed across reports: 0.16 fps (3090), 1.85–1.97 (5070 Ti),
   1.1–1.3 here. Windows on the same build: 2–4 fps. The gap is Wine, not the
   hardware.
@@ -246,7 +271,9 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
 The next wins are on the copy lane (copy-back through the layer's own view,
 joined submission parts) and the draw lane (indirect records clamped once per
 list) - all measured in fxceless/victory-fork and not yet ported here. See
-`docs/FINDINGS.md` and `docs/ROADMAP.md`.
+`docs/FINDINGS.md` and `docs/ROADMAP.md`. With the built server the order
+changes: waits for the card are then half the frame (157-163 of 285-292 ms),
+and copies 43-46 ms.
 
 ---
 
