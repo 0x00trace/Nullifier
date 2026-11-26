@@ -6296,7 +6296,7 @@ mod direct_copy {
         unsafe { VirtualProtect(page as *const _, KERNEL_PAGE, info.Protect | PAGE_GUARD, &mut old) };
     }
 
-    fn install() {
+    pub(super) fn install() {
         static ONCE: Once = Once::new();
         ONCE.call_once(|| {
             // SAFETY: `on_fault` only intercepts faults inside `victory_try_copy_op`.
@@ -6304,6 +6304,12 @@ mod direct_copy {
                 AddVectoredExceptionHandler(1, Some(on_fault));
             }
         });
+    }
+
+    /// Whether `rip` is inside the copy itself.
+    pub(super) fn copying(rip: u64) -> bool {
+        (&raw const victory_try_copy_op as u64..&raw const victory_try_copy_end as u64)
+            .contains(&rip)
     }
 
     /// Copies `len` bytes from `src` to `dst` in-process, returning `false` on
@@ -6320,9 +6326,18 @@ mod direct_copy {
         install();
         // SAFETY: `victory_try_copy` preserves callee-saved registers and any
         // fault inside `victory_try_copy_op` jumps to `victory_try_copy_fault`.
-        unsafe { victory_try_copy(dst, src, len) != 0 }
+        let copied = unsafe { victory_try_copy(dst, src, len) != 0 };
+        // Diagnostics: pages of the probe that the copy had opened for it.
+        if super::back_probe::every() != 0 {
+            super::back_probe::closed_again();
+        }
+        copied
     }
 }
+
+/// Diagnostics (`VICTORY_BACK_PROBE=N`): whether the title touches what
+/// shaders wrote before shaders write it again.
+pub(crate) mod back_probe;
 
 /// Copies `len` bytes from `src` to `dst` unless a source page is not
 /// readable.
@@ -6635,6 +6650,7 @@ impl Meter {
             );
         }
         late_line(frames);
+        back_probe::line(frames);
         #[cfg(feature = "diagnostics")]
         crate::draw::clamp_line(frames);
         card_clock_line(frames, ms);
