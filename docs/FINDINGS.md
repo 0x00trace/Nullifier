@@ -641,6 +641,45 @@ benchmark killing the title at the end of its window (the timestamp is directly
 after the last capture, and the same marker appears in runs without this change),
 not a gameplay crash; `removals=0` throughout.
 
+## 3.28 Black frames at shot changes are the title's own (2026-11-25)
+
+**Symptom.** One or two wholly black frames at some shot changes of the
+opening scene (`a black frame after a frame that was not` in the log, 8 to
+26 a run on an RTX 5080 at about one frame a second).
+
+**What the title draws there.** A run with the draws of every world frame
+listed (`VICTORY_CAPTURE_WORLD=1` and `VICTORY_CAPTURE_WORLD_ALSO=1,2,…,300`:
+285 listings) had four such places. All four are the start of a video the
+title lays over the picture, and all four go the same way:
+
+| frame | the video's target (512x512, format 29) | the overlay draw | picture |
+|---|---|---|---|
+| first | nothing draws into it | samples it | black |
+| second | the title fills it with a full-screen triangle of its own (`dfafaf385b2f94e8` + `06295fb1d1aefb78`, blending off) | samples it | black |
+| third | the video's planes are converted into it for the first time (`f7f331c8c5b3a0d8` + `3bfe730f7e24ee1a`) | samples it | the video |
+
+The overlay draw is `80cb958cde505e15` + `f9bf13c6c099ccec`, alpha-blended
+(source alpha, inverse source alpha) into the 3840x2160 interface layer. No
+draw of those frames is dropped. The planes are not late either: no list
+samples them in the first two frames, and when they are first read they hold
+a picture (luma mean 29 and 46 of 255 at two of the places; logged with
+`VICTORY_FILM_LOG=1` on a diagnostics branch). The 3D picture under the
+overlay is drawn in those frames, and `VICTORY_TEXTURE_NO_WAIT` changes
+nothing.
+
+**So.** The title shows its overlay two frames before the video's first
+picture, and it counts frames, not time. At 30 frames a second that is 66 ms;
+at one frame a second it is two seconds of black. The layer has nothing to
+bring up to date there, and the black gets shorter as the frame does. Do not
+look for a late upload here.
+
+**Open.** What the target holds in the first frame (it was never drawn to,
+or it holds an earlier video's last picture), and the colour the title's
+fill writes in the second: the listing does not show the fill's constants.
+A video panel is also drawn green in some frames, which is what planes of
+all zeros convert to; in one capture the picture's luma is there under the
+green. Not looked into.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
