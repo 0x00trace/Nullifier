@@ -40,6 +40,11 @@ cargo build --manifest-path tools/launcher/Cargo.toml
 * **Warnings** — values that cannot work on this machine are called out in a
   yellow panel: a texture budget above the card's VRAM, world memory over half
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
+* **Game** — the title's own settings, parsed from its `settings.xml` (88
+  values: HDR, gamma, anisotropic filtering, FSR quality/sharpen, LOD scales,
+  shadows, motion blur, water reflections, resolution, frame cap). Apply writes
+  the file with `settings.xml.bak` beside it; the game must be closed. The
+  title writes this file itself on exit, so reload after playing.
 * **Advanced** — the exact set as editable `KEY=VALUE` rows, free-form
   environment, profile notes, and the disabled list of what needs engine work
   (FSR, ray tracing, render scale, LOD distance).
@@ -55,7 +60,13 @@ launchers honour `VICTORY_PROFILES` at all: it lets a front end pass a set,
 including switching an opt-in off by omission.
 
 `--check` prints the resolved profile, the exact environment and the command
-it would run, without launching. `--tab graphics|debug` opens on that tab.
+it would run, without launching. `--tab play|game|graphics|advanced|debug`
+opens on that tab. The game settings also work headless:
+
+```bash
+./nullifier-launcher --game-list                     # section/key=value
+./nullifier-launcher --game-set graphics/gamma=15    # writes, keeps a .bak
+```
 
 **Inert on purpose:** FSR, ray tracing, render scale, V-Sync, an FPS cap and
 LOD distance are shown but disabled. Each needs engine work (see

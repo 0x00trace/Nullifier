@@ -81,7 +81,63 @@ fn main() -> eframe::Result<()> {
     let root = find_root();
     let mut settings = Settings::load(root.as_deref());
 
-    if std::env::args().any(|a| a == "--check") {
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--game-list") {
+        match load_game_settings() {
+            Some(game) => {
+                println!("# {}", game.path.display());
+                for s in &game.settings {
+                    println!("{}/{}={}", s.section, s.key, s.value);
+                }
+            }
+            None => println!("no settings.xml found"),
+        }
+        return Ok(());
+    }
+    let mut changes: Vec<(String, String)> = Vec::new();
+    for i in 0..args.len() {
+        if args[i] == "--game-set" {
+            if let Some((k, v)) = args.get(i + 1).and_then(|a| a.split_once('=')) {
+                changes.push((k.to_string(), v.to_string()));
+            }
+        }
+    }
+    if !changes.is_empty() {
+        let Some(mut game) = load_game_settings() else {
+            eprintln!("no settings.xml found");
+            return Ok(());
+        };
+        let mut ok = true;
+        for (name, value) in changes {
+            let found = game.settings.iter_mut().find(|s| {
+                let full = format!("{}/{}", s.section, s.key);
+                full == name || s.key == name || full.ends_with(&format!("/{name}"))
+            });
+            match found {
+                Some(setting) => {
+                    setting.value = value.clone();
+                    let line = format!(
+                        "{}<{} value=\"{}\" />",
+                        setting.indent, setting.key, setting.value
+                    );
+                    game.lines[setting.line] = line;
+                    println!("{name}={value}");
+                }
+                None => {
+                    eprintln!("no such setting: {name}");
+                    ok = false;
+                }
+            }
+        }
+        if ok {
+            match apply_game(&mut game) {
+                Ok(()) => println!("saved (settings.xml.bak kept)"),
+                Err(e) => eprintln!("could not save: {e}"),
+            }
+        }
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--check") {
         check(root.as_deref(), &settings);
         return Ok(());
     }
@@ -107,6 +163,7 @@ fn main() -> eframe::Result<()> {
             settings.root = root.clone();
             let mut app = App::new(settings);
             app.tab = match start_tab.as_deref() {
+                Some("game") => Tab::Game,
                 Some("graphics") => Tab::Graphics,
                 Some("advanced") => Tab::Advanced,
                 Some("debug") => Tab::Debug,
@@ -276,6 +333,157 @@ fn cache_dir() -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------- hardware
+
+#[derive(Clone)]
+struct GameSetting {
+    section: String,
+    key: String,
+    value: String,
+    line: usize,
+    indent: String,
+}
+
+struct GameSettings {
+    path: PathBuf,
+    lines: Vec<String>,
+    settings: Vec<GameSetting>,
+    dirty: bool,
+    note: String,
+}
+
+fn find_game_settings() -> Option<PathBuf> {
+    let roots = [
+        data_dir().map(|d| d.join("prefix/pfx/drive_c/users")),
+        data_dir().map(|d| d.join("data")),
+    ];
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for root in roots.into_iter().flatten() {
+        let mut stack = vec![(root, 0usize)];
+        let mut seen = 0usize;
+        while let Some((dir, depth)) = stack.pop() {
+            if depth > 12 || seen > 40_000 {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            for entry in entries.flatten() {
+                seen += 1;
+                let path = entry.path();
+                let Ok(kind) = entry.file_type() else { continue };
+                if kind.is_dir() {
+                    stack.push((path, depth + 1));
+                } else if path.file_name().and_then(|n| n.to_str()) == Some("settings.xml")
+                    && dir.ends_with("storage/settings")
+                {
+                    if let Ok(meta) = entry.metadata() {
+                        let when = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                        if best.as_ref().is_none_or(|(t, _)| when > *t) {
+                            best = Some((when, path));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+fn load_game_settings() -> Option<GameSettings> {
+    let path = find_game_settings()?;
+    let text = std::fs::read_to_string(&path).ok()?;
+    let lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let mut settings = Vec::new();
+    let mut stack: Vec<String> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with('<') || trimmed.starts_with("<?") || trimmed.starts_with("<!") {
+            continue;
+        }
+        let self_closing = trimmed.ends_with("/>");
+        let name = trimmed
+            .trim_start_matches('<')
+            .trim_start_matches('/')
+            .split(|c: char| c.is_whitespace() || c == '>' || c == '/')
+            .next()
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            continue;
+        }
+        if trimmed.starts_with("</") {
+            if stack.last().map(String::as_str) == Some(name.as_str()) {
+                stack.pop();
+            }
+            continue;
+        }
+        if let Some(value) = attribute(trimmed, "value") {
+            let indent = line[..line.len() - line.trim_start().len()].to_string();
+            let section = stack
+                .iter()
+                .skip(1)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join("/");
+            settings.push(GameSetting {
+                section,
+                key: name.clone(),
+                value,
+                line: i,
+                indent,
+            });
+            if !self_closing {
+                stack.push(name);
+            }
+        } else if !self_closing {
+            stack.push(name);
+        }
+    }
+    let note = format!("{} settings from settings.xml", settings.len());
+    Some(GameSettings { path, lines, settings, dirty: false, note })
+}
+
+fn attribute(line: &str, name: &str) -> Option<String> {
+    let at = line.find(&format!("{name}=\""))? + name.len() + 2;
+    let rest = &line[at..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+fn pretty(key: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in key.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push(' ');
+        }
+        out.push(c);
+    }
+    let mut chars = out.chars();
+    let mut out = match chars.next() {
+        Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    for (from, to) in [
+        ("Hdr", "HDR"), ("Ui", "UI"), ("U I", "UI"), ("Fps", "FPS"), ("Fsr", "FSR"),
+        ("Msaa", "MSAA"), ("Ssro", "SSRO"), ("Vrs", "VRS"), ("S lod", "SLOD"),
+    ] {
+        out = out.replace(from, to);
+    }
+    out
+}
+
+fn section_title(section: &str) -> &'static str {
+    match section {
+        "graphics" => "Graphics",
+        "advancedGraphics" => "Advanced graphics",
+        "video" => "Video",
+        "audio" => "Audio",
+        "population" => "Population",
+        "physics" => "Physics",
+        "ai" => "AI",
+        _ if section.ends_with("resolutionFullscreen") => "Fullscreen resolution",
+        _ if section.ends_with("uiResolution") => "UI resolution",
+        _ => "Other",
+    }
+}
 
 #[derive(Default, Clone)]
 struct Hardware {
@@ -581,6 +789,7 @@ struct App {
     new_key: String,
     new_value: String,
     info: Option<String>,
+    game: Option<GameSettings>,
     bench_start: Option<std::time::Instant>,
     bench_world: Option<std::time::Instant>,
     bench_measure: Option<std::time::Instant>,
@@ -623,6 +832,7 @@ fn current_preset(sets: &BTreeMap<String, String>, shipped: &BTreeMap<String, St
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 enum Tab {
     Play,
+    Game,
     Graphics,
     Advanced,
     Debug,
@@ -745,6 +955,7 @@ impl App {
             new_key: String::new(),
             new_value: String::new(),
             info: None,
+            game: load_game_settings(),
             bench_start: None,
             bench_world: None,
             bench_measure: None,
@@ -1292,6 +1503,90 @@ impl App {
         });
     }
 
+    fn game_page(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Game settings");
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new("The title's own options, from settings.xml. Close the game before changing them; it writes the file when it exits.")
+                    .small()
+                    .color(egui::Color32::GRAY),
+            )
+            .wrap(),
+        );
+        let running = self.running();
+        let mut reload = false;
+        let Some(game) = self.game.as_mut() else {
+            card(ui, |ui| {
+                ui.label("Not found yet. Start the game once so it writes its settings, then press Reload.");
+                if ui.button("Reload").clicked() {
+                    reload = true;
+                }
+            });
+            if reload {
+                self.game = load_game_settings();
+            }
+            return;
+        };
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!running, egui::Button::new("Apply"))
+                .on_hover_text("Write settings.xml, keeping settings.xml.bak")
+                .clicked()
+            {
+                match apply_game(game) {
+                    Ok(()) => {
+                        game.note = "Saved (backup in settings.xml.bak)".into();
+                        game.dirty = false;
+                    }
+                    Err(e) => game.note = format!("Could not save: {e}"),
+                }
+            }
+            if ui.button("Reload").clicked() {
+                reload = true;
+            }
+            if game.dirty {
+                ui.label(egui::RichText::new("unsaved changes").small().color(egui::Color32::from_rgb(232, 179, 74)));
+            }
+            if running {
+                ui.label(egui::RichText::new("The game is running.").small().color(egui::Color32::from_rgb(232, 106, 106)));
+            }
+        });
+        ui.label(egui::RichText::new(&game.note).small().color(egui::Color32::GRAY));
+        ui.add_space(4.0);
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            let mut current = String::new();
+            for setting in &mut game.settings {
+                if setting.key.starts_with("version") {
+                    continue;
+                }
+                if setting.section != current {
+                    if !current.is_empty() {
+                        ui.add_space(6.0);
+                    }
+                    current = setting.section.clone();
+                    ui.label(
+                        egui::RichText::new(section_title(&current))
+                            .strong()
+                            .size(15.0),
+                    );
+                    ui.separator();
+                }
+                let changed = game_row(ui, setting);
+                if changed {
+                    let line = format!(
+                        "{}<{} value=\"{}\" />",
+                        setting.indent, setting.key, setting.value
+                    );
+                    game.lines[setting.line] = line;
+                    game.dirty = true;
+                }
+            }
+        });
+        if reload {
+            self.game = load_game_settings();
+        }
+    }
+
     fn graphics(&mut self, ui: &mut egui::Ui) {
         ui.heading("Graphics");
         ui.add(
@@ -1630,6 +1925,7 @@ impl eframe::App for App {
                 ui.add_space(16.0);
                 for (tab, label) in [
                     (Tab::Play, "Play"),
+                    (Tab::Game, "Game"),
                     (Tab::Graphics, "Graphics"),
                     (Tab::Advanced, "Advanced"),
                     (Tab::Debug, "Tools"),
@@ -1706,6 +2002,7 @@ impl eframe::App for App {
 
         egui::CentralPanel::default().show(ctx, |ui| match self.tab {
             Tab::Play => self.play(ui),
+            Tab::Game => self.game_page(ui),
             Tab::Graphics => self.graphics(ui),
             Tab::Advanced => self.advanced(ui),
             Tab::Debug => self.debug(ui),
@@ -2098,6 +2395,86 @@ fn switch_info(
         );
     }
     asked
+}
+
+fn apply_game(game: &mut GameSettings) -> std::io::Result<()> {
+    let backup = game.path.with_file_name("settings.xml.bak");
+    std::fs::copy(&game.path, &backup)?;
+    let mut text = game.lines.join("\n");
+    text.push('\n');
+    std::fs::write(&game.path, text)
+}
+
+fn label_of(setting: &GameSetting) -> String {
+    match (setting.section.as_str(), setting.key.as_str()) {
+        ("video/resolutionFullscreen", "width") => "Fullscreen width".into(),
+        ("video/resolutionFullscreen", "height") => "Fullscreen height".into(),
+        ("video/uiResolution", "width") => "UI width".into(),
+        ("video/uiResolution", "height") => "UI height".into(),
+        (_, key) => pretty(key),
+    }
+}
+
+fn limits(key: &str) -> Option<(f64, f64, f64)> {
+    match key {
+        "gamma" => Some((0.0, 50.0, 1.0)),
+        "anisotropicFiltering" => Some((0.0, 16.0, 1.0)),
+        "desiredFPS" | "frameRateLimit" => Some((0.0, 240.0, 1.0)),
+        "vSync" => Some((0.0, 2.0, 1.0)),
+        "fsrQuality" => Some((0.0, 4.0, 1.0)),
+        "fsrSharpen" | "manualMipBias" => Some((-5.0, 5.0, 0.05)),
+        "lodScale" | "grassLod" | "texLodScale_Global" | "texLodScale_LOD"
+        | "texLodScale_SLOD1" | "texLodScale_SLOD2" | "texLodScale_SLOD3"
+        | "texLodScale_SLOD4" | "texLodScale_Mat_High" | "texLodScale_Mat_Med"
+        | "texLodScale_Mat_Low" | "texLodScale_Buildings" | "texLodScale_Objects"
+        | "texLodScale_HD" | "texLodScale_OrphanHD" | "vehicleLodBias" => {
+            Some((0.0, 64.0, 0.05))
+        }
+        "width" | "height" => Some((0.0, 7680.0, 1.0)),
+        _ => None,
+    }
+}
+
+fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label_of(setting));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if setting.value == "true" || setting.value == "false" {
+                let mut on = setting.value == "true";
+                if ui.checkbox(&mut on, "").changed() {
+                    setting.value = if on { "true".into() } else { "false".into() };
+                    changed = true;
+                }
+            } else if let Ok(mut v) = setting.value.parse::<i64>() {
+                let before = v;
+                let mut drag = egui::DragValue::new(&mut v);
+                if let Some((min, max, _)) = limits(&setting.key) {
+                    drag = drag.range(min as i64..=max as i64);
+                }
+                if ui.add_sized([92.0, 24.0], drag).changed() && v != before {
+                    setting.value = v.to_string();
+                    changed = true;
+                }
+            } else if let Ok(mut v) = setting.value.parse::<f32>() {
+                let before = v;
+                let mut drag = egui::DragValue::new(&mut v).speed(0.05).max_decimals(3);
+                if let Some((min, max, speed)) = limits(&setting.key) {
+                    drag = drag.range(min..=max).speed(speed);
+                }
+                if ui.add_sized([92.0, 24.0], drag).changed() && (v - before).abs() > f32::EPSILON {
+                    setting.value = format!("{v}");
+                    changed = true;
+                }
+            } else if ui
+                .add_sized([180.0, 24.0], egui::TextEdit::singleline(&mut setting.value))
+                .changed()
+            {
+                changed = true;
+            }
+        });
+    });
+    changed
 }
 
 fn capitalise(text: &str) -> String {

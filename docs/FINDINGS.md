@@ -1177,6 +1177,13 @@ may be a revision id generated per save rather than a digest, with the loader
 matching it against an index elsewhere (`storage/cloudcache`, the `Player`
 container, or the save index).
 
+**The XML is honoured for graphics.** With `graphics/gamma` set from 15 to 1
+through the launcher's own writer, a frame at 55 s measures mean luma **4.9**
+against **12.7** on the same scene before the change: the picture goes almost
+black. So `settings.xml` is the writable store for graphics (and probably the
+advanced graphics list); the video section's `frameRateLimit`/`resolution` were
+the exceptions tested earlier, not the rule.
+
 Next: (1) test an XML-only advanced setting with a visible effect (e.g.
 `lodScale` 0.05) to see whether the XML store is honoured for graphics; (2) find
 which file records the current version/revision (rename one at a time and see
