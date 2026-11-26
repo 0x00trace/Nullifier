@@ -339,6 +339,9 @@ struct CommunityEntry {
     draws: u32,
     when: u64,
     log: String,
+    /// From the published board rather than this PC.
+    #[serde(default)]
+    remote: bool,
 }
 
 fn community_path() -> Option<PathBuf> {
@@ -357,9 +360,43 @@ fn save_community(entries: &[CommunityEntry]) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Ok(text) = serde_json::to_string_pretty(entries) {
+    let local: Vec<&CommunityEntry> = entries.iter().filter(|entry| !entry.remote).collect();
+    if let Ok(text) = serde_json::to_string_pretty(&local) {
         let _ = std::fs::write(path, text);
     }
+}
+
+/// Where the published board lives (a file in the repository, served by
+/// GitHub's raw host: no token, no server, and edits are visible in git).
+const BOARD_URL: &str =
+    "https://raw.githubusercontent.com/iNiKKo/Nullifier/main/community/leaderboard.json";
+
+fn fetch_board() -> Option<Vec<CommunityEntry>> {
+    let url = std::env::var("NULLIFIER_BOARD_URL").unwrap_or_else(|_| BOARD_URL.to_string());
+    let out = if cfg!(windows) {
+        Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "try {{ (Invoke-WebRequest -UseBasicParsing -Uri '{url}' -TimeoutSec 8).Content }} catch {{ }}"
+                ),
+            ])
+            .output()
+    } else {
+        Command::new("curl")
+            .args(["-fsSL", "--max-time", "8", &url])
+            .output()
+    }
+    .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let mut board: Vec<CommunityEntry> = serde_json::from_slice(&out.stdout).ok()?;
+    // A published file is untrusted: keep the page responsive whatever it holds.
+    board.retain(|entry| entry.name.len() <= 80 && entry.log.len() <= 200_000);
+    board.truncate(500);
+    Some(board)
 }
 
 fn date_of(epoch: u64) -> String {
@@ -1254,6 +1291,9 @@ struct App {
     community_game: String,
     community_sort: u8,
     community_status: String,
+    community_rx: Option<std::sync::mpsc::Receiver<Option<Vec<CommunityEntry>>>>,
+    community_fetching: bool,
+    community_checked: bool,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1459,6 +1499,9 @@ impl App {
             community_game: String::new(),
             community_sort: 0,
             community_status: String::new(),
+            community_rx: None,
+            community_fetching: false,
+            community_checked: false,
         }
     }
 
@@ -2705,6 +2748,23 @@ impl App {
         });
     }
 
+    fn save_community_after_fetch(&self) {
+        save_community(&self.community);
+    }
+
+    fn start_community_fetch(&mut self) {
+        if self.community_fetching {
+            return;
+        }
+        self.community_fetching = true;
+        self.community_status = "Checking the published board...".into();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(fetch_board());
+        });
+        self.community_rx = Some(rx);
+    }
+
     fn share_run(&mut self) -> Option<String> {
         let Some(path) = self.log_path.clone() else {
             self.community_status = "No run log yet - play or measure once first.".into();
@@ -2741,6 +2801,7 @@ impl App {
             draws: draws.unwrap_or(0),
             when,
             log: log.clone(),
+            remote: false,
         };
         let game = entry.game.clone();
         let profile = entry.profile.clone();
@@ -2750,14 +2811,33 @@ impl App {
         self.community.insert(0, entry);
         save_community(&self.community);
         self.community_status = format!("Added {name}'s run; a share block is on the clipboard.");
+        let json = serde_json::to_string_pretty(&CommunityEntry {
+            name: name.clone(),
+            version: VERSION.to_string(),
+            game,
+            profile: profile.clone(),
+            fps,
+            frame_ms,
+            gpu_ms,
+            draws,
+            when,
+            log,
+            remote: false,
+        })
+        .unwrap_or_default();
         Some(format!(
-            "**{name}** · Nullifier v{VERSION} · {game} · **{fps:.1} fps**\n\
+            "**{name}** · Nullifier v{VERSION} · **{fps:.1} fps**\n\
              {draws} draws/frame · frame {frame_ms:.1} ms · GPU {gpu_ms:.1} ms · profile {profile}\n\
-             \n```\n{log}\n```\n"
+             Paste this whole block in the GitHub form.\n\
+             \n```json\n{json}\n```\n"
         ))
     }
 
     fn community_page(&mut self, ui: &mut egui::Ui) {
+        if !self.community_checked {
+            self.community_checked = true;
+            self.start_community_fetch();
+        }
         ui.heading("Community");
         ui.add(
             egui::Label::new(
@@ -2834,6 +2914,11 @@ impl App {
                             ui.ctx().copy_text(markdown);
                         }
                     }
+                    if chip_button(ui, "Post to GitHub").clicked() {
+                        open_url(
+                            "https://github.com/iNiKKo/Nullifier/issues/new?template=share-run.yml",
+                        );
+                    }
                     if chip_button(ui, "Discussions").clicked() {
                         open_url("https://github.com/iNiKKo/Nullifier/discussions");
                     }
@@ -2867,6 +2952,11 @@ impl App {
                                     self.community_sort = 1;
                                 }
                             });
+                        if self.community_fetching {
+                            ui.add_enabled(false, egui::Button::new("Checking board…").small());
+                        } else if chip_button(ui, "Refresh board").clicked() {
+                            self.start_community_fetch();
+                        }
                         if chip_button(ui, "Open folder").clicked() {
                             if let Some(dir) = community_path().and_then(|p| p.parent().map(Path::to_path_buf)) {
                                 open_path(&dir);
@@ -2991,6 +3081,13 @@ impl App {
                                                     .small()
                                                     .color(egui::Color32::GRAY),
                                             );
+                                            if entry.remote {
+                                                ui.label(
+                                                    egui::RichText::new("GitHub")
+                                                        .small()
+                                                        .color(egui::Color32::from_rgb(120, 165, 240)),
+                                                );
+                                            }
                                         },
                                     );
                                 });
@@ -3015,7 +3112,7 @@ impl App {
                             if chip_button(ui, "Copy log").clicked() {
                                 ui.ctx().copy_text(entry.log.clone());
                             }
-                            if chip_button(ui, "Remove").clicked() {
+                            if !entry.remote && chip_button(ui, "Remove").clicked() {
                                 remove = true;
                             }
                             ui.label(
@@ -3485,6 +3582,28 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(rx) = &self.community_rx {
+            if let Ok(board) = rx.try_recv() {
+                self.community_rx = None;
+                self.community_fetching = false;
+                match board {
+                    Some(mut board) => {
+                        for entry in &mut board {
+                            entry.remote = true;
+                        }
+                        let shared = board.len();
+                        self.community.retain(|entry| !entry.remote);
+                        self.community.extend(board);
+                        self.community_status = format!("{shared} runs from the published board.");
+                    }
+                    None => {
+                        self.community_status =
+                            "Could not reach the published board (offline?).".into();
+                    }
+                }
+                self.save_community_after_fetch();
+            }
+        }
         if let Some(rx) = &self.update_rx {
             if let Ok(tag) = rx.try_recv() {
                 self.update_tag = tag;

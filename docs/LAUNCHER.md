@@ -66,9 +66,12 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   fastest first, with a log viewer. The log is filtered to frame lines and
   failures, and home paths, the game folder, emails and IP addresses are
   replaced before it is stored or copied. Entries stay on this PC in
-  `~/.local/share/nullifier/community.json`; **Open folder** and
-  **Discussions** are there to share the JSON or post the block. There is no
-  hosted leaderboard yet; the file is the format a small server could read.
+  `~/.local/share/nullifier/community.json`; **Refresh board** reads the
+  published `community/leaderboard.json` from the repository's `main` branch
+  (raw GitHub, no token or server), marks those rows **GitHub**, and
+  **Post to GitHub** opens the share form with the block ready to paste. The
+  board file is the format a hosted server would also read; `NULLIFIER_BOARD_URL`
+  points the launcher at another copy (a fork, or a local file for testing).
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every
