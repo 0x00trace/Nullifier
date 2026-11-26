@@ -593,7 +593,7 @@ impl View {
                 let hits = VIEW_POOL_HITS
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     + 1;
-                if hits % 2000 == 0 {
+                if hits.is_multiple_of(2000) {
                     tracing::info!(pool_hits = hits, "xmem: view maps served from the pool");
                 }
                 return Some(View {
@@ -606,12 +606,14 @@ impl View {
                 });
             }
         }
-        if section_views() {
-            if let Some(base) = section_base(&slice.section) {
+        if let Some(base) = section_views()
+            .then(|| section_base(&slice.section))
+            .flatten()
+        {
                 let hits = SECTION_VIEW_MAPS
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     + 1;
-                if hits % 2000 == 0 {
+                if hits.is_multiple_of(2000) {
                     tracing::info!(maps = hits, "xmem: view maps served by a section view");
                 }
                 return Some(View {
@@ -624,7 +626,6 @@ impl View {
                     index: slice.index,
                     n,
                 });
-            }
         }
         use windows_sys::Win32::System::Memory::{FILE_MAP_WRITE, MapViewOfFile};
         let (offset, len) = ((slice.index * PAGE) as u64, n * PAGE);
@@ -668,7 +669,7 @@ fn unmap_view(at: usize) {
     // SAFETY: our view, mapped by `View::map`.
     unsafe { UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: at as *mut c_void }) };
     let n = VIEW_UNMAPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-    if n % 2000 == 0 {
+    if n.is_multiple_of(2000) {
         tracing::info!(unmaps = n, "xmem: view unmaps so far");
     }
 }
