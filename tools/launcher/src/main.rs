@@ -3364,14 +3364,16 @@ fn is_newer(latest: &str, current: &str) -> bool {
     false
 }
 
-/// The newest release tag, or nothing when offline or no release exists.
-fn fetch_latest_tag() -> Option<String> {
+/// A GitHub JSON endpoint as text, or nothing when offline.
+fn fetch_json(url: &str) -> Option<String> {
     let out = if cfg!(windows) {
         Command::new("powershell")
             .args([
                 "-NoProfile",
                 "-Command",
-                "try { (Invoke-RestMethod -Uri 'https://api.github.com/repos/iNiKKo/Nullifier/releases/latest' -TimeoutSec 6).tag_name } catch { }",
+                &format!(
+                    "try {{ Invoke-RestMethod -Uri '{url}' -TimeoutSec 6 | ConvertTo-Json -Compress }} catch {{ }}"
+                ),
             ])
             .output()
     } else {
@@ -3382,7 +3384,7 @@ fn fetch_latest_tag() -> Option<String> {
                 "6",
                 "-H",
                 "Accept: application/vnd.github+json",
-                "https://api.github.com/repos/iNiKKo/Nullifier/releases/latest",
+                url,
             ])
             .output()
     }
@@ -3390,7 +3392,11 @@ fn fetch_latest_tag() -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    let text = String::from_utf8_lossy(&out.stdout);
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+fn tag_from(text: &str) -> Option<String> {
     if let Some(at) = text.find("\"tag_name\"") {
         let rest = &text[at..];
         let start = rest.find(':')? + 1;
@@ -3398,10 +3404,26 @@ fn fetch_latest_tag() -> Option<String> {
         let end = rest.find('"')?;
         return Some(rest[..end].trim().to_string());
     }
+    if let Some(at) = text.find("\"name\"") {
+        let rest = &text[at..];
+        let start = rest.find(':')? + 1;
+        let rest = rest[start..].trim_start().strip_prefix('"')?;
+        let end = rest.find('"')?;
+        let name = rest[..end].trim();
+        return name.starts_with('v').then(|| name.to_string());
+    }
     let line = text.lines().map(str::trim).find(|line| {
         line.starts_with('v') || line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
     })?;
     Some(line.to_string())
+}
+
+/// The newest release tag, falling back to tags when no release is published.
+fn fetch_latest_tag() -> Option<String> {
+    let base = "https://api.github.com/repos/iNiKKo/Nullifier";
+    fetch_json(&format!("{base}/releases/latest"))
+        .and_then(|text| tag_from(&text))
+        .or_else(|| fetch_json(&format!("{base}/tags")).and_then(|text| tag_from(&text)))
 }
 
 /// Once a day at most, in the background. A cached answer is used as is.
