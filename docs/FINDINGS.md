@@ -18,7 +18,7 @@ frames (`fps < 10`).
 | Black screen, UI text and audio fine | Wine's `d3dcompiler_47` rejects `InterlockedMax`/`Load`/`Store` on `RWByteAddressBuffer`; the indirect-argument clamp never compiles; **every indirect draw is dropped** | `clamp:76:10: E5005: Method 'InterlockedMax' is not defined` then `no argument clamp: indirect execution dropped`; draws/frame 312 → 2,435 after the fix | PR #127 |
 | Exit 3 right after the first world mesh pipeline | RADV segfaults in `vkCreateGraphicsPipelines`; the same shader compiles standalone and on lavapipe | `err:vulkan:vkCreateGraphicsPipelines Exception 0xc0000005`, backtrace all in `libvulkan_radeon.so`, symbolized to `radv_graphics_pipeline_compile` | vkd3d-proton ≥ 5742 (Proton Experimental) |
 | `device removed 0x887A0005` after minutes | submissions sent ahead of the fence | `device removed after 31 submissions sent ahead (VICTORY_LATE_WAIT=1)` | `LATE_WAIT ≤ 1` on Linux; `--safe` if needed |
-| `unhandled exception 0x80000001` | guard-page violation; seen when delaying guard resets, and when PR #154's VEH copy meets newer upstream page guards | `unhandled exception 0x80000001 at victory.exe+…` | not on `reference/upstream`, no #154 there; see §3 |
+| `unhandled exception 0x80000001` | guard-page violation; seen when delaying guard resets, and when PR #154's VEH copy meets newer upstream page guards | `unhandled exception 0x80000001 at nullifier.exe+…` | not on `reference/upstream`, no #154 there; see §3 |
 | ~30 fps menus, 0.2–1 fps world | per-frame texture bookkeeping and copies, not GPU work | GPU 4–6 % busy; one busy thread of 103 | §2 |
 | World under 1.5 fps under Wine, the frame thread asleep most of the time, `wineserver` at a whole core | Wine's server walks a list of every view of the process at each map and unmap, and the title keeps tens of thousands | `perf`: `is_valid_view_addr` and `req_unmap_view` are all of `wineserver`'s time; 3.55 / 3.45 / 3.50 fps with the tree against 0.60 / 0.65 / 0.70 | `tools/build-wineserver.sh` (2.5), until Proton has Wine commit 3217449b1f71 |
 
@@ -1034,7 +1034,7 @@ Two-run variance of one config is ±30 %. Do not chase 10 %.
 * Login/engine errors: `crashes.log` in the title's data folder; device
   removals and unhandled exceptions are appended there.
 * The title renames its main thread to `main`, which is why `pgrep -x
-  victory.exe` finds nothing — match the cmdline instead.
+  nullifier.exe` finds nothing — match the cmdline instead.
 * `VICTORY_KEYS` (diagnostics builds) presses keys at given seconds; it is the
   only way to drive the game headless. `VICTORY_CAPTURE` + `VICTORY_CAPTURE_FRAMES`
   write PNGs of presented frames.

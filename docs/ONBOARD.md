@@ -71,8 +71,8 @@ Then:
 
 ```bash
 ./tools/build-wineserver.sh              # Linux, once: Wine's server with its view tree
-./launcher/victory-launch.sh --detect    # profile, values, and why
-./launcher/victory-launch.sh --game DIR  # play
+./launcher/nullifier-launch.sh --detect    # profile, values, and why
+./launcher/nullifier-launch.sh --game DIR  # play
 ./tools/bench.sh "baseline"              # the number you will compare against
 ```
 
@@ -176,7 +176,7 @@ Open an issue with the fields in the template:
 
 * commit you tested;
 * GPU, driver, Mesa/Proton versions;
-* `./launcher/victory-launch.sh --detect` output;
+* `./launcher/nullifier-launch.sh --detect` output;
 * one `tools/bench.sh` row (median, n, removals, picture);
 * the smallest log excerpt that shows it (grep it down; never attach game data
   or screenshots of the title);

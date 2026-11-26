@@ -82,25 +82,25 @@ else
   ok "installed"
 fi
 
-say "building victory.exe (diag, diagnostics)"
-cargo xwin build --profile diag -p victory --features diagnostics \
+say "building nullifier.exe (diag, diagnostics)"
+cargo xwin build --profile diag -p nullifier --features diagnostics \
   --target x86_64-pc-windows-msvc || die "build failed"
-BIN="$HERE/target/x86_64-pc-windows-msvc/diag/victory.exe"
+BIN="$HERE/target/x86_64-pc-windows-msvc/diag/nullifier.exe"
 [ -f "$BIN" ] || die "build produced no binary"
 ok "$(du -h "$BIN" | cut -f1) $BIN"
 
 say "hardware and profile"
-./launcher/victory-launch.sh --detect || die "launcher --detect failed"
+./launcher/nullifier-launch.sh --detect || die "launcher --detect failed"
 
 if [ -n "$GAME" ]; then
   say "starting the title (Ctrl-C to stop)"
-  ./launcher/victory-launch.sh --game "$GAME"
+  ./launcher/nullifier-launch.sh --game "$GAME"
 else
   say "next"
   cat <<EOF
    ./tools/build-wineserver.sh     (once: Wine's server with its view tree,
                                     several times the frame rate; docs/LAUNCHER.md)
-   ./launcher/victory-launch.sh --game <your game folder>
+   ./launcher/nullifier-launch.sh --game <your game folder>
 
    If a run dies with "device removed", use --safe.
    Contributions: docs/ONBOARD.md, then AGENTS.md and docs/MIGRATION.md.

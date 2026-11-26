@@ -30,8 +30,8 @@ server alone is 1.1 → 3.2 fps here. What is still slow, with evidence, is in
 ## Get started
 
 ```bash
-git clone git@github.com:iNiKKo/victory-universal.git
-cd victory-universal          # the repo keeps its old name; the project is Nullifier
+git clone git@github.com:iNiKKo/Nullifier.git
+cd Nullifier          # the repo keeps its old name; the project is Nullifier
 ./tools/setup.sh --game /path/to/game
 ```
 
@@ -40,13 +40,13 @@ hardware and starts the title. To run it later, or to see what it selected:
 
 ```bash
 ./tools/build-wineserver.sh           # Linux, once: several times the frame rate (docs/LAUNCHER.md)
-./launcher/victory-launch.sh --detect
-./launcher/victory-launch.sh --game /path/to/game
+./launcher/nullifier-launch.sh --detect
+./launcher/nullifier-launch.sh --game /path/to/game
 ./tools/bench_scene.sh "label"        # measure a change, with a picture check
 ```
 
 Windows: `cargo build --release -p victory`, then
-`.\launcher\victory-launch.ps1 -Game "D:\path\to\game"`.
+`.\launcher\nullifier-launch.ps1 -Game "D:\path\to\game"`.
 
 Hardware support is a profile, not a fork: add one object to
 [`launcher/profiles.json`](launcher/profiles.json).
@@ -77,4 +77,3 @@ A rebrand and consolidation, not a rewrite. Built on
 #154 and #270 carried. GPL-3.0-or-later; upstream history and notices are kept —
 see [`LICENSE`](LICENSE).
 
-Formerly `victory-universal`.

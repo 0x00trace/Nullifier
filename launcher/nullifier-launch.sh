@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# victory-launch — Linux/macOS launcher. Settings come from launcher/profiles.json
+# nullifier-launch — Linux/macOS launcher. Settings come from launcher/profiles.json
 # so Windows and Linux never disagree about what "best settings" means.
 #
-#   ./launcher/victory-launch.sh --detect          show hardware + chosen profile
-#   ./launcher/victory-launch.sh --list            list profiles
-#   ./launcher/victory-launch.sh --game DIR        play
-#   ./launcher/victory-launch.sh --game DIR --safe play, no send-ahead
+#   ./launcher/nullifier-launch.sh --detect          show hardware + chosen profile
+#   ./launcher/nullifier-launch.sh --list            list profiles
+#   ./launcher/nullifier-launch.sh --game DIR        play
+#   ./launcher/nullifier-launch.sh --game DIR --safe play, no send-ahead
 #
 # Anything you export overrides the profile (VICTORY_*, VKD3D_*).
 set -uo pipefail
@@ -149,7 +149,7 @@ fi
 # commit; on an RTX 5080 the world ran at 3.5 fps with it and 0.6-0.7 without
 # (docs/FINDINGS.md 2.5). VICTORY_WINESERVER=0 leaves it unused, and
 # VICTORY_WINESERVER=PATH names another server binary to start.
-WS_DIR="${VICTORY_WINESERVER_DIR:-$HOME/.local/share/victory/wineserver}"
+WS_DIR="${VICTORY_WINESERVER_DIR:-$HOME/.local/share/nullifier/wineserver}"
 WS=""       # the server to start before wine; empty: wine starts Proton's own
 WS_SAYS=""  # one line for --detect and the log
 # Whether a wineserver binary has upstream's tree (not "grep -q": with
@@ -203,7 +203,7 @@ newest_proton() {
 }
 
 export STEAM_COMPAT_CLIENT_INSTALL_PATH="$STEAM_ROOT"
-export STEAM_COMPAT_DATA_PATH="${VICTORY_PREFIX:-$HOME/.local/share/victory/prefix}"
+export STEAM_COMPAT_DATA_PATH="${VICTORY_PREFIX:-$HOME/.local/share/nullifier/prefix}"
 export WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx"
 export WINEDEBUG="${WINEDEBUG:--all}"
 export WINEDLLOVERRIDES="d3d12=n;d3d12core=n;dxgi=n"
@@ -243,8 +243,8 @@ pgrep -x llama-server >/dev/null 2>&1 && echo "warning: llama-server is running 
 # ---------------- go ----------------
 [ -n "$GAME" ] || { echo "need --game DIR (or VICTORY_GAME_DIR)" >&2; exit 2; }
 [ -d "$GAME" ] || { echo "not a directory: $GAME" >&2; exit 2; }
-[ -n "$BIN" ] || BIN="$ROOT/target/x86_64-pc-windows-msvc/diag/victory.exe"
-[ -f "$BIN" ] || { echo "no victory.exe at $BIN; build it first (see AGENTS.md)" >&2; exit 2; }
+[ -n "$BIN" ] || BIN="$ROOT/target/x86_64-pc-windows-msvc/diag/nullifier.exe"
+[ -f "$BIN" ] || { echo "no nullifier.exe at $BIN; build it first (see AGENTS.md)" >&2; exit 2; }
 
 # ---------------- wineserver ----------------
 # wine only ever starts the server that lies beside it, so another one is

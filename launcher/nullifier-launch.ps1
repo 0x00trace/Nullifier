@@ -1,10 +1,10 @@
-# victory-launch.ps1 - Windows launcher. Reads the same launcher/profiles.json as
+# nullifier-launch.ps1 - Windows launcher. Reads the same launcher/profiles.json as
 # the bash launcher, so both platforms choose settings by the same rules.
 #
-#   .\launcher\victory-launch.ps1 -Detect
-#   .\launcher\victory-launch.ps1 -List
-#   .\launcher\victory-launch.ps1 -Game "D:\games\title" [-Safe] [-Diagnostics]
-#   .\launcher\victory-launch.ps1 -Game DIR -Profile windows-amd
+#   .\launcher\nullifier-launch.ps1 -Detect
+#   .\launcher\nullifier-launch.ps1 -List
+#   .\launcher\nullifier-launch.ps1 -Game "D:\games\title" [-Safe] [-Diagnostics]
+#   .\launcher\nullifier-launch.ps1 -Game DIR -Profile windows-amd
 #
 # Requirement: a D3D12 GPU with shader model 6.6 and mesh shaders.
 
@@ -117,8 +117,8 @@ if ($Detect) {
 
 if (-not $Game)        { Write-Error "need -Game DIR (or VICTORY_GAME_DIR)"; exit 2 }
 if (-not (Test-Path $Game)) { Write-Error "not a directory: $Game"; exit 2 }
-if (-not $Bin)         { $Bin = Join-Path $Root "target\x86_64-pc-windows-msvc\diag\victory.exe" }
-if (-not (Test-Path $Bin)) { Write-Error "no victory.exe at $Bin; build it first (see AGENTS.md)"; exit 2 }
+if (-not $Bin)         { $Bin = Join-Path $Root "target\x86_64-pc-windows-msvc\diag\nullifier.exe" }
+if (-not (Test-Path $Bin)) { Write-Error "no nullifier.exe at $Bin; build it first (see AGENTS.md)"; exit 2 }
 
 $exe = Join-Path $Game $TitleExe
 if (-not (Test-Path $exe)) { Write-Error "title exe not found: $exe"; exit 2 }

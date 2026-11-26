@@ -17,7 +17,7 @@ LABEL="${1:-run}"; shift || true
 [ "${1:-}" = "--" ] && shift
 
 GAME="${VICTORY_GAME_DIR:-$HOME/Downloads/GTA6.Xbox.v1.0.2.1-CYBERLEEK}"
-BIN="${VICTORY_BIN:-$HERE/target/x86_64-pc-windows-msvc/diag/victory.exe}"
+BIN="${VICTORY_BIN:-$HERE/target/x86_64-pc-windows-msvc/diag/nullifier.exe}"
 WINDOW="${VICTORY_WINDOW:-35}"          # seconds measured once the world runs
 WARMUP="${VICTORY_WARMUP:-10}"          # seconds after world entry discarded
 TOTAL="${VICTORY_TOTAL:-200}"
@@ -34,7 +34,7 @@ export VICTORY_CAPTURE_FRAMES="${VICTORY_CAPTURE_FRAMES:-1024,1536}"
 echo "bench_scene: $LABEL"
 echo "  window ${WINDOW}s (+${WARMUP}s warm-up), log $LOG"
 
-"$HERE/launcher/victory-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" >"$LOG" 2>&1 &
+"$HERE/launcher/nullifier-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" >"$LOG" 2>&1 &
 RUN=$!
 
 # Wait for the world: the first frame line below 10 fps marks entry.

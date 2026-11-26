@@ -29,7 +29,7 @@ STAY IN SYNC (every session, before you do any work)
     behind > 0                  -> rebase on origin/main, then re-run
                                    ./tools/bench.sh: an upstream fix changes what
                                    your change is worth, old numbers expire
-    launcher/profiles.json changed -> re-run ./launcher/victory-launch.sh --detect
+    launcher/profiles.json changed -> re-run ./launcher/nullifier-launch.sh --detect
     AGENTS.md / docs/AI-PROMPT.md / docs/ONBOARD.md changed -> re-read them,
                                    the rules may have changed
   Never keep working on a stale clone for days, and never open a PR from one:
@@ -41,7 +41,7 @@ READ FIRST, COMPLETELY, BEFORE RUNNING ANY COMMAND
   2. docs/LAUNCHER.md       - how settings are chosen and how to add a profile
   3. docs/MIGRATION.md      - how to port work from another fork, PR format
   4. docs/FORK.md           - what has actually been measured
-Then run: ./launcher/victory-launch.sh --detect   (or the .ps1 on Windows)
+Then run: ./launcher/nullifier-launch.sh --detect   (or the .ps1 on Windows)
 
 ABSOLUTE RULES
   - No game files, assets, dumps or screenshots in the repo. The title is not
@@ -60,14 +60,14 @@ BUILD (Windows target, from Linux)
   export RUSTUP_HOME=~/.local/victory-toolchain/rustup
   export CARGO_HOME=~/.local/victory-toolchain/cargo
   export PATH="$CARGO_HOME/bin:$PATH"
-  cargo xwin build --profile diag -p victory --features diagnostics \
+  cargo xwin build --profile diag -p nullifier --features diagnostics \
     --target x86_64-pc-windows-msvc
   (Windows: cargo build --release -p victory)
 
 RUN
-  ./launcher/victory-launch.sh --detect          # hardware + chosen profile + why
-  ./launcher/victory-launch.sh --game <dir>      # play
-  ./launcher/victory-launch.sh --game <dir> --safe   # if "device removed"
+  ./launcher/nullifier-launch.sh --detect          # hardware + chosen profile + why
+  ./launcher/nullifier-launch.sh --game <dir>      # play
+  ./launcher/nullifier-launch.sh --game <dir> --safe   # if "device removed"
 
 MEASURE
   ./tools/bench_scene.sh "<label>"          # fixed 60 s window + picture gate
@@ -99,7 +99,7 @@ WHAT NOT TO PUSH
 HOW THE LAUNCHER WORKS (do not hard-code settings in code)
   - launcher/profiles.json is the single source of truth. Each profile has
     match {os, vendor, vram_min_mb?} and sets {VICTORY_*}. First match wins.
-  - launcher/victory-launch.sh and .ps1 both read it; changing one without the
+  - launcher/nullifier-launch.sh and .ps1 both read it; changing one without the
     other is a bug.
   - Environment variables exported by the user override the profile; use that
     for A/B tests instead of editing files.

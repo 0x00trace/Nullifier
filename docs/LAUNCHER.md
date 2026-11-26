@@ -1,21 +1,21 @@
 # The launcher
 
 One matrix, two launchers. `launcher/profiles.json` is the only place settings
-live; `launcher/victory-launch.sh` (Linux/macOS) and
-`launcher/victory-launch.ps1` (Windows) both read it. If you find yourself
+live; `launcher/nullifier-launch.sh` (Linux/macOS) and
+`launcher/nullifier-launch.ps1` (Windows) both read it. If you find yourself
 typing `VICTORY_*` into a shell to play, either the profile is wrong and should
 be fixed, or you are testing and should use `tools/bench.sh`.
 
 ```bash
-./launcher/victory-launch.sh --list       # what profiles exist
-./launcher/victory-launch.sh --detect     # what this machine gets, and why
-./launcher/victory-launch.sh --game DIR   # play
+./launcher/nullifier-launch.sh --list       # what profiles exist
+./launcher/nullifier-launch.sh --detect     # what this machine gets, and why
+./launcher/nullifier-launch.sh --game DIR   # play
 ```
 
 ```powershell
-.\launcher\victory-launch.ps1 -List
-.\launcher\victory-launch.ps1 -Detect
-.\launcher\victory-launch.ps1 -Game "D:\games\title"
+.\launcher\nullifier-launch.ps1 -List
+.\launcher\nullifier-launch.ps1 -Detect
+.\launcher\nullifier-launch.ps1 -Game "D:\games\title"
 ```
 
 ## What it detects
@@ -79,9 +79,9 @@ Proton Experimental 11.0-20261112 does not have that commit.
 It fetches Valve's Wine at the commit your Proton was built from, applies that
 one commit (`tools/wine/server-view-tree.patch`), builds only `wineserver`,
 checks that it speaks the same protocol as Proton's own, and installs it in
-`~/.local/share/victory/wineserver`. Nothing of Proton's is changed. It needs
+`~/.local/share/nullifier/wineserver`. Nothing of Proton's is changed. It needs
 git, gcc, make, autoconf, bison, flex, perl and python3, and about 600 MB
-under `~/.cache/victory`.
+under `~/.cache/nullifier`.
 
 The launcher then starts that server for its prefix before it starts wine
 (wine itself only starts the server that lies beside it). `--detect` says
@@ -92,7 +92,7 @@ it got.
 |---|---|
 | `VICTORY_WINESERVER=0` | Proton's own server, for a comparison |
 | `VICTORY_WINESERVER=PATH` | start this server binary instead |
-| `VICTORY_WINESERVER_DIR` | where the built server is (default `~/.local/share/victory/wineserver`) |
+| `VICTORY_WINESERVER_DIR` | where the built server is (default `~/.local/share/nullifier/wineserver`) |
 
 * A server built for another Proton version is not used: the launcher says
   so and Proton's own serves. Run the build again.

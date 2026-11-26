@@ -90,7 +90,7 @@ wrong. Port concepts, not branches.
 ### Launcher and profiles
 
 Settings live in exactly one place: `launcher/profiles.json`. Both
-`launcher/victory-launch.sh` (Linux/macOS) and `launcher/victory-launch.ps1`
+`launcher/nullifier-launch.sh` (Linux/macOS) and `launcher/nullifier-launch.ps1`
 (Windows) read it. Never hard-code a switch in code to work around a platform;
 add a profile entry with an honest `confidence` instead. See
 `docs/LAUNCHER.md`.
@@ -106,7 +106,7 @@ export RUSTUP_HOME=~/.local/victory-toolchain/rustup
 export CARGO_HOME=~/.local/victory-toolchain/cargo
 export PATH="$CARGO_HOME/bin:$PATH"
 
-cargo xwin build --profile diag -p victory --features diagnostics \
+cargo xwin build --profile diag -p nullifier --features diagnostics \
   --target x86_64-pc-windows-msvc
 ```
 
@@ -115,21 +115,21 @@ cargo xwin build --profile diag -p victory --features diagnostics \
 * Plain `--release` works but has none of those, and logs at info only.
 * Toolchain is pinned by `rust-toolchain.toml`; do not bump it casually.
 
-On Windows, `cargo build --release -p victory` with MSVC.
+On Windows, `cargo build --release -p nullifier` with MSVC.
 
 ---
 
 ## 3. Run
 
 ```bash
-./launcher/victory-launch.sh --detect          # hardware, profile, and why
-./launcher/victory-launch.sh --game <dir>      # play
-./launcher/victory-launch.sh --game <dir> --safe   # if the device is removed
+./launcher/nullifier-launch.sh --detect          # hardware, profile, and why
+./launcher/nullifier-launch.sh --game <dir>      # play
+./launcher/nullifier-launch.sh --game <dir> --safe   # if the device is removed
 ```
 
 ```powershell
-.\launcher\victory-launch.ps1 -Detect
-.\launcher\victory-launch.ps1 -Game "D:\games\title"
+.\launcher\nullifier-launch.ps1 -Detect
+.\launcher\nullifier-launch.ps1 -Game "D:\games\title"
 ```
 
 The launcher detects GPU vendor and VRAM, picks settings, checks that

@@ -16,7 +16,7 @@ PULL=0
 [ "${1:-}" = "--pull" ] && PULL=1
 
 command -v git >/dev/null || { echo "git missing"; exit 2; }
-git remote get-url origin >/dev/null 2>&1 || { echo "no 'origin' remote; add it: git remote add origin git@github.com:iNiKKo/victory-universal.git"; exit 2; }
+git remote get-url origin >/dev/null 2>&1 || { echo "no 'origin' remote; add it: git remote add origin git@github.com:iNiKKo/Nullifier.git"; exit 2; }
 
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if ! git rev-parse --abbrev-ref '@{u}' >/dev/null 2>&1; then
@@ -64,7 +64,7 @@ echo "$CHANGED" | head -25
 
 echo
 case "$CHANGED" in
-  *launcher/profiles.json*) echo "!! launcher/profiles.json changed: re-run ./launcher/victory-launch.sh --detect" ;;
+  *launcher/profiles.json*) echo "!! launcher/profiles.json changed: re-run ./launcher/nullifier-launch.sh --detect" ;;
 esac
 case "$CHANGED" in
   *AGENTS.md*|*docs/AI-PROMPT.md*|*docs/ONBOARD.md*) echo "!! the rules changed: re-read AGENTS.md before continuing" ;;

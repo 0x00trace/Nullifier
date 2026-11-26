@@ -306,7 +306,7 @@ copy/fence coordination under Wine, not bandwidth and not the GPU.
 
 ## Launcher
 
-`launcher/victory-launch.sh` / `.ps1` detect OS, GPU vendor and VRAM, pick a
+`launcher/nullifier-launch.sh` / `.ps1` detect OS, GPU vendor and VRAM, pick a
 profile from `launcher/profiles.json`, create the Proton prefix if needed,
 install a vkd3d-proton new enough for RADV, warn about VRAM hogs, and start the
 title. `--detect` prints the chosen profile, every variable, the confidence and

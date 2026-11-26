@@ -6980,7 +6980,7 @@ extern "system" fn window_proc(
 }
 
 fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
-    const CLASS: PCWSTR = w!("VIctory");
+    const CLASS: PCWSTR = w!("Nullifier");
     // SAFETY: registers our class once and creates a window of it.
     unsafe {
         let instance = GetModuleHandleW(None)?;
@@ -7003,7 +7003,7 @@ fn make_window(width: u32, height: u32) -> windows::core::Result<HWND> {
         CreateWindowExW(
             WINDOW_EX_STYLE(0),
             CLASS,
-            w!("VIctory"),
+            w!("Nullifier"),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

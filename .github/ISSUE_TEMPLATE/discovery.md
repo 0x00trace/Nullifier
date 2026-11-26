@@ -24,7 +24,7 @@ No game files, no screenshots of the title, no dumps.
 
 - Commit:
 - Build: `diag` + `diagnostics` / `release`
-- `./launcher/victory-launch.sh --detect` output:
+- `./launcher/nullifier-launch.sh --detect` output:
 
 ```
 (paste here)

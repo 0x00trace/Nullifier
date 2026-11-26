@@ -18,12 +18,12 @@
 # This builds the server of the Proton you have: Valve's source at the commit
 # that Proton was built from, with that one commit applied
 # (tools/wine/server-view-tree.patch). The result goes where the launcher
-# looks, ~/.local/share/victory/wineserver. Nothing of Proton's is changed,
+# looks, ~/.local/share/nullifier/wineserver. Nothing of Proton's is changed,
 # and VICTORY_WINESERVER=0 makes the launcher leave the built server unused.
 #
 # Needs git, gcc, make, autoconf, bison, flex, perl and python3 (Arch:
 # pacman -S --needed base-devel git), a network connection, and about 600 MB
-# under ~/.cache/victory. Run it again after Proton updates: the launcher
+# under ~/.cache/nullifier. Run it again after Proton updates: the launcher
 # does not use a server built for another Proton version.
 set -uo pipefail
 
@@ -31,7 +31,7 @@ HERE="$(cd "$(dirname "$0")/.." && pwd)"
 PATCH="$HERE/tools/wine/server-view-tree.patch"
 STEAM_ROOT="${STEAM_ROOT:-$HOME/.local/share/Steam}"
 PROTON="${VICTORY_PROTON:-}"
-OUT="${VICTORY_WINESERVER_DIR:-$HOME/.local/share/victory/wineserver}"
+OUT="${VICTORY_WINESERVER_DIR:-$HOME/.local/share/nullifier/wineserver}"
 WORK="${XDG_CACHE_HOME:-$HOME/.cache}/victory/wineserver"
 REPO="https://github.com/ValveSoftware/wine.git"
 COMMIT=""
@@ -53,7 +53,7 @@ say() { printf '\n== %s\n' "$1"; }
 ok()  { printf '   ok: %s\n' "$1"; }
 die() { printf '\n!! %s\n' "$1" >&2; exit 1; }
 
-# The Proton the launcher picks (launcher/victory-launch.sh, same order).
+# The Proton the launcher picks (launcher/nullifier-launch.sh, same order).
 if [ -z "$PROTON" ]; then
   for d in "$STEAM_ROOT/steamapps/common/Proton - Experimental" "$STEAM_ROOT/compatibilitytools.d"/GE-Proton*; do
     [ -x "$d/files/bin/wine" ] && { PROTON="$d"; break; }

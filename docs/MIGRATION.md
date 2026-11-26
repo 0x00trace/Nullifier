@@ -18,7 +18,7 @@ the work across one measurable change at a time.
   pre-existing problem:
 
   ```bash
-  ./launcher/victory-launch.sh --detect
+  ./launcher/nullifier-launch.sh --detect
   ./tools/bench.sh "baseline, upstream main"
   ```
 
@@ -101,7 +101,7 @@ A PR without the table is closed with "needs a bench row", not reviewed.
 That is still useful. Open an **issue** with:
 
 * commit you tested, GPU, driver/Mesa/Proton versions;
-* exact environment (`./launcher/victory-launch.sh --detect`);
+* exact environment (`./launcher/nullifier-launch.sh --detect`);
 * the bench row;
 * the smallest log excerpt that shows the behaviour (`grep` it down, never
   paste a whole log, never attach game data or screenshots of the title);

@@ -18,7 +18,7 @@ LABEL="${1:-run}"; shift || true
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 GAME="${VICTORY_GAME_DIR:-${HOME}/Downloads/GTA6.Xbox.v1.0.2.1-CYBERLEEK}"
-BIN="${VICTORY_BIN:-$HERE/target/x86_64-pc-windows-msvc/diag/victory.exe}"
+BIN="${VICTORY_BIN:-$HERE/target/x86_64-pc-windows-msvc/diag/nullifier.exe}"
 LOG="${VICTORY_BENCH_LOG:-/tmp/victory-bench-$(date +%H%M%S).log}"
 
 KEYS="${VICTORY_KEYS:-15:Enter,22:Enter,30:Enter,38:Enter,46:Enter,55:Enter,65:Enter,75:Enter,90:Enter,110:Enter,130:Enter}"
@@ -28,7 +28,7 @@ echo "bench: $LABEL"
 echo "  log $LOG"
 
 VICTORY_BIN="$BIN" VICTORY_GAME_DIR="$GAME" VICTORY_KEYS="$KEYS" \
-  timeout "$SECONDS_TO_RUN" "$HERE/launcher/victory-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" \
+  timeout "$SECONDS_TO_RUN" "$HERE/launcher/nullifier-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" \
   >"$LOG" 2>&1
 CODE=$?
 

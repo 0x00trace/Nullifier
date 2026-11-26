@@ -19,7 +19,7 @@ LOG="/tmp/opencode/victory-profile-$(date +%H%M%S).log"
 mkdir -p /tmp/opencode
 
 export VICTORY_KEYS="${VICTORY_KEYS:-15:Enter,22:Enter,30:Enter,38:Enter,46:Enter,55:Enter,65:Enter,75:Enter,90:Enter,110:Enter,130:Enter}"
-./launcher/victory-launch.sh --game "$GAME" "$@" >"$LOG" 2>&1 &
+./launcher/nullifier-launch.sh --game "$GAME" "$@" >"$LOG" 2>&1 &
 
 for _ in $(seq 1 "$WAIT"); do sleep 1; done
 
