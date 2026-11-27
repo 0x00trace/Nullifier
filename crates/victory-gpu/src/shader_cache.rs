@@ -82,6 +82,9 @@ fn build() -> &'static [u8; 32] {
             "VICTORY_STRICT_JOINS",
             "VICTORY_MESH_OUTPUT_STRICT",
             "VICTORY_SINGLE_LATCH",
+            // Plain arithmetic in chosen programs (diagnostics, `victory_shader::emit::plain`).
+            "VICTORY_PLAIN_MUL",
+            "VICTORY_PLAIN_MINMAX",
         ] {
             hash.update(name.as_bytes());
             hash.update(b"=");
@@ -97,7 +100,13 @@ fn build() -> &'static [u8; 32] {
 /// The translation of a console shader container, from the cache when
 /// there is one.
 pub(crate) fn host_shader(container: &[u8]) -> Result<HostShader, String> {
-    let translate = |c: &[u8]| victory_shader::emit::translate(c).map_err(|e| e.to_string());
+    let translate = |c: &[u8]| {
+        // Plain arithmetic where a diagnostics switch names this program (by the hash the
+        // log names it with, as `pipeline::shader` makes it).
+        let plain = victory_shader::emit::plain::for_program(&blake3::hash(c).to_hex()[..16]);
+        victory_shader::emit::plain::with(plain, || victory_shader::emit::translate(c))
+            .map_err(|e| e.to_string())
+    };
     match CACHE.get() {
         Some(cache) => cached(cache, build(), container, translate),
         None => translate(container),

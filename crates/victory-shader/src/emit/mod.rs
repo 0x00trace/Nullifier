@@ -90,6 +90,7 @@ mod intersect_tests;
 pub mod host;
 mod lower;
 mod own_bits;
+pub mod plain;
 mod rect;
 mod sampler;
 mod shader;
