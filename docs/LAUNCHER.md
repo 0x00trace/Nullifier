@@ -92,25 +92,26 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   GitHub, no token or server) and marks those rows **GitHub**;
   local entries stay in `~/.local/share/nullifier/community.json`.
   `NULLIFIER_BOARD_URL` points at another copy for testing.
-* **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
-  frame rate limit), then memory and copies, the draw path, and timing — in
-  plain words. Every switch has a small round `?` that explains it, and every
-  number shows examples (`2048, 3072 or 4096 (MB)`) under its description.
-  **Display output** (experimental) picks a smaller output size and/or a
-  native render scale; the active choice is repeated in amber on Play, because
-  it is easy to forget and it changes how the picture looks.
+* **Rendering** — Nullifier's own rendering settings: the title's render scale
+  first, then memory and copies, the draw path, and timing — in plain words.
+  Every switch has a small round `?` that explains it, and every number shows
+  examples (`2048, 3072 or 4096 (MB)`) under its description. Resolution,
+  V-Sync and the frame cap are on Graphics; the active resolution is repeated
+  in amber on Play because it changes how the picture looks.
 * **Warnings** — values that cannot work on this machine are called out in a
   yellow panel: a texture budget above the card's VRAM, world memory over half
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
 * **Graphics** — the title's own graphics settings, parsed from its
   `settings.xml` (88 values: HDR, gamma, anisotropic filtering, FSR
   quality/sharpen, LOD scales, shadows, motion blur, water reflections,
-  resolution, frame cap). Values with a small named set are drop-downs (V-Sync
-  Off/On/Adaptive, frame cap 30/60/120/144/240/Unlimited, anisotropic 4×/8×/16×,
-  FSR Quality/Balanced/Performance, quality presets, water reflection sizes),
-  whole-number ranges are sliders, 0–1 values show percentages, and the
-  fullscreen width/height pair is one **Resolution** choice (720p, 1080p,
-  1440p, 4K). **Apply** writes the file and keeps `settings.xml.bak` beside it;
+  resolution, frame cap). **Resolution, V-Sync and Frame Rate Limit are applied
+  by Nullifier**, not by the title, because the title ignores its own values:
+  they set `VICTORY_OUTPUT`, `VICTORY_VSYNC` and `VICTORY_FPS_CAP` immediately
+  (V-Sync Adaptive behaves as On; the layer has no adaptive present mode).
+  The rest are the title's settings. Values with a small named set are
+  drop-downs (anisotropic 4×/8×/16×, FSR quality, quality presets, water
+  reflection sizes), whole-number ranges are sliders, and 0–1 values show
+  percentages. **Apply** writes the file and keeps `settings.xml.bak` beside it;
   **Discard edits** rereads the file, **Restore backup** puts the last backup
   back, and **Reset to defaults** moves the file aside (`settings.xml.reset`
   keeps a copy) so the game writes fresh defaults the next time it starts. The
@@ -152,9 +153,10 @@ opens on that tab. The game settings also work headless:
 ./nullifier-launcher --game-set graphics/gamma=15    # writes, keeps a .bak
 ```
 
-**Inert on purpose:** FSR, ray tracing, render scale, V-Sync, an FPS cap and
-LOD distance are shown but disabled. Each needs engine work (see
-`docs/ROADMAP.md`); a toggle that does nothing is worse than none.
+**Inert on purpose:** FSR upscaling and ray-traced light are shown but
+disabled; each needs engine work (see `docs/ROADMAP.md`). Motion blur and
+ray-traced shadows in the title's own settings are marked **no effect**: the
+title ignores them in this build.
 
 The crate is its own workspace: `cargo clippy --workspace` at the root does
 not build it, and CI shared with the layer needs no GUI libraries.
@@ -257,9 +259,10 @@ built server, 0.60 / 0.65 / 0.70 with Proton's own.
 
 ## Display output and render scale (experimental)
 
-`VICTORY_OUTPUT=1920x1080|2560x1440` patches the title's own screen-size block
-(byte-checked; another build is left alone) and `VICTORY_RENDER_SCALE=1` uses
-the title's own upscaler at 1.0 instead of its 2/3. The title still applies
+`VICTORY_OUTPUT=1280x720|1664x936|1920x1080|2560x1440|3840x2160` patches the
+title's own screen-size block (byte-checked; another build is left alone) and
+`VICTORY_RENDER_SCALE=1` uses the title's own upscaler at 1.0 instead of its
+2/3. Graphics → Display sets the output; Rendering sets the render scale. The title still applies
 its own scale, so output 1920x1080 with the default scale renders at 1280x720.
 
 Measured on the opening scene here, 1024 MB card buffers:
