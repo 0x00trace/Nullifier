@@ -65,13 +65,16 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   **Test input** shows the last key you pressed and which pad button it fires,
   the live mouse movement and the right-stick values it produces, so bindings
   can be checked before starting the game. **Mouse look** is opt-in: while the
-  game has focus and no pad is connected, the cursor is hidden and kept in the
-  window, its movement turns the right stick, and (by default) the left button
-  is the right trigger (fire) and the right button the left trigger (aim);
-  sensitivity, inversion and the buttons are on the same page. Menu navigation
-  with the mouse is not included. The mode reaches the engine as
+  game has focus and no pad is connected, the pointer is locked to the game
+  window and hidden, its movement turns the right stick, and (by default) the
+  left button is the right trigger (fire) and the right button the left trigger
+  (aim); sensitivity, inversion and the buttons are on the same page. The stick
+  is scaled by the time since the previous read, so a slow frame rate does not
+  turn further for the same hand movement. Menu navigation with the mouse is
+  not included. The mode reaches the engine as
   `VICTORY_INPUT=auto|controller|keyboard`, the buttons can be turned off with
-  `VICTORY_MOUSE_BUTTONS=0`.
+  `VICTORY_MOUSE_BUTTONS=0`. If it does nothing, the game log says why every
+  five seconds (`mouse look idle` with the reason).
 * **Community** — each run records the **translation layer** version (the
   title window's `v0.004` build string) and the launcher version separately;
   a nickname, **where** in the game the run was and **notes**

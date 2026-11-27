@@ -1196,8 +1196,8 @@ mod host {
         XInputSetState,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId, SetCursorPos,
-        ShowCursor,
+        ClipCursor, GetClientRect, GetCursorPos, GetForegroundWindow,
+        GetWindowThreadProcessId, SetCursorPos, ShowCursor,
     };
 
     use super::*;
@@ -1383,6 +1383,7 @@ mod host {
     });
 
     static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
+    static CURSOR_CLIPPED: AtomicBool = AtomicBool::new(false);
 
     fn hide_cursor() {
         if !CURSOR_HIDDEN.swap(true, Ordering::Relaxed) {
@@ -1394,10 +1395,27 @@ mod host {
     }
 
     fn restore_cursor() {
+        if CURSOR_CLIPPED.swap(false, Ordering::Relaxed) {
+            // SAFETY: balances the clip below.
+            unsafe {
+                ClipCursor(std::ptr::null());
+            }
+        }
         if CURSOR_HIDDEN.swap(false, Ordering::Relaxed) {
             // SAFETY: balances the hide above.
             unsafe {
                 ShowCursor(1);
+            }
+        }
+    }
+
+    /// Once every few seconds, say why mouse look is doing nothing.
+    fn idle(reason: &str) {
+        static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+        if let Ok(mut last) = LAST.lock() {
+            if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(5)) {
+                tracing::info!(reason, "mouse look idle");
+                *last = Some(Instant::now());
             }
         }
     }
@@ -1410,11 +1428,16 @@ mod host {
             restore_cursor();
             return (0.0, 0.0, 0.0, 0.0);
         };
-        if super::input_mode() == super::InputMode::Controller || !focused() {
+        if super::input_mode() == super::InputMode::Controller {
             restore_cursor();
+            idle("controller mode");
             return (0.0, 0.0, 0.0, 0.0);
         }
-        hide_cursor();
+        if !focused() {
+            restore_cursor();
+            idle("window not focused");
+            return (0.0, 0.0, 0.0, 0.0);
+        }
         // SAFETY: plain key-state queries.
         let down = |vk: i32| unsafe { GetAsyncKeyState(vk) as u16 & 0x8000 != 0 };
         let trigger = |vk: i32| if down(vk) { 1.0 } else { 0.0 };
@@ -1423,69 +1446,94 @@ mod host {
         } else {
             (0.0, 0.0)
         };
-        static LAST_LOG: std::sync::Mutex<Option<std::time::Instant>> =
-            std::sync::Mutex::new(None);
+        static LAST_LOG: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
         /// The centre the cursor was last put on. A changed centre (a new
         /// window, a resize, focus coming back) is recentred without turning
         /// it into stick movement.
         static LAST_CENTRE: std::sync::Mutex<Option<(i32, i32)>> =
             std::sync::Mutex::new(None);
-        /// The poll right after a warp still sees the old position sometimes;
-        /// skip it instead of turning a warp into a flick.
-        static SUPPRESS: AtomicBool = AtomicBool::new(false);
+        /// The previous poll, to keep a fast mouse from turning further at a
+        /// low frame rate: the title applies the stick for the frame time.
+        static LAST_POLL: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
         let mut rect = RECT::default();
         let mut point = POINT::default();
         // SAFETY: plain queries on the foreground window; null is handled.
         unsafe {
             let window = GetForegroundWindow();
             if window.is_null() || GetClientRect(window, &mut rect) == 0 {
+                restore_cursor();
+                idle("no window");
                 return (0.0, 0.0, fire, aim);
             }
-            let mut centre = POINT {
-                x: rect.left + (rect.right - rect.left) / 2,
-                y: rect.top + (rect.bottom - rect.top) / 2,
+            let mut top_left = POINT { x: 0, y: 0 };
+            let mut bottom_right = POINT {
+                x: rect.right,
+                y: rect.bottom,
             };
-            if ClientToScreen(window, &mut centre) == 0 {
+            if ClientToScreen(window, &mut top_left) == 0
+                || ClientToScreen(window, &mut bottom_right) == 0
+            {
+                restore_cursor();
+                idle("window has no screen rect");
                 return (0.0, 0.0, fire, aim);
             }
+            // Keep the pointer on the title's client area, and out of sight.
+            let clip = RECT {
+                left: top_left.x,
+                top: top_left.y,
+                right: bottom_right.x,
+                bottom: bottom_right.y,
+            };
+            ClipCursor(&clip);
+            CURSOR_CLIPPED.store(true, Ordering::Relaxed);
+            hide_cursor();
+
+            let centre = POINT {
+                x: top_left.x + (bottom_right.x - top_left.x) / 2,
+                y: top_left.y + (bottom_right.y - top_left.y) / 2,
+            };
             let centre_xy = (centre.x, centre.y);
             if let Ok(mut last) = LAST_CENTRE.lock() {
                 if *last != Some(centre_xy) {
                     SetCursorPos(centre.x, centre.y);
                     *last = Some(centre_xy);
-                    SUPPRESS.store(true, Ordering::Relaxed);
                     return (0.0, 0.0, fire, aim);
                 }
-            }
-            if SUPPRESS.swap(false, Ordering::Relaxed) {
-                return (0.0, 0.0, fire, aim);
             }
             if GetCursorPos(&mut point) == 0 {
                 return (0.0, 0.0, fire, aim);
             }
-            // A jump this large is a warp (the window moved, the title hid
-            // the cursor), not a hand: recentre without turning the view.
             let raw_x = point.x - centre.x;
             let raw_y = point.y - centre.y;
-            if raw_x.abs() > 150 || raw_y.abs() > 150 {
+            if raw_x != 0 || raw_y != 0 {
                 SetCursorPos(centre.x, centre.y);
-                SUPPRESS.store(true, Ordering::Relaxed);
-                return (0.0, 0.0, fire, aim);
             }
-            let dx = raw_x.clamp(-80, 80);
-            let dy = raw_y.clamp(-80, 80);
-            if dx != 0 || dy != 0 {
-                SetCursorPos(centre.x, centre.y);
-                SUPPRESS.store(true, Ordering::Relaxed);
+            // A sane bound only; a slow title can accumulate hundreds of
+            // pixels between two reads and that is real movement, not a warp.
+            let dx = raw_x.clamp(-2000, 2000);
+            let dy = raw_y.clamp(-2000, 2000);
+            let now = Instant::now();
+            let dt = LAST_POLL
+                .lock()
+                .ok()
+                .and_then(|last| *last)
+                .map(|last| now.duration_since(last).as_secs_f32())
+                .unwrap_or(1.0 / 30.0)
+                .clamp(0.008, 0.5);
+            if let Ok(mut last) = LAST_POLL.lock() {
+                *last = Some(now);
             }
-            let x = (dx as f32 * sens).clamp(-1.0, 1.0);
+            // The title multiplies the stick by its frame time. Without this,
+            // the same hand movement turns 10x further at 3 fps than at 30.
+            let scale = (1.0 / 30.0 / dt).clamp(0.15, 1.0);
+            let x = (dx as f32 * sens * scale).clamp(-1.0, 1.0);
             let dy = if invert { dy } else { -dy };
-            let y = (dy as f32 * sens).clamp(-1.0, 1.0);
-            if (dx != 0 || dy != 0) && (x != 0.0 || y != 0.0 || fire > 0.0 || aim > 0.0) {
+            let y = (dy as f32 * sens * scale).clamp(-1.0, 1.0);
+            if dx != 0 || dy != 0 {
                 if let Ok(mut last) = LAST_LOG.lock() {
                     if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
-                        tracing::info!(dx, dy, x, y, fire, aim, "mouse look stick");
-                        *last = Some(std::time::Instant::now());
+                        tracing::info!(dx, dy, x, y, dt, scale, fire, aim, "mouse look stick");
+                        *last = Some(now);
                     }
                 }
             }
