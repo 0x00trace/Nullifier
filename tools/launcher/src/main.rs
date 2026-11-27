@@ -266,23 +266,10 @@ struct Settings {
 }
 
 /// Toggles that need engine work; kept so the choice survives, never applied.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Planned {
     fsr: bool,
     ray_tracing: bool,
-    render_scale: f32,
-    lod: f32,
-}
-
-impl Default for Planned {
-    fn default() -> Self {
-        Self {
-            fsr: false,
-            ray_tracing: false,
-            render_scale: 1.0,
-            lod: 1.0,
-        }
-    }
 }
 
 impl Default for Settings {
@@ -2915,22 +2902,157 @@ impl App {
             }
         });
         ui.label(egui::RichText::new(&game.note).small().color(egui::Color32::GRAY));
+        // Display output, V-Sync and the frame cap are Nullifier's, because the
+        // title ignores its own settings.xml values for them.
+        let mut output = self.settings.output.clone();
+        let mut vsync = self.settings.sets.get("VICTORY_VSYNC").cloned();
+        let mut cap = self
+            .settings
+            .sets
+            .get("VICTORY_FPS_CAP")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(0);
+        let mut layer_changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.spacing_mut().interact_size.y = 28.0;
             card(ui, |ui| {
                 section_header(ui, "Display");
-                for (section, key) in DISPLAY_KEYS {
-                    if *section == "video/resolutionFullscreen" {
-                        if *key == "height" {
-                            continue;
+                ui.horizontal(|ui| {
+                    ui.label("Resolution");
+                    ui.label(
+                        egui::RichText::new("· applied by Nullifier")
+                            .small()
+                            .color(egui::Color32::from_rgb(120, 126, 138)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let current = match output.as_str() {
+                            "1280x720" => "720p".to_string(),
+                            "1920x1080" => "1080p".to_string(),
+                            "2560x1440" => "1440p".to_string(),
+                            "" => "4K (default)".to_string(),
+                            other => format!("Custom ({other})"),
+                        };
+                        let mut chosen: Option<String> = None;
+                        egui::ComboBox::from_id_salt("graphics output")
+                            .selected_text(current)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                for (label, value) in [
+                                    ("720p", "1280x720"),
+                                    ("1080p", "1920x1080"),
+                                    ("1440p", "2560x1440"),
+                                    ("4K (default)", ""),
+                                ] {
+                                    if ui
+                                        .selectable_label(output == value, label)
+                                        .clicked()
+                                    {
+                                        chosen = Some(value.to_string());
+                                    }
+                                }
+                            });
+                        if let Some(value) = chosen {
+                            output = value;
+                            layer_changed = true;
                         }
-                        render_resolution(ui, game);
-                        continue;
-                    }
-                    if let Some(index) = find_index(game, section, key) {
-                        render_index(ui, game, index);
-                    }
-                }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("V-Sync");
+                    ui.label(
+                        egui::RichText::new("· applied by Nullifier")
+                            .small()
+                            .color(egui::Color32::from_rgb(120, 126, 138)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let current = match vsync.as_deref() {
+                            Some("2") => "Adaptive",
+                            Some(value)
+                                if value != "0" && !value.eq_ignore_ascii_case("off") =>
+                            {
+                                "On"
+                            }
+                            _ => "Off",
+                        };
+                        let mut chosen: Option<Option<String>> = None;
+                        egui::ComboBox::from_id_salt("graphics vsync")
+                            .selected_text(current)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                for (label, value) in [
+                                    ("Off", ""),
+                                    ("On", "1"),
+                                    ("Adaptive (same as on)", "2"),
+                                ] {
+                                    let is = match (vsync.as_deref(), value) {
+                                        (None, "") => true,
+                                        (Some("0"), "") => true,
+                                        (Some(v), "") => v.eq_ignore_ascii_case("off"),
+                                        (Some(v), want) => v == want,
+                                        _ => false,
+                                    };
+                                    if ui.selectable_label(is, label).clicked() {
+                                        chosen = Some(
+                                            (!value.is_empty()).then(|| value.to_string()),
+                                        );
+                                    }
+                                }
+                            });
+                        if let Some(value) = chosen {
+                            vsync = value;
+                            layer_changed = true;
+                        }
+                    });
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Frame Rate Limit");
+                    ui.label(
+                        egui::RichText::new("· applied by Nullifier")
+                            .small()
+                            .color(egui::Color32::from_rgb(120, 126, 138)),
+                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let current = match cap {
+                            0 => "Unlimited".to_string(),
+                            30 | 60 | 120 | 144 | 240 => format!("{cap} fps"),
+                            other => format!("Custom ({other} fps)"),
+                        };
+                        let mut chosen: Option<u32> = None;
+                        egui::ComboBox::from_id_salt("graphics frame cap")
+                            .selected_text(current)
+                            .width(150.0)
+                            .show_ui(ui, |ui| {
+                                for (label, value) in [
+                                    ("Unlimited", 0),
+                                    ("30 fps", 30),
+                                    ("60 fps", 60),
+                                    ("120 fps", 120),
+                                    ("144 fps", 144),
+                                    ("240 fps", 240),
+                                ] {
+                                    if ui.selectable_label(cap == value, label).clicked() {
+                                        chosen = Some(value);
+                                    }
+                                }
+                            });
+                        if let Some(value) = chosen {
+                            cap = value;
+                            layer_changed = true;
+                        }
+                    });
+                });
+                ui.add_space(4.0);
+                render_pairs(ui, game, DISPLAY_KEYS);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "These three are saved as soon as you pick them; the title ignores its own values for them.",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 126, 138)),
+                    )
+                    .wrap(),
+                );
             });
             ui.add_space(6.0);
             card(ui, |ui| {
@@ -3008,7 +3130,7 @@ impl App {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(
-                                "These need engine work. Switching them on here does nothing yet.",
+                                "These need engine work and are not wired up yet.",
                             )
                             .small()
                             .color(egui::Color32::GRAY),
@@ -3018,16 +3140,29 @@ impl App {
                     ui.add_space(4.0);
                     ui.add_enabled(false, egui::Checkbox::new(&mut planned.fsr, "FSR upscaling"));
                     ui.add_enabled(false, egui::Checkbox::new(&mut planned.ray_tracing, "Ray-traced light"));
-                    ui.add_enabled(
-                        false,
-                        egui::Slider::new(&mut planned.render_scale, 0.5..=1.0).text("Render scale"),
-                    );
-                    ui.add_enabled(
-                        false,
-                        egui::Slider::new(&mut planned.lod, 0.5..=2.0).text("LOD distance"),
-                    );
                 });
         });
+        if layer_changed {
+            self.settings.output = output;
+            match vsync.as_deref() {
+                Some("1") | Some("2") => {
+                    self.settings
+                        .sets
+                        .insert("VICTORY_VSYNC".into(), vsync.clone().unwrap_or_default());
+                }
+                _ => {
+                    self.settings.sets.remove("VICTORY_VSYNC");
+                }
+            }
+            if cap == 0 {
+                self.settings.sets.remove("VICTORY_FPS_CAP");
+            } else {
+                self.settings
+                    .sets
+                    .insert("VICTORY_FPS_CAP".into(), cap.to_string());
+            }
+            self.settings.save();
+        }
         self.game_advanced_open = advanced_open;
         self.confirm_reset = confirm_reset;
         if reset {
@@ -4193,7 +4328,6 @@ impl App {
         let warn = warnings(&self.settings, &self.hardware);
         warnings_card(ui, &warn);
         let mut info = None;
-        let mut output = self.settings.output.clone();
         let mut render_scale = self.settings.render_scale;
         let mut display_changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
@@ -4201,51 +4335,18 @@ impl App {
             let sets = &mut self.settings.sets;
             card(ui, |ui| {
                 ui.strong("Display");
-                let asked = switch_info(ui, sets, "VICTORY_VSYNC");
-                if info.is_none() {
-                    info = asked;
-                }
-                let asked = number_info(ui, sets, "VICTORY_FPS_CAP", 0..=240, 30);
-                if info.is_none() {
-                    info = asked;
-                }
-                ui.add_space(6.0);
-                ui.separator();
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new(
-                            "Display output (experimental): the title renders at this size and upscales. The HUD and some effects can look wrong away from native.",
+                            "Resolution, V-Sync and the frame rate limit are on Graphics; Nullifier applies them. Render scale is the title's own upscaler.",
                         )
                         .small()
                         .color(egui::Color32::GRAY),
                     )
                     .wrap(),
                 );
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label("Output");
-                    let current = match output.as_str() {
-                        "2560x1440" => "2560 x 1440",
-                        "1920x1080" => "1920 x 1080",
-                        _ => "Native (3840 x 2160)",
-                    };
-                    egui::ComboBox::from_id_salt("output resolution")
-                        .selected_text(current)
-                        .width(190.0)
-                        .show_ui(ui, |ui| {
-                            for (label, value) in [
-                                ("Native (3840 x 2160)", ""),
-                                ("2560 x 1440 (experimental)", "2560x1440"),
-                                ("1920 x 1080 (experimental)", "1920x1080"),
-                            ] {
-                                if ui
-                                    .selectable_label(output == value, label)
-                                    .clicked()
-                                {
-                                    output = value.to_string();
-                                    display_changed = true;
-                                }
-                            }
-                        });
                     ui.label("Render scale");
                     let current = if render_scale > 0.0 {
                         "1.0 (native)"
@@ -4272,21 +4373,16 @@ impl App {
                             }
                         });
                 });
-                if !output.is_empty() {
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "Active: {} output{} · the picture may look softer or the HUD wrong",
-                            output,
-                            if render_scale > 0.0 {
-                                ", render scale 1.0"
-                            } else {
-                                ""
-                            }
-                        ))
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "At 1.0 the title renders at the output size: sharper and slower.",
+                        )
                         .small()
-                        .color(egui::Color32::from_rgb(232, 179, 74)),
-                    );
-                }
+                        .color(egui::Color32::from_rgb(120, 126, 138)),
+                    )
+                    .wrap(),
+                );
             });
             ui.add_space(4.0);
             card(ui, |ui| {
@@ -4326,7 +4422,6 @@ impl App {
             });
         });
         if display_changed {
-            self.settings.output = output;
             self.settings.render_scale = render_scale;
             self.settings.save();
         }
@@ -5557,13 +5652,7 @@ fn switch_info(
 
 /// The settings a player looks for first, in the order they normally appear in
 /// a game's options. Everything else goes under Advanced graphics settings.
-const DISPLAY_KEYS: &[(&str, &str)] = &[
-    ("video/resolutionFullscreen", "width"),
-    ("video/resolutionFullscreen", "height"),
-    ("video", "frameRateLimit"),
-    ("video", "vSync"),
-    ("advancedGraphics", "motionBlur"),
-];
+const DISPLAY_KEYS: &[(&str, &str)] = &[("advancedGraphics", "motionBlur")];
 
 const GRAPHICS_KEYS: &[(&str, &str)] = &[
     ("graphics", "graphicsQualityPreset"),
@@ -5594,6 +5683,8 @@ fn is_curated(section: &str, key: &str) -> bool {
         .chain(GRAPHICS_KEYS)
         .chain(SHADOW_KEYS)
         .any(|(s, k)| *s == section && *k == key)
+        || (section == "video/resolutionFullscreen" && (key == "width" || key == "height"))
+        || (section == "video" && (key == "vSync" || key == "frameRateLimit"))
 }
 
 fn render_index(ui: &mut egui::Ui, game: &mut GameSettings, index: usize) {
@@ -5769,76 +5860,6 @@ fn int_slider(key: &str) -> Option<(i64, i64, &'static str)> {
     }
 }
 
-fn set_value(game: &mut GameSettings, index: usize, value: String) {
-    let setting = &mut game.settings[index];
-    if setting.value == value {
-        return;
-    }
-    setting.value = value;
-    let line = format!(
-        "{}<{} value=\"{}\" />",
-        setting.indent, setting.key, setting.value
-    );
-    game.lines[setting.line] = line;
-    game.dirty = true;
-}
-
-fn find_index(game: &GameSettings, section: &str, key: &str) -> Option<usize> {
-    game.settings
-        .iter()
-        .position(|s| s.section == section && s.key == key)
-}
-
-fn render_resolution(ui: &mut egui::Ui, game: &mut GameSettings) {
-    let Some(wi) = find_index(game, "video/resolutionFullscreen", "width") else {
-        return;
-    };
-    let Some(hi) = find_index(game, "video/resolutionFullscreen", "height") else {
-        return;
-    };
-    let w = game.settings[wi].value.parse::<i64>().unwrap_or(0);
-    let h = game.settings[hi].value.parse::<i64>().unwrap_or(0);
-    let modes = [
-        ("720p", 1280i64, 720i64),
-        ("1080p", 1920, 1080),
-        ("1440p", 2560, 1440),
-        ("4K", 3840, 2160),
-    ];
-    let current = modes
-        .iter()
-        .find(|(_, mw, mh)| *mw == w && *mh == h)
-        .map(|(label, _, _)| label.to_string())
-        .unwrap_or_else(|| format!("Custom ({w}×{h})"));
-    ui.horizontal(|ui| {
-        ui.label("Resolution");
-        ui.label(
-            egui::RichText::new("· 720p, 1080p, 1440p or 4K")
-                .small()
-                .color(egui::Color32::from_rgb(120, 126, 138)),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut chosen: Option<(i64, i64)> = None;
-            egui::ComboBox::from_id_salt("fullscreen resolution")
-                .selected_text(current)
-                .width(150.0)
-                .show_ui(ui, |ui| {
-                    for (label, mw, mh) in modes {
-                        if ui
-                            .selectable_label(mw == w && mh == h, label)
-                            .clicked()
-                        {
-                            chosen = Some((mw, mh));
-                        }
-                    }
-                });
-            if let Some((mw, mh)) = chosen {
-                set_value(game, wi, mw.to_string());
-                set_value(game, hi, mh.to_string());
-            }
-        });
-    });
-}
-
 fn limits(key: &str) -> Option<(f64, f64, f64)> {
     match key {
         "gamma" => Some((0.0, 50.0, 1.0)),
@@ -5859,6 +5880,14 @@ fn limits(key: &str) -> Option<(f64, f64, f64)> {
     }
 }
 
+/// The title ignores these in the current build; say so next to the value.
+fn no_effect(key: &str) -> bool {
+    matches!(
+        key,
+        "motionBlur" | "rtDynamicShadows" | "rtLODLightShadows"
+    )
+}
+
 fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -5869,6 +5898,14 @@ fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
                     .small()
                     .color(egui::Color32::from_rgb(120, 126, 138)),
             );
+        }
+        if no_effect(&setting.key) {
+            ui.label(
+                egui::RichText::new("· no effect")
+                    .small()
+                    .color(egui::Color32::from_rgb(232, 179, 74)),
+            )
+            .on_hover_text("The title ignores this setting in the current build.");
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if let Some(options) = choices(&setting.key) {
