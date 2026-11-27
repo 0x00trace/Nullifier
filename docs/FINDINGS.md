@@ -2337,6 +2337,48 @@ into the title's live settings instead. A value of this list could be
 changed in the same way. The page of the graphical launcher that edits
 `settings.xml` offers these values as if they applied.
 
+## 3.30 Textures that turn black from another angle, and glass (2026-11-27)
+
+**Report.** AMD RX 9070 XT, Linux, RADV through vkd3d-proton, `main` at
+`9d819394` (0.009, before 0.010). Two things, seen in the world and in cutscenes:
+
+* when a shot begins, things are black until their textures stream in;
+* once they have loaded, looking from another angle makes books, posters and
+  walls flicker black and back to textured. Glass and windows also look wrong.
+
+**Tried, no change.** `VICTORY_HOST_WAVE=32` (the exact 32-lane form of the
+face network's wave sums; the mouth did not change either), the Safe preset
+(`VICTORY_TEXTURE_NO_WAIT=0`, which waits for each upload), and the
+integer-target blend fix (the title blends into an `R8_UINT` target,
+which D3D12 refuses, losing those draws). The flicker is in every build the
+person has run, so it is not new in a recent change.
+
+**Two causes in the base, both ported after this report.**
+
+* A pixel program the console depth-tests before it runs
+  (`DB_SHADER_CONTROL` bit 12, HLSL `[earlydepthstencil]`) never declared
+  `ForceEarlyDepthStencil`. The title's glass prepass then wrote its depth
+  and motion for pixels a character stood in front of, and the resolve copied
+  those over the character's: rectangles cut out of the depth and velocity
+  targets inside each pane. Ported from fxceless/victory-fork #907. The
+  program's own bit decides, and a program that exports depth, stencil or
+  coverage is left alone.
+* A slot written with another view of the placed texture it showed kept the
+  old view, to avoid going black while the new one was made. It kept it for
+  *any* view of the same texture: another array slice, plane or format (a
+  video's ring of pictures) then showed an older picture. Now the old view
+  stands in only when the two differ in their mips (the streamed texture
+  growing sharper), as in fxceless/victory-fork #555.
+
+**Still open.** Which of the two explains the black flicker will not be known
+from a source change alone. For the next report, in a shot where a poster
+turns black: consecutive captures (`VICTORY_CAPTURE_FRAMES`) and the frame's
+command listing (`frame-N-ops.txt`), then leave candidate passes out with
+`VICTORY_SKIP_PIPELINES` one at a time. A draw that is missing (the thing
+behind it shows) points at the indirect budget or a dropped pipeline; a draw
+that is there and black points at the texture queue. `VICTORY_TEXTURE_SWEEP=0`
+and `VICTORY_KEEP_VIEWS=0` are the two texture-path comparisons.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
