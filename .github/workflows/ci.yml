@@ -58,7 +58,11 @@ jobs:
       # victory-gpu's tests share the write tracker's state and use real
       # memory, whose addresses Windows gives out again. One at a time, a
       # test meets what the ones before it left behind (issue #49).
+      # It runs after a failed Tests step too: one at a time the harness
+      # prints a test's name before it runs it, so a test that ends the
+      # process is named here.
       - name: Tests of victory-gpu, one at a time
+        if: ${{ !cancelled() }}
         run: cargo test -p victory-gpu --lib --locked -- --test-threads=1
 
   launcher:
