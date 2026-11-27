@@ -1,8 +1,9 @@
 # Ray tracing in this fork: what the title does and what has been built
 
-Status, 2026-11-25: **nothing is lit by ray tracing yet.** Most of the
+Status, 2026-11-27: **nothing is lit by ray tracing yet.** Most of the
 machinery translates and is unit-tested; it has not yet run end to end in the
-game. Everything here is off by default.
+game. Everything here is off by default. On a card with 32-lane waves the
+builder now starts in a real run; what happens then is under "Known gaps".
 
 ## What the title does
 
@@ -63,9 +64,21 @@ shaders and emulates the one instruction.
 
 ## Known gaps
 
-- With `VICTORY_BVH_BUILDER=1` the builder still stays off in a real run: a few
-  of its pipelines are refused by the host (they still ask for 64-lane waves on
-  a 32-lane GPU) or do not translate.
+- With `VICTORY_BVH_BUILDER=1` the builder starts on a card with 32-lane waves
+  (RTX 5080, 2026-11-27: all 53 builder pipelines the title creates have host
+  pipelines). Before, three of the library's 52 programs did not translate
+  there: each sums the totals of the waves before its own in a loop and carries
+  the sum through a first-lane read, which the lowering refused where not every
+  lane runs. A value loaded from shared memory at an address that is the same
+  in every lane now counts as the same in every lane, so the read is the
+  lane's own value.
+- With the builder running and `VICTORY_BVH_QUARANTINE=1`, one run of the
+  opening (RTX 5080, 2560x1440 output): a world frame took 8 to 22 s, with 31
+  to 165 GB of refreshes a frame, and after about 60 s the title's own code
+  read through an invalid pointer and the run ended (image offset `+0x8f92a`;
+  a register held 16-bit float patterns, as in run 98). No device was removed.
+  The cost of the refreshes and what reaches title memory under quarantine are
+  the next things to look at.
 - Five shadow-mask trace programs do not translate yet.
 - An access to a title page that has no host copy is lost (a read gives zero, a
   store is dropped).
