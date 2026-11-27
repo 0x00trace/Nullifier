@@ -1237,6 +1237,110 @@ of copies in the card's memory in whatever state the host's queue left them,
 as the relay's fetch on the host's queue does; vkd3d-proton keeps no state
 for buffers.
 
+## 2.19 Faces and clothing that differ from run to run, and the counts behind the revert of 2.13 (2026-11-27)
+
+**How the pictures were checked up to 2.17, and what that missed.** Two
+sheets of captures a run and a brightness measure of the face areas (2.14).
+The measure takes a fixed area over the first 70 % of a shot's captures, and
+a sheet shows one capture in fifteen. A stricter look takes the close shot
+with raised hands, where both leads face the camera for about ten seconds:
+eight captures of each run, cut to the man, the runs of a set one under the
+other; and a measure of the area of his top (the share of it that is neutral
+grey of middle brightness) over every capture of the shot.
+
+**What the stricter look finds in that shot.**
+
+| | builds before 2.11 (18 runs: the sets of 2.8 and 2.9, `main` @ `b91fd2e`) | the set of 2.12's first measurements (12 runs) | the 27 runs of 2.14 | the 18 runs of 2.18 | the 12 runs of 2.18 without the other switches |
+|---|---|---|---|---|---|
+| the man's face black in some of the eight captures | 0 | 0 | 1 (named in 2.14) | 2 | 0 |
+| dark patches around the man's eyes in some of them | 3 | 2 | 2 | 1 | 2 |
+| the man's top grey with dark blocks, from the shot to the end of the run (it is black in the other runs) | 0 | 0 | 3 | 1 | 3 |
+
+The face defects are in the old builds at about the rate of the new ones: 3
+runs of 18, then 10 of 69. The tallies of 2.14 named 5 of its 27 runs with a
+black face; with the dark patches (the second run with
+`VICTORY_ALIAS_LAZY=1`, the second at 2560x1440 output) and the grey top
+(the second run of the tracking of title writes, the third with
+`VICTORY_ALIAS_LAZY=1`, the third at render scale 0.5) it is 9. The frame
+rates of those rows are not affected.
+
+Two more things differ from run to run and are in every group of builds. The
+woman's top is white at the start of the shot in two runs of three (62 of 97
+runs measured) and grey in the others; in one run it turns from white to
+grey inside the shot. In some runs the man's top turns from dark grey to
+black during the shot. So some textures of the two leads take their last
+state at a time that differs from run to run, and which state is the one
+meant is not known for the woman's top.
+
+**The grey top: 20 of 356 runs.** The measure was taken over every set of
+2026-11-25 to 2026-11-27 whose captures are still on disk, every run in
+which the shot was captured, and each run it names was looked at.
+
+| | runs with the grey top |
+|---|---|
+| builds without the recording threads' locks of 2.13: every build before 2.11, `main` @ `a0cb06a`, the stopwatch alone (`8b1b582`), the own view on top of it (`fdd5d3f`), and `main` @ `25f6ae1` with 2.13 reverted (`dede94c`, and `5aa7b69`, which has the change of 2.18 too) | 0 of 139 (76 at 3840x2160 output, 63 at 2560x1440) |
+| builds with them, from `1dc0143` on (the rest of the stack, the build of 2.18, `main` @ `25f6ae1`) | 18 of 179 |
+| of those: 3840x2160 output with `VICTORY_BACK_OWN_VIEW=1` | 7 of 69 |
+| 3840x2160 output without it | 1 of 20 |
+| 2560x1440 output (or smaller) with it | 1 of 19 |
+| 2560x1440 output without it | 9 of 71 |
+| builds of the stack while it was being written, whose content is not recorded | 2 of 38 |
+
+In the sets where builds with and without 2.13 ran in turn it is 10 of 86
+against 0 of 69, and in the direct comparison (2.13) 5 of 41 against 0 of
+41. 2.13 is reverted for it.
+
+**Why the first counts pointed at the wrong change.** The runs with the
+grey top occur in bursts: four within 22 minutes, four within 40, three
+within five rounds of the long comparison, and long stretches with none
+(the 31 runs with `VICTORY_BACK_OWN_VIEW=1` after one burst; the first
+eight rounds of the direct comparison). Until the set of 2.18 without the
+other switches, every run without that switch had been made at 3840x2160
+output in stretches without a burst, so the count read 10 of 114 runs with
+the switch against none of 90 without it. A count over runs made at
+different times does not show what a switch or a change does here. Only
+runs in turn do, and about 30 rounds of them.
+
+**What was ruled out on the way** (audits that are not proposed; 110 s
+runs, which end after the shot). The first three were made while the
+own-view switch was the suspect:
+
+- **The copy on the CPU's side.** A store through our own view notes the
+  page current for the copy that wrote it, where a store at the title's
+  address has the copy take the page again. Every page noted that way was
+  compared with title memory at the copy's next refresh: 4.8 million pages
+  in 20 runs, two of them with the grey top, and none differed with its
+  guard clean.
+- **The store.** `VICTORY_BACK_OWN_CHECK=1` read every store back at the
+  title's address: 3.8 million stores in 16 runs, and none failed to show
+  (none of those runs had the grey top).
+- **The card's side of buffer copies.** Every 512th settle, the whole of
+  each copy in the card's memory that the settled submissions declared was
+  fetched after the merges and compared with the CPU's side, leaving out
+  what was still to be sent up: 1,604 comparisons in 24 runs, 17 with the
+  switch and 7 without, and no piece differed (none of those runs had the
+  grey top).
+- **Load on the machine.** Twelve runs in turn beside two loops of picture
+  analysis, the last three of them also beside two readers of big files on
+  the same disk: no grey top (one run did not reach the shot).
+- **A cold disk cache.** Ten runs in turn of `main` @ `a0cb06a` and
+  `main` @ `25f6ae1` at 2560x1440 output, with the title's files dropped
+  from the cache before each: no grey top.
+- **Pipelines still being made.** In six of eight runs with the grey top no
+  frame line counts a draw dropped for a pipeline that is being made; two
+  have one such line, as some runs without the grey top do.
+
+**The face defects are not the revert's.** Both sides of the direct
+comparison have them. With 2.13: a black face in four of the eight captures
+of one run. With it reverted: a black face in the first capture of one run,
+dark patches around the man's eyes in another, and the woman's face black in
+two captures of one of the 200 s runs. In the last set of 2.18, which has
+the revert, one run has a black face in one street shot.
+
+**Not known:** what in 2.13 causes the grey top (2.13 says what to do before
+a part of it is applied again), whether the bursts follow other use of the
+machine, and what the face defects are.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
