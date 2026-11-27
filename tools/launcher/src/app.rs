@@ -717,6 +717,41 @@ impl eframe::App for App {
         {
             self.tab = Tab::Play;
         }
+        self.poll_work(ctx);
+
+        self.take_dropped_folder(ctx);
+
+        self.rail(ctx);
+
+        self.log_footer(ctx);
+
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(23, 25, 31))
+                    .inner_margin(egui::Margin::symmetric(22, 18)),
+            )
+            .show(ctx, |ui| match self.tab {
+                Tab::Play => self.play(ui),
+                Tab::Graphics => self.game_page(ui),
+                Tab::Controls => self.controls(ui),
+                Tab::Community => self.community_page(ui),
+                Tab::Rendering => self.rendering(ui),
+                Tab::Advanced => self.advanced(ui),
+                Tab::Debug => self.debug(ui),
+            });
+
+        self.info_window(ctx);
+
+        self.folder_picker(ctx);
+    }
+}
+
+/// The parts of the window that `update` draws, in the order it draws them.
+impl App {
+    /// Takes the results of the board fetch and the update check, moves the
+    /// benchmark and the build steps on, and asks for a repaint while work runs.
+    fn poll_work(&mut self, ctx: &egui::Context) {
         if let Some(rx) = &self.community_rx {
             if let Ok(board) = rx.try_recv() {
                 self.community_rx = None;
@@ -760,7 +795,11 @@ impl eframe::App for App {
         if self.running() || self.bench_running() || self.prep.is_some() {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
+    }
 
+    /// A folder (or the .exe) dropped anywhere on the window becomes the game
+    /// folder.
+    fn take_dropped_folder(&mut self, ctx: &egui::Context) {
         // Drop a folder (or the .exe) anywhere on the window to pick the game.
         let dropped: Option<PathBuf> = ctx.input(|i| {
             i.raw
@@ -788,7 +827,10 @@ impl eframe::App for App {
             };
             self.toast = Some((self.status.clone(), std::time::Instant::now()));
         }
+    }
 
+    /// The rail on the left: the name, the versions and the page buttons.
+    fn rail(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("rail")
             .frame(
                 egui::Frame::new()
@@ -891,7 +933,10 @@ impl eframe::App for App {
                     ui.add_space(4.0);
                 });
             });
+    }
 
+    /// The status line at the bottom, and the log when it is open.
+    fn log_footer(&mut self, ctx: &egui::Context) {
         let footer = egui::TopBottomPanel::bottom("log")
             .frame(
                 egui::Frame::new()
@@ -990,23 +1035,10 @@ impl eframe::App for App {
             }
             ui.add_space(4.0);
         });
+    }
 
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(23, 25, 31))
-                    .inner_margin(egui::Margin::symmetric(22, 18)),
-            )
-            .show(ctx, |ui| match self.tab {
-                Tab::Play => self.play(ui),
-                Tab::Graphics => self.game_page(ui),
-                Tab::Controls => self.controls(ui),
-                Tab::Community => self.community_page(ui),
-                Tab::Rendering => self.rendering(ui),
-                Tab::Advanced => self.advanced(ui),
-                Tab::Debug => self.debug(ui),
-            });
-
+    /// The window that explains a switch, open while `info` names one.
+    fn info_window(&mut self, ctx: &egui::Context) {
         if let Some(key) = self.info.clone() {
             let mut open = true;
             let desc = describe(&key);
@@ -1034,7 +1066,10 @@ impl eframe::App for App {
                 self.info = None;
             }
         }
+    }
 
+    /// The window that picks the game folder, open while `picking` is set.
+    fn folder_picker(&mut self, ctx: &egui::Context) {
         if self.picking {
             let mut open = true;
             egui::Window::new("Choose the game folder")
