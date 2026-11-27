@@ -373,6 +373,9 @@ struct CommunityEntry {
     settings: String,
     #[serde(default)]
     hardware: String,
+    /// The exact VICTORY_* settings of the run, so another user can try them.
+    #[serde(default)]
+    sets: BTreeMap<String, String>,
     /// The launcher that made the entry; `version` is the layer.
     #[serde(default)]
     launcher: String,
@@ -1265,7 +1268,7 @@ fn custom_profile(settings: &Settings) -> Option<PathBuf> {
         "defaults": {},
         "profiles": [{
             "name": "custom",
-            "match": { "os": os_name(), "vendor": "any" },
+            "match": { "os": os_name(), "vendor": "*" },
             "confidence": "custom",
             "sets": settings.sets,
             "note": "from the Nullifier launcher"
@@ -1445,6 +1448,9 @@ struct App {
     community_rx: Option<std::sync::mpsc::Receiver<Option<Vec<CommunityEntry>>>>,
     community_fetching: bool,
     community_checked: bool,
+    borrowed_from: Option<String>,
+    borrowed_sets: Option<BTreeMap<String, String>>,
+    borrowed_profile: Option<String>,
 }
 
 #[derive(Default, Clone, Copy)]
@@ -1673,6 +1679,9 @@ impl App {
             community_rx: None,
             community_fetching: false,
             community_checked: false,
+            borrowed_from: None,
+            borrowed_sets: None,
+            borrowed_profile: None,
         }
     }
 
@@ -2087,6 +2096,35 @@ impl App {
         page_header(ui, "Play", "");
         let warn = warnings(&self.settings, &self.hardware);
         warnings_card(ui, &warn);
+        if let Some(name) = self.borrowed_from.clone() {
+            ui.add_space(4.0);
+            egui::Frame::group(ui.style())
+                .fill(egui::Color32::from_rgb(45, 38, 24))
+                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
+                .inner_margin(egui::Margin::symmetric(14, 10))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "Using {name}'s settings — temporary"
+                            ))
+                            .color(egui::Color32::from_rgb(240, 200, 120)),
+                        );
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if ui.add(secondary("Revert", 80.0, 28.0)).clicked() {
+                                    self.revert_settings();
+                                }
+                                if ui.add(primary("Keep", 70.0, 28.0)).clicked() {
+                                    self.keep_settings();
+                                }
+                            },
+                        );
+                    });
+                });
+        }
         if let Some((text, at)) = &self.toast {
             if at.elapsed() < Duration::from_secs(6) {
                 ui.add_space(4.0);
@@ -2569,14 +2607,15 @@ impl App {
             ui.horizontal(|ui| {
                 ui.strong("Last run");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let idle = !self.running() && !self.bench_running();
                     if ui
-                        .add_enabled(idle, egui::Button::new("Measure…"))
-                        .on_hover_text("Run a 20-second benchmark with these settings.")
+                        .add_enabled(
+                            !self.running() && !self.bench_running(),
+                            secondary("Share…", 90.0, 30.0),
+                        )
+                        .on_hover_text("Open Community with this run ready to share.")
                         .clicked()
                     {
-                        self.tab = Tab::Debug;
-                        self.bench_now();
+                        self.tab = Tab::Community;
                     }
                 });
             });
@@ -2615,19 +2654,10 @@ impl App {
                     stat(ui, "Copy back", run.back_ms.map(|v| format!("{v:.1} ms")));
                     stat(ui, "Card check", run.heap_ms.map(|v| format!("{v:.1} ms")));
                     ui.end_row();
+                    stat(ui, "Crashes", Some(run.removals.to_string()));
+                    stat(ui, "Menu", run.menu_fps.map(|v| format!("{v:.0} fps")));
+                    ui.end_row();
                 });
-            ui.horizontal(|ui| {
-                if run.removals == 0 {
-                    ui.label(egui::RichText::new("No crashes").small().color(egui::Color32::from_rgb(87, 199, 133)));
-                } else {
-                    ui.label(egui::RichText::new(format!("{} crashes", run.removals)).small().color(egui::Color32::from_rgb(232, 106, 106)));
-                }
-                if chip_button(ui, "Open log").clicked() {
-                    if let Some(path) = &self.log_path {
-                        open_path(path);
-                    }
-                }
-            });
         });
     }
 
@@ -2996,6 +3026,43 @@ impl App {
         self.community_rx = Some(rx);
     }
 
+    fn use_settings(&mut self, name: &str, sets: &BTreeMap<String, String>) {
+        if sets.is_empty() {
+            self.community_status = "That run has no settings saved.".into();
+            return;
+        }
+        if self.borrowed_sets.is_none() {
+            self.borrowed_sets = Some(self.settings.sets.clone());
+            self.borrowed_profile = Some(self.settings.profile.clone());
+        }
+        self.settings.sets = sets.clone();
+        self.settings.profile = "custom".into();
+        self.settings.save();
+        self.borrowed_from = Some(name.to_string());
+        self.tab = Tab::Play;
+        self.status = format!("using {name}'s settings");
+    }
+
+    fn keep_settings(&mut self) {
+        self.borrowed_sets = None;
+        self.borrowed_profile = None;
+        self.borrowed_from = None;
+        self.settings.save();
+        self.status = "settings kept".into();
+    }
+
+    fn revert_settings(&mut self) {
+        if let Some(sets) = self.borrowed_sets.take() {
+            self.settings.sets = sets;
+        }
+        if let Some(profile) = self.borrowed_profile.take() {
+            self.settings.profile = profile;
+        }
+        self.borrowed_from = None;
+        self.settings.save();
+        self.status = "your settings are back".into();
+    }
+
     fn share_run(&mut self) -> Option<String> {
         let Some(path) = self.log_path.clone() else {
             self.community_status = "No run log yet - play or measure once first.".into();
@@ -3039,6 +3106,7 @@ impl App {
             area: self.settings.community_area.trim().to_string(),
             notes: self.settings.community_notes.trim().to_string(),
             settings: settings_summary(&self.settings, &self.hardware),
+            sets: self.settings.sets.clone(),
             launcher: VERSION.to_string(),
             hardware: format!(
                 "{} {:.0} GB VRAM, {}",
@@ -3074,6 +3142,7 @@ impl App {
             area,
             notes,
             settings: settings_line,
+            sets: self.settings.sets.clone(),
             hardware,
             launcher: VERSION.to_string(),
             when,
@@ -3149,16 +3218,6 @@ impl App {
                         if let Some(markdown) = self.share_run() {
                             ui.ctx().copy_text(markdown);
                         }
-                    }
-                    if ui
-                        .add(secondary("Copy active settings", 170.0, 32.0))
-                        .on_hover_text(
-                            "Copies the exact VICTORY_* settings and the GPU summary. No log, no paths.",
-                        )
-                        .clicked()
-                    {
-                        ui.ctx()
-                            .copy_text(settings_summary(&self.settings, &self.hardware));
                     }
                     if let Some(fps) = fps {
                         ui.label(
@@ -3405,6 +3464,7 @@ impl App {
                     });
                 }
                 let mut open = self.community_open;
+                let mut borrow: Option<(String, BTreeMap<String, String>)> = None;
                 if shown.is_empty() {
                     ui.label(
                         egui::RichText::new(if self.community.is_empty() {
@@ -3422,11 +3482,14 @@ impl App {
                             [140.0, 16.0],
                             egui::Label::new(small_label("Name")),
                         );
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
                         ui.add_sized(
                             [56.0, 16.0],
                             egui::Label::new(small_label("Version")),
                         );
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
                         ui.add_sized([64.0, 16.0], egui::Label::new(small_label("FPS")));
+                        ui.add(egui::Separator::default().vertical().spacing(8.0));
                         ui.label(small_label("Where"));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.add_space(50.0);
@@ -3436,9 +3499,15 @@ impl App {
                 }
                 {
                     {
-                        for index in shown {
+                        for (row, index) in shown.into_iter().enumerate() {
                             let entry = &self.community[index];
+                            let stripe = if row % 2 == 0 {
+                                egui::Color32::from_rgb(27, 30, 36)
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
                             egui::Frame::group(ui.style())
+                                .fill(stripe)
                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
@@ -3449,6 +3518,7 @@ impl App {
                                             )
                                             .truncate(),
                                         );
+                                        ui.add(egui::Separator::default().vertical().spacing(8.0));
                                         ui.add_sized(
                                             [56.0, 20.0],
                                             egui::Label::new(
@@ -3458,6 +3528,7 @@ impl App {
                                             )
                                             .truncate(),
                                         );
+                                        ui.add(egui::Separator::default().vertical().spacing(8.0));
                                         ui.add_sized(
                                             [64.0, 20.0],
                                             egui::Label::new(
@@ -3493,6 +3564,19 @@ impl App {
                                             |ui| {
                                                 if chip_button(ui, "Log").clicked() {
                                                     open = Some(index);
+                                                }
+                                                if entry.name != self.settings.community_name
+                                                    && !entry.sets.is_empty()
+                                                    && chip_button(ui, "Use")
+                                                        .on_hover_text(
+                                                            "Try this run's settings; Revert on Play brings yours back.",
+                                                        )
+                                                        .clicked()
+                                                {
+                                                    borrow = Some((
+                                                        entry.name.clone(),
+                                                        entry.sets.clone(),
+                                                    ));
                                                 }
                                                 if entry.remote {
                                                     ui.label(
@@ -3555,6 +3639,9 @@ impl App {
                         }
                     }
                 }
+                if let Some((name, sets)) = borrow {
+                    self.use_settings(&name, &sets);
+                }
                 self.community_open = open;
             });
         });
@@ -3562,6 +3649,7 @@ impl App {
         if let Some(index) = self.community_open {
             let mut open = true;
             let mut remove = false;
+            let mut modal_use: Option<(String, BTreeMap<String, String>)> = None;
             if let Some(entry) = self.community.get(index) {
                 let title = format!("{} · {:.1} fps · {}", entry.name, entry.fps, entry.game);
                 egui::Window::new(title)
@@ -3572,6 +3660,12 @@ impl App {
                         ui.horizontal(|ui| {
                             if chip_button(ui, "Copy log").clicked() {
                                 ui.ctx().copy_text(entry.log.clone());
+                            }
+                            if entry.name != self.settings.community_name
+                                && !entry.sets.is_empty()
+                                && chip_button(ui, "Use settings").clicked()
+                            {
+                                modal_use = Some((entry.name.clone(), entry.sets.clone()));
                             }
                             if !entry.remote && chip_button(ui, "Remove").clicked() {
                                 remove = true;
@@ -3621,7 +3715,10 @@ impl App {
                         });
                     });
             }
-            if remove {
+            if let Some((name, sets)) = modal_use {
+                self.use_settings(&name, &sets);
+                self.community_open = None;
+            } else if remove {
                 self.community.remove(index);
                 save_community(&self.community);
                 self.community_open = None;
@@ -3848,8 +3945,8 @@ impl App {
                     .show(ui, |ui| {
                         ui.label(small_label("Setting"));
                         ui.label("");
-                        ui.label("");
                         ui.label(small_label("Value"));
+                        ui.label("");
                         ui.end_row();
                         for (key, value) in entries {
                             ui.allocate_ui_with_layout(
@@ -3866,9 +3963,6 @@ impl App {
                             } else {
                                 ui.label("");
                             }
-                            if danger_remove(ui).clicked() {
-                                remove = Some(key.clone());
-                            }
                             let mut v = value.clone();
                             let hint = example(&key).unwrap_or("value");
                             if ui
@@ -3881,6 +3975,9 @@ impl App {
                                 .changed()
                             {
                                 self.settings.sets.insert(key.clone(), v);
+                            }
+                            if danger_remove(ui).clicked() {
+                                remove = Some(key.clone());
                             }
                             ui.end_row();
                         }
@@ -5165,6 +5262,30 @@ fn label_of(setting: &GameSetting) -> String {
     }
 }
 
+fn float_range(key: &str) -> (f32, f32, f32) {
+    match key {
+        "fsrSharpen" | "sharpenIntensity" | "motionBlurScale" => (0.0, 1.0, 0.01),
+        "graphicsQualityPreset" => (0.0, 4.0, 1.0),
+        "texLodScale_LOD" => (0.0, 4.0, 0.1),
+        "texLodScale_SLOD1" => (0.0, 8.0, 0.1),
+        "texLodScale_SLOD2" => (0.0, 16.0, 0.5),
+        "texLodScale_SLOD3" => (0.0, 32.0, 0.5),
+        "texLodScale_SLOD4" => (0.0, 64.0, 0.5),
+        "lodScale"
+        | "grassLod"
+        | "vehicleLodBias"
+        | "texLodScale_Global"
+        | "texLodScale_Mat_Low"
+        | "texLodScale_Buildings"
+        | "texLodScale_Objects"
+        | "texLodScale_HD"
+        | "texLodScale_OrphanHD"
+        | "directionalScreenSpaceShadowQuality"
+        | "worldHeightShadowQuality" => (0.0, 2.0, 0.05),
+        _ => (0.0, 1.0, 0.01),
+    }
+}
+
 fn limits(key: &str) -> Option<(f64, f64, f64)> {
     match key {
         "gamma" => Some((0.0, 50.0, 1.0)),
@@ -5215,11 +5336,47 @@ fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
                 }
             } else if let Ok(mut v) = setting.value.parse::<f32>() {
                 let before = v;
-                let mut drag = egui::DragValue::new(&mut v).speed(0.05).max_decimals(3);
-                if let Some((min, max, speed)) = limits(&setting.key) {
-                    drag = drag.range(min..=max).speed(speed);
+                let (min, max, step) = float_range(&setting.key);
+                if setting.key == "graphicsQualityPreset" {
+                    let current = format!("Game default ({})", v.round() as i64);
+                    egui::ComboBox::from_id_salt("quality preset")
+                        .selected_text(current)
+                        .width(140.0)
+                        .show_ui(ui, |ui| {
+                            for value in 0..=4 {
+                                let label = if value == 0 {
+                                    "Game default (0)".to_string()
+                                } else {
+                                    format!("Preset {value}")
+                                };
+                                if ui
+                                    .selectable_label(
+                                        (v - value as f32).abs() < 0.5,
+                                        label,
+                                    )
+                                    .clicked()
+                                {
+                                    v = value as f32;
+                                }
+                            }
+                        });
+                } else {
+                    let shown = if (min, max) == (0.0, 1.0) {
+                        format!("{:.0}%", v * 100.0)
+                    } else if setting.key.contains("lod") || setting.key.contains("Lod") {
+                        format!("{v:.2}×")
+                    } else {
+                        format!("{v:.2}")
+                    };
+                    ui.label(egui::RichText::new(shown).small());
+                    let slider = egui::Slider::new(&mut v, min..=max)
+                        .step_by(f64::from(step))
+                        .show_value(false);
+                    if ui.add_sized([150.0, 20.0], slider).changed() {
+                        // handled below
+                    }
                 }
-                if ui.add_sized([96.0, 28.0], drag).changed() && (v - before).abs() > f32::EPSILON {
+                if (v - before).abs() > f32::EPSILON {
                     setting.value = format!("{v}");
                     changed = true;
                 }

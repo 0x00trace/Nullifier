@@ -16,7 +16,7 @@ cd "$HERE" || exit 1
 GAME="${VICTORY_GAME_DIR:-}"
 [ -d "$GAME" ] || { echo "preload: set VICTORY_GAME_DIR to the game folder" >&2; exit 2; }
 
-LOG="${XDG_CACHE_HOME:-$HOME/.cache}/nullifier/preload.log"
+LOG="${XDG_CACHE_HOME:-$HOME/.cache}/nullifier/preload-game.log"
 mkdir -p "$(dirname "$LOG")"
 
 # The same gentle opening sequence the bench uses: it only dismisses menus.
@@ -26,7 +26,7 @@ export VICTORY_KEYS="${VICTORY_KEYS:-15:Enter,22:Enter,30:Enter,38:Enter,46:Ente
 RUN=$!
 
 ENTRY=0
-for _ in $(seq 1 200); do
+for _ in $(seq 1 320); do
   sleep 1
   if sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null \
       | grep -oE '[0-9.]+ fps' | tr -d ' fps' | tail -2 | paste -sd' ' \

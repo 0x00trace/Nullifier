@@ -68,17 +68,21 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   (pop-in, flicker, HUD, crashes), then **Share last run**: it adds a local
   entry and copies a JSON block. Each entry keeps the Nullifier version, title
   build, profile, fps, frame and GPU time, draws, the full set of active
-  settings, the GPU/OS and the sanitized log. The list has two-line rows and
-  filters for name/area/note/settings text, game build, area and version,
-  "with notes only", and newest/fastest sorting; the log window shows the settings and hardware too.
-  **Refresh board** reads the published `community/leaderboard.json` from
-  `main` (raw GitHub, no token or server) and marks those rows **GitHub**;
+  settings, the GPU/OS and the sanitized log. The list has two-line rows with
+  a fixed Name/Version/FPS/Where table, search, a **Filters** menu (game build,
+  area, version, notes only) and newest/fastest sorting; the log window shows
+  the settings and hardware too. A row with settings gets **Use**: it applies
+  that run's settings temporarily and Play offers **Revert / Keep**. **Refresh
+  board** reads the published `community/leaderboard.json` from `main` (raw
+  GitHub, no token or server) and marks those rows **GitHub**;
   local entries stay in `~/.local/share/nullifier/community.json`.
   `NULLIFIER_BOARD_URL` points at another copy for testing.
 * **Rendering** — Nullifier's own rendering settings: display first (V-Sync, a
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every
   number shows examples (`2048, 3072 or 4096 (MB)`) under its description.
+  Values that are 0–1 are shown as percentages, LOD scales as `1.00×`, and the
+  quality preset as game default/preset choices.
   **Display output** (experimental) picks a smaller output size and/or a
   native render scale; the active choice is repeated in amber on Play, because
   it is easy to forget and it changes how the picture looks.
@@ -94,9 +98,11 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   writes the file with `settings.xml.bak` beside it; the game must be closed.
   The title writes this file itself on exit, so reload after playing. A modal
   on first open and a banner on the page repeat the warning.
-* **Advanced** — the exact set as editable `KEY=VALUE` rows, free-form
-  environment, profile notes, and the disabled list of what needs engine work
-  (FSR, ray tracing, render scale, LOD distance).
+* **Advanced** — the exact set in an aligned table (setting, help, value,
+  red **Remove** on the right); **Add a setting…** is a menu of known
+  switches, custom KEY=VALUE is collapsed; environment variables are explained
+  and the profile is a readable on/off/value list with **Full note** folded
+  away.
 * **Log** — the footer shows the last lines and `Show log`/`Hide log` folds it
   away; while open it also has `Clear`, `Open log` and the detail level.
 * **Tools** — scan the hardware, choose how much the log says, take still
