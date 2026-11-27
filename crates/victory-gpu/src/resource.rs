@@ -1522,6 +1522,26 @@ pub(crate) fn census() -> [u64; 10] {
     let mut count = [0u64; 10];
     let mut placed_filled = 0u64;
     let all = textures();
+    // The console layout of a description is worked out once per census:
+    // thousands of title textures share a few hundred descriptions, and
+    // working each out took about 90 ms of every memory line, on the
+    // thread that submits (3 ms a frame in a profile of the world).
+    let mut sizes: std::collections::HashMap<[u64; 6], u64> = std::collections::HashMap::new();
+    let mut layout_bytes = |d: &ResourceDesc| {
+        let key = [
+            u64::from(d.dimension) << 32 | u64::from(d.format),
+            d.alignment,
+            d.width,
+            u64::from(d.height) << 32
+                | u64::from(d.depth_or_array_size) << 16
+                | u64::from(d.mip_levels),
+            u64::from(d.sample_count) << 32 | u64::from(d.sample_quality),
+            u64::from(d.layout) << 32 | u64::from(d.flags),
+        ];
+        *sizes
+            .entry(key)
+            .or_insert_with(|| footprint(d).map_or(0, |f| f.size))
+    };
     for &at in all.iter() {
         // SAFETY: as in `let_go_idle`.
         let r = unsafe { &*(at as *const Resource) };
@@ -1550,7 +1570,7 @@ pub(crate) fn census() -> [u64; 10] {
             }
             None => {
                 count[2] += 1;
-                count[3] += footprint(&r.desc).map_or(0, |f| f.size);
+                count[3] += layout_bytes(&r.desc);
             }
         }
     }
