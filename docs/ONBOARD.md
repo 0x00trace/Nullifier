@@ -46,6 +46,7 @@ ls docs/ notes/ 2>/dev/null
 | Nothing built yet, no prior work | **[A. Fresh start](#a-fresh-start)** |
 | You have your own tree with commits (`victory-amd`, `victory-fork`, another fork) | **[B. Bring your work across](#b-bring-your-work-across)** |
 | You only have notes/results, no code | **[C. Report a discovery](#c-report-a-discovery)** |
+| You are working on docs, launcher detection, or log tooling without game files or an available GPU | **[D. Work without the game](#d-work-without-the-game)** |
 
 **Never delete the old tree.** It is your reference and your evidence. Keep it
 until the ported PR is merged and your numbers reproduce here.
@@ -183,6 +184,29 @@ Open an issue with the fields in the template:
 * what you think it means and how sure you are.
 
 A good report often becomes a profile entry or a two-line fix.
+
+---
+
+## D. Work without the game
+
+After Step 0, create a worktree for your task from the synced `main`:
+
+```bash
+git worktree add -b fix/offline-tooling ../Nullifier-offline-tooling main
+cd ../Nullifier-offline-tooling
+```
+
+Choose the checks that cover your change. These run with synthetic inputs and
+can run while a benchmark is active in another checkout:
+
+```bash
+./tools/check-bench.sh    # summarize generated log lines
+./tools/check-detect.sh   # Linux detection with stub hardware commands
+```
+
+Open one small PR per change. List the checks you ran and mark the game
+benchmark as unrun. Keep performance claims and runtime default changes for
+work that can be validated with the benchmark protocol in [`AGENTS.md`](../AGENTS.md).
 
 ---
 
