@@ -27,36 +27,82 @@ $Root = Split-Path -Parent $Here
 $MatrixPath = if ($env:VICTORY_PROFILES) { $env:VICTORY_PROFILES } else { Join-Path $Here "profiles.json" }
 $Matrix = Get-Content $MatrixPath -Raw | ConvertFrom-Json
 
+function Get-NvidiaVram {
+  $candidates = @(
+    (Join-Path $env:SystemRoot "System32\nvidia-smi.exe"),
+    (Join-Path $env:ProgramFiles "NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
+    "nvidia-smi"
+  )
+  foreach ($smi in $candidates) {
+    try {
+      $line = & $smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null |
+        Select-Object -First 1
+      if ($line -match "^\s*(\d+)") { return [int64]$Matches[1] }
+    } catch { }
+  }
+  return 0
+}
+
 function Get-GpuInfo {
   $vendor = "unknown"
   $name = "unknown"
   $vram = 0
 
-  $ctrl = Get-CimInstance Win32_VideoController |
-    Sort-Object -Property @{Expression = { if ($_.AdapterRAM) { $_.AdapterRAM } else { 0 } }} -Descending |
-    Select-Object -First 1
+  # Prefer a discrete card: a laptop can report Intel first, and its AdapterRAM
+  # must not decide the vendor for the matched profile.
+  $all = @(Get-CimInstance Win32_VideoController)
+  $ctrl = $all | Where-Object { $_.Name -match "NVIDIA" } | Select-Object -First 1
+  if (-not $ctrl) {
+    $ctrl = $all | Where-Object { $_.Name -match "AMD|Radeon|ATI" } | Select-Object -First 1
+  }
+  if (-not $ctrl) {
+    $ctrl = $all | Where-Object { $_.Name -match "Intel" } | Select-Object -First 1
+  }
+  if (-not $ctrl) {
+    $ctrl = $all |
+      Sort-Object -Property @{Expression = { if ($_.AdapterRAM) { $_.AdapterRAM } else { 0 } }} -Descending |
+      Select-Object -First 1
+  }
   if ($ctrl) {
     $name = $ctrl.Name
-    if     ($name -match "NVIDIA")            { $vendor = "nvidia" }
-    elseif ($name -match "AMD|Radeon|ATI")    { $vendor = "amd" }
-    elseif ($name -match "Intel")             { $vendor = "intel" }
+    if     ($name -match "NVIDIA")         { $vendor = "nvidia" }
+    elseif ($name -match "AMD|Radeon|ATI") { $vendor = "amd" }
+    elseif ($name -match "Intel")          { $vendor = "intel" }
   }
 
-  # AdapterRAM is a uint32 and caps at 4 GB; the registry has the real size.
-  try {
-    $class = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
-    Get-ChildItem $class -ErrorAction Stop | ForEach-Object {
-      $q = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue)."HardwareInformation.qwMemorySize"
-      if ($q -and $q -gt $vram) { $vram = [int64]($q / 1MB) }
-    }
-  } catch { }
-  if ($vram -eq 0 -and $ctrl -and $ctrl.AdapterRAM) { $vram = [int64]($ctrl.AdapterRAM / 1MB) }
+  # The driver's own answer is the only one that is right for every NVIDIA
+  # card; AdapterRAM is a uint32 and caps or misreports.
+  if ($vendor -eq "nvidia") { $vram = Get-NvidiaVram }
 
-  # Skip the integrated adapter when a discrete one is present.
-  $all = Get-CimInstance Win32_VideoController
-  if ($all.Count -gt 1) {
-    $discrete = $all | Where-Object { $_.Name -match "NVIDIA|AMD|Radeon" } | Select-Object -First 1
-    if ($discrete) { $name = $discrete.Name }
+  # The registry has the real size for other drivers.
+  if ($vram -eq 0) {
+    try {
+      $class = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
+      Get-ChildItem $class -ErrorAction Stop | ForEach-Object {
+        $q = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue)."HardwareInformation.qwMemorySize"
+        if ($q) {
+          $mb = [int64]([uint64]$q / 1MB)
+          if ($mb -gt $vram -and $mb -lt 262144) { $vram = $mb }
+        }
+      }
+    } catch { }
+  }
+  if ($vram -eq 0) {
+    try {
+      Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Video" -Recurse -ErrorAction SilentlyContinue |
+        ForEach-Object {
+          $q = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue)."HardwareInformation.qwMemorySize"
+          if ($q) {
+            $mb = [int64]([uint64]$q / 1MB)
+            if ($mb -gt $vram -and $mb -lt 262144) { $vram = $mb }
+          }
+        }
+    } catch { }
+  }
+  if ($vram -eq 0 -and $ctrl -and $ctrl.AdapterRAM) {
+    $mb = [int64]($ctrl.AdapterRAM / 1MB)
+    # 512 MB and other small values are a known WMI misreport on large cards.
+    if ($mb -ge 1024) { $vram = $mb }
   }
 
   [pscustomobject]@{ Vendor = $vendor; Name = $name; VramMB = $vram }

@@ -196,11 +196,13 @@ git worktree add -b fix/offline-tooling ../Nullifier-offline-tooling main
 cd ../Nullifier-offline-tooling
 ```
 
-Choose the checks that cover your change. These run with synthetic inputs and
-can run while a benchmark is active in another checkout:
+Choose the checks that cover your change. The checks below run with synthetic
+inputs and can run while a benchmark is active in another checkout. A build or
+a test suite changes the measured run's result; run those after it has ended:
 
 ```bash
 ./tools/check-bench.sh    # summarize generated log lines
+./tools/check-scene.sh    # bench_scene.sh with a stand-in launcher
 ./tools/check-detect.sh   # Linux detection with stub hardware commands
 ```
 

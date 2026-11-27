@@ -17,6 +17,7 @@ LABEL="${1:-run}"; shift || true
 [ "${1:-}" = "--" ] && shift
 
 GAME="${VICTORY_GAME_DIR:-$HOME/Games/YourCopy}"
+LAUNCHER="${VICTORY_LAUNCHER:-$HERE/launcher/nullifier-launch.sh}"
 BIN="${VICTORY_BIN:-$HERE/target/x86_64-pc-windows-msvc/diag/nullifier.exe}"
 WINDOW="${VICTORY_WINDOW:-35}"          # seconds measured once the world runs
 WARMUP="${VICTORY_WARMUP:-10}"          # seconds after world entry discarded
@@ -28,7 +29,10 @@ mkdir -p "$(dirname "$LOG")"
 # A number without a picture is how a black screen got shipped once
 # (docs/FINDINGS.md 3.14). Capture one world frame and check its size: a real
 # frame is megabytes, a black one is ~1.5 KB.
-CAPDIR=$(mktemp -d /tmp/opencode/cap-XXXXXX)
+CAPDIR=$(mktemp -d "$(dirname "$LOG")/cap-XXXXXX") || {
+  echo "bench_scene: could not make a capture folder beside $LOG" >&2
+  exit 1
+}
 export VICTORY_CAPTURE="Z:$(echo "$CAPDIR" | tr '/' '\\')"
 export VICTORY_CAPTURE_FRAMES="${VICTORY_CAPTURE_FRAMES:-1024,1536}"
 echo "bench_scene: $LABEL"
@@ -47,7 +51,7 @@ trap stop_run EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 set -m
-"$HERE/launcher/nullifier-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" </dev/null >"$LOG" 2>&1 &
+"$LAUNCHER" --game "$GAME" --bin "$BIN" -- "$@" </dev/null >"$LOG" 2>&1 &
 RUN=$!
 set +m
 
@@ -80,8 +84,11 @@ END=$(wc -l < "$LOG")
 kill $RUN 2>/dev/null
 stop_run
 
-WINDOW_LOG="$CAPDIR/window.log"
-awk -v start="$START" -v end="$END" 'NR > end { exit } NR > start' "$LOG" > "$WINDOW_LOG"
+WINDOW_LOG="${LOG%.log}.window.log"
+awk -v start="$START" -v end="$END" 'NR > end { exit } NR > start' "$LOG" > "$WINDOW_LOG" || {
+  echo "bench_scene: could not write $WINDOW_LOG" >&2
+  exit 1
+}
 CLEAN=$(sed 's/\x1b\[[0-9;]*m//g' "$WINDOW_LOG")
 STATS=$(echo "$CLEAN" | grep -oE '^[^ ]* +INFO victory_gpu::host: [0-9.]+ fps' \
   | grep -oE '[0-9.]+ fps' | tr -d ' fps' | awk '$1<10{print}' \

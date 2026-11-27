@@ -115,6 +115,10 @@ trigger, and prove it with a triangle drawn from imported bytes.
 | 2 | All buffer heaps shared, fallback intact | `bench_scene.sh` × 3: median up, p10 up, picture correct |
 | 3 | Remove dead copy paths | no regression on NVIDIA / Windows |
 
+Row 2's `bench_scene.sh` gate is from before #31: those results were medians
+over the whole log, not over the fixed window, and do not compare with
+`bench_scene.sh` results after #31.
+
 ## What it does not fix
 
 Textures, pipeline creation, and the per-submission overhead remain. Expect the
