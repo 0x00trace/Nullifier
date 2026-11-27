@@ -1119,6 +1119,23 @@ the queue the shortest gap of a second is 54 to 70 ms and the longest 108 to
 did not wait. `VICTORY_LATE_WAIT_LISTS=512` on top changes nothing that
 these runs can show at 3840x2160 (the third and the fourth row).
 
+**Without the other switches** (twelve more runs in turn, three rounds, the
+same build; no `VICTORY_BACK_OWN_VIEW` and no `VICTORY_ALIAS_LAZY`):
+
+| | median fps (lines under 10 fps) | n | median fps (lines of 500 draws or more) | frame at 3,000 draws | presents apart | the thread that copies back waits for fetches, a frame |
+|---|---|---|---|---|---|---|
+| the profile | 5.55 / 5.50 / 5.75 | 28 / 27 / 28 | 5.60 / 5.55 / 5.80 | 168.2 / 163.7 / 164.7 ms | 128 to 168 / 127 to 171 / 129 to 164 ms | none: fetched in the settle |
+| + `VICTORY_RELAY=2 VICTORY_RELAY_QUEUE=1` | 6.50 / 6.40 / 6.30 | 27 / 27 / 28 | 6.50 / 6.55 / 6.30 | 146.7 / 144.6 / 150.2 ms | 78 to 142 / 79 to 148 / 78 to 149 ms | 17.8 / 14.1 / 15.9 ms |
+| 2560x1440 output | 7.90 / 7.80 / 8.00 | 26 / 26 / 28 | 8.00 / 7.90 / 8.10 | 114.8 / 116.1 / 121.8 ms | 98 to 128 / 94 to 131 / 95 to 128 ms | none: fetched in the settle |
+| 2560x1440 output + `VICTORY_RELAY=2 VICTORY_RELAY_QUEUE=1` | 8.60 / 8.80 / 8.75 | 23 / 23 / 20 | 8.95 / 8.90 / 9.00 | 100.9 / 100.0 / 100.4 ms | 65 to 117 / 67 to 112 / 65 to 114 ms | 8.4 / 8.8 / 8.6 ms |
+
+The queue's part is the same without them: the frame at 3,000 draws is 147 ms
+against 166 at 3840x2160 and 100 against 118 at 2560x1440 output. No run lost the
+device. In these twelve runs the man's top is grey with dark blocks in three
+(two with the profile at 2560x1440 output, one with the queue there), his
+face is black in the car in one, and dark patches lie around his eyes in
+two; `docs/FORK.md` names the runs.
+
 **Without captures** (one run each, 2560x1440 output, a build that also
 holds a change that is not proposed, fills of upload memory that do not
 wait; frame lines of 500 draws or more): the relay off 8.40 fps, presents
