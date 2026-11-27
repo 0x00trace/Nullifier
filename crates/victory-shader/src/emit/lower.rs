@@ -448,8 +448,20 @@ fn need(block: usize) {
 
 /// VGPR values that are the same in every lane holding them (`all` is [`all_lane_blocks`]):
 /// written by an instruction every arriving lane runs (no guard), lane by lane, from scalars,
-/// constants and such values; or loaded from an address made of them. The compiler keeps
-/// wave-uniform data in VGPRs and fetches it with `v_readfirstlane`.
+/// constants and such values; or loaded from shared memory (LDS) at an address made of them,
+/// into a register whose old value is one of them too. The compiler keeps wave-uniform data
+/// in VGPRs and fetches it with `v_readfirstlane`.
+///
+/// The load counts because the lanes that run it read the same dwords, and no thread of the
+/// group writes shared memory while they do. The check takes every VGPR the load reads, and
+/// the IR lists the destination's old value among them; this also covers the `_d16` forms,
+/// which keep half of it. This set is used only where a console wave runs as two host waves
+/// in a group of more than 32 threads, and there the lowering orders every shared-memory
+/// access with group barriers: one before each access in a block all lanes run, and one on
+/// the way into and out of a lane branch's region that reads, which holds no write
+/// ([`lds_meetings`]). A builder stage of the title sums the totals of the waves before its
+/// own this way: a loop only some waves run reads them one by one and carries the sum from
+/// pass to pass through `v_readfirstlane`.
 /// shortcut: a value joined by a phi counts only where every predecessor is a block all lanes
 /// run (no lane branch can have split the arriving lanes); loop-carried values never do.
 fn lane_uniform(p: &Program, st: &Structured, all: &[bool]) -> HashSet<Value> {
@@ -474,6 +486,22 @@ fn lane_uniform(p: &Program, st: &Structured, all: &[bool]) -> HashSet<Value> {
                         && !name.contains("lane") =>
                 {
                     v.src.clone()
+                }
+                Fields::Ds { .. } if name.starts_with("ds_read") => {
+                    // the address and the old value alike in every lane (see above)
+                    let mut vgprs = inst
+                        .reads
+                        .iter()
+                        .filter(|r| matches!(r.0, Reg::V(_)))
+                        .map(|r| r.1)
+                        .peekable();
+                    if st.guards[b][i].is_none()
+                        && vgprs.peek().is_some()
+                        && vgprs.all(|x| same.contains(&x))
+                    {
+                        same.extend(inst.writes.iter().map(|w| w.1));
+                    }
+                    continue;
                 }
                 _ => continue,
             };

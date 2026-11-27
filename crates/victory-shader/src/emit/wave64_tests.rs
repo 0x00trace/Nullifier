@@ -450,3 +450,128 @@ fn scc_of_a_mask_operation_joined_with_a_scalar_test_needs_the_skip_wave_wide() 
     }
     eprintln!("ran on the hardware device: the inner test's SCC for every lane once some lane is inside");
 }
+
+/// 256 threads in four console waves. Each wave puts its number plus one into its own dword
+/// of shared memory. After the barrier a wave sums the dwords of the waves before it in a
+/// loop: it reads them one by one and carries the sum from pass to pass through
+/// `v_readfirstlane_b32`. Wave 0 skips the loop; every other wave leaves it after as many
+/// passes as waves lie before it. Thread t stores that sum shifted left by 8, plus its lane
+/// number capped at 32 (`v_mbcnt_lo_u32_b32`, for which the two host waves of a console wave
+/// exchange), to dword t of the raw UAV.
+/// `address`: the instruction that makes v8 the address of the dword read in a pass.
+fn sum_of_waves_before(address: u32) -> NativeProgram {
+    let words = [
+        0x2C0E_0086, // v_lshrrev_b32 v7, 6, v0: the thread's wave
+        0x3410_0E82, // v_lshlrev_b32 v8, 2, v7
+        0x4A0C_0E81, // v_add_nc_u32 v6, 1, v7
+        0xD834_0000,
+        0x0000_0608, // ds_write_b32 v8, v6
+        0xBF8A_0000, // s_barrier
+        0x7E10_0280, // v_mov_b32 v8, 0
+        0xBE8C_047E, // s_mov_b64 s[12:13], exec
+        0x7DAA_0E80, // v_cmpx_ne_u32 exec, 0, v7
+        0xBF88_0010, // s_cbranch_execz done
+        0xBE8E_047E, // s_mov_b64 s[14:15], exec: the lanes still in the loop
+        0xBE92_0380, // s_mov_b32 s18, 0: the wave whose dword is read next
+        0xBE91_0380, // s_mov_b32 s17, 0: the sum so far
+        0xBF82_0002, // s_branch first
+        0x87FE_0E14, // next: s_and_b64 exec, s[20:21], s[14:15]
+        0x7E22_0508, // v_readfirstlane_b32 s17, v8
+        0x8F10_8212, // first: s_lshl_b32 s16, s18, 2
+        0x8112_8112, // s_add_i32 s18, s18, 1
+        address,
+        0xD8D8_0000,
+        0x0800_0008, // ds_read_b32 v8, v8
+        0x4A10_1011, // v_add_nc_u32 v8, s17, v8
+        0xBE94_047E, // s_mov_b64 s[20:21], exec
+        0x7DA4_0E12, // v_cmpx_eq_u32 exec, s18, v7: the waves that have read all before them
+        0x8A8E_7E0E, // s_andn2_b64 s[14:15], s[14:15], exec
+        0xBF85_FFF4, // s_cbranch_scc1 next
+        0xBEFE_040C, // done: s_mov_b64 exec, s[12:13]
+        0xD765_0009,
+        0x0001_00C1, // v_mbcnt_lo_u32_b32 v9, -1, 0
+        0x3410_1088, // v_lshlrev_b32 v8, 8, v8
+        0x4A10_1109, // v_add_nc_u32 v8, v9, v8
+        0x3402_0082, // v_lshlrev_b32 v1, 2, v0
+        0xE070_1000,
+        0x8002_0801, // buffer_store_dword v8, v1, s[8:11], 0 offen
+    ];
+    let mut native = native_of(&words, true, 256);
+    native.io = StageIo::Cs(ComputeIo {
+        rsrc2: 1 << 15 | 5 << 1, // 512 bytes of shared memory, 5 user SGPRs
+        threads: [256, 1, 1],
+    });
+    native
+}
+
+/// The address of a pass's dword comes from a scalar, so every lane of the wave reads one
+/// dword and holds one sum: the first-lane read is the lane's own value, and the two host
+/// waves of a console wave need not meet inside the loop, where they could not.
+#[test]
+fn a_sum_carried_through_first_lane_reads_in_a_loop_only_some_waves_run() {
+    let native = sum_of_waves_before(0x7E10_0210); // v_mov_b32 v8, s16
+    let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+    assert!(
+        p.blocks
+            .iter()
+            .flat_map(|b| &b.insts)
+            .any(|i| i.name() == "v_readfirstlane_b32")
+    );
+    let shader = lowered(&native, &p, &HashSet::new()).expect("lower");
+    if let Ok(mut v) = validator::Validator::load(validator::Validator::default_path().as_deref()) {
+        let mut copy = shader.dxil.clone();
+        v.validate(&mut copy).expect("DXIL validation failed");
+    }
+    let _one = super::valu_tests::ONE_AT_A_TIME
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Ok(host) = Host::new(false) else {
+        eprintln!("no SM 6.6 hardware device; not run");
+        return;
+    };
+    let (root, pso) = match host.compute_pipeline(&shader) {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!(
+                "the hardware device does not take this program (waves of 32?): {e}; not run"
+            );
+            return;
+        }
+    };
+    let ud = vec![0u32; shader.user_data_dwords().max(1) as usize];
+    let out = host
+        .dispatch(
+            &root,
+            &pso,
+            &Dispatch {
+                roots: vec![(0, Root::Constants(ud))],
+                views: &[View::RawUav(256)],
+                samplers: &[],
+                groups: [1, 1, 1],
+            },
+        )
+        .unwrap_or_else(|e| panic!("dispatch failed: {e}"));
+    for t in 0..256u32 {
+        let wave = t >> 6;
+        let expected = (wave * (wave + 1) / 2) << 8 | (t & 63).min(32);
+        assert_eq!(out[0][t as usize], expected, "thread {t}");
+    }
+    eprintln!("ran on the hardware device: four waves, each with the sum of the waves before it");
+}
+
+/// The same loop with the address made from the thread's index: the lowering does not know
+/// that address to be the same in every lane, so the value read is not known to be, and the
+/// first-lane read stays refused.
+#[test]
+fn a_first_lane_read_of_a_load_at_an_address_not_known_alike_is_refused() {
+    let native = sum_of_waves_before(0x3410_0E82); // v_lshlrev_b32 v8, 2, v7
+    let p = ir::build(&native.code, native.wave64, native.vgprs).expect("ir::build");
+    lower::take_needs();
+    let refused = lowered(&native, &p, &HashSet::new());
+    lower::take_needs();
+    assert!(
+        matches!(&refused, Err(ShaderError::Unsupported { what, .. }) if *what == "a first-lane read where not every lane runs"),
+        "{:?}",
+        refused.err()
+    );
+}
