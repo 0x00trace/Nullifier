@@ -25,6 +25,40 @@ const ORIGIN: u32 = 0;
 const TOKEN_ON_TIMEOUT: u32 = 2;
 const SIXTIETH: Duration = Duration::from_micros(16_667);
 
+/// `VICTORY_FRAME_INTERVAL_MS`: the interval our clock ticks at in place of
+/// the title's (zero: no wait). Read once. The loader gives the title the
+/// matching rate too (`victory_loader::frame_rate`), as it otherwise keeps
+/// to its own 30.
+fn asked() -> Option<Duration> {
+    static ASKED: std::sync::OnceLock<Option<Duration>> = std::sync::OnceLock::new();
+    *ASKED.get_or_init(|| {
+        let spec = std::env::var("VICTORY_FRAME_INTERVAL_MS").ok()?;
+        let ms = parse_ms(&spec);
+        match ms {
+            Some(interval) => tracing::info!(
+                ?interval,
+                "frame interval of ours in place of the title's (VICTORY_FRAME_INTERVAL_MS)"
+            ),
+            None => tracing::warn!(
+                spec,
+                "VICTORY_FRAME_INTERVAL_MS: expected milliseconds from 0 to 1000; the title's interval kept"
+            ),
+        }
+        ms
+    })
+}
+
+/// `16.667` -> 16,667 us; 0 -> zero; negative, over a second or not a number
+/// -> `None`.
+fn parse_ms(spec: &str) -> Option<Duration> {
+    let ms = spec
+        .trim()
+        .parse::<f64>()
+        .ok()
+        .filter(|ms| ms.is_finite() && (0.0..=1000.0).contains(ms))?;
+    Some(Duration::from_nanos((ms * 1e6).round() as u64))
+}
+
 struct Clock {
     start: Instant,
     interval: Duration,
@@ -49,11 +83,12 @@ pub(crate) extern "system" fn set_interval(
     _period: u32,
     _flags: u32,
 ) -> HRESULT {
-    let interval = match length {
+    let title = match length {
         0 => SIXTIETH,
         us => Duration::from_micros(u64::from(us)),
     };
-    tracing::info!(?interval, "frame interval");
+    let interval = asked().unwrap_or(title);
+    tracing::info!(?interval, ?title, "frame interval");
     // A new interval starts from now, after the last tick handed out.
     let first = LAST
         .iter()
@@ -99,9 +134,14 @@ fn next_tick(kind: u32) -> (u64, Duration) {
     let mut clock = clock();
     let c = clock.get_or_insert_with(|| Clock {
         start: Instant::now(),
-        interval: SIXTIETH,
+        interval: asked().unwrap_or(SIXTIETH),
         first: 0,
     });
+    if c.interval.is_zero() {
+        // No wait: every wait ends at once, on a tick of its own.
+        let tick = last(kind).load(Ordering::Relaxed) + 1;
+        return (tick, Duration::ZERO);
+    }
     let elapsed = c.start.elapsed().as_nanos();
     let interval = c.interval.as_nanos().max(1);
     let tick =
@@ -146,7 +186,9 @@ pub(crate) extern "system" fn wait(
         std::thread::sleep(limit);
         TIMEOUT
     } else {
-        std::thread::sleep(wait);
+        if !wait.is_zero() {
+            std::thread::sleep(wait);
+        }
         last(kind).fetch_max(tick, Ordering::Relaxed);
         S_OK
     };

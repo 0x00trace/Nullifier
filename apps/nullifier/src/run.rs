@@ -127,6 +127,28 @@ pub fn run(
     unsafe {
         victory_loader::resolution::apply_asked(image.base(), image.info().size_of_image as usize)
     };
+    // The frame rate: VICTORY_FRAME_INTERVAL_MS makes our clock tick at that
+    // interval and the title's own 30 fps setting is patched to match.
+    // VICTORY_TITLE_FPS overrides the title's rate, `off` leaves it alone.
+    #[cfg(windows)]
+    if let Some(ms) = victory_loader::frame_rate::asked_interval_ms() {
+        use victory_loader::frame_rate::{Patched, SITES, apply, title_interval_us, title_rate};
+        let asked = std::env::var("VICTORY_TITLE_FPS").ok();
+        match title_rate(ms, asked.as_deref()) {
+            Some(rate) => {
+                let size = image.info().size_of_image as usize;
+                // SAFETY: the image stays mapped and nothing of it has run yet.
+                let done = unsafe { apply(image.base(), size, rate, &SITES) };
+                let patched = done.iter().filter(|d| **d == Patched::Done).count();
+                println!(
+                    "frame rate: our clock {ms} ms; the title's rate {rate} ({patched} of {} reads patched; it asks for {} us at 60 Hz)",
+                    SITES.len(),
+                    title_interval_us(rate, false)
+                );
+            }
+            None => println!("frame rate: our clock {ms} ms; the title's own rate left as it is"),
+        }
+    }
     // SAFETY: imports are bound; from here on we run title code.
     let main = unsafe { Arc::new(image).spawn_main(dlls)? };
     let code = main

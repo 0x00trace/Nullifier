@@ -93,7 +93,8 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   local entries stay in `~/.local/share/nullifier/community.json`.
   `NULLIFIER_BOARD_URL` points at another copy for testing.
 * **Rendering** — Nullifier's own rendering settings: the title's render scale
-  first, then memory and copies, the draw path, and timing — in plain words.
+  and **Title frame rate** first, then memory and copies, the draw path
+  (including **Water's tiled light**), and timing — in plain words.
   Every switch has a small round `?` that explains it, and every number shows
   examples (`2048, 3072 or 4096 (MB)`) under its description. Resolution,
   V-Sync and the frame cap are on Graphics; the active resolution is repeated
@@ -260,6 +261,32 @@ it got.
 
 Measured on an RTX 5080, six runs in turn: 3.55 / 3.45 / 3.50 fps with the
 built server, 0.60 / 0.65 / 0.70 with Proton's own.
+
+## The title's own 30 fps cap
+
+The title's graphics settings hold a frame rate of 30, and its own limiter and
+timers keep to it: menus are a flat 33.3 ms. `VICTORY_FRAME_INTERVAL_MS=<ms>`
+patches the three reads of that setting in the title (bytes checked; another
+build is left alone) and makes Nullifier's frame clock tick at the same
+interval. Rendering → **Title frame rate** offers 60, 120, 144 and Unlimited,
+and is **off by default** (the title keeps 30). `VICTORY_TITLE_FPS=<rate>` gives
+the title another rate outright, `off` leaves the title alone while our clock
+still changes.
+
+Measured here: with `VICTORY_FRAME_INTERVAL_MS=16.667`, all three title reads
+patch and the menus run at 60.0 fps instead of 30.0. The world only gains where
+it can render faster than 33 ms; on this machine it cannot, but on an RTX card
+it is the difference between the title's 30 cap and 26–30 rendered.
+
+## Water light (32-lane hosts)
+
+Two tiled water-light programs (`5dc3b25986622949`, `6f225b641c5b0708`) of the
+title run on a 32-lane host in a wave-wide form that leaves whole tiles of open
+water dark — around boats, along shores, under bridges — and cost about 15 ms
+of the card a frame on an RTX 5070. They are **left out by default** on such a
+host: the water is darker and bluer but has no blocks. `VICTORY_WATER_LIGHT=1`
+runs them again; Rendering → Draw path → **Water's tiled light** is the same
+switch.
 
 ## Display output and render scale (experimental)
 

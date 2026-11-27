@@ -744,10 +744,21 @@ fn pbits(mode: u16) -> bool {
     matches!(mode, 0 | 1 | 3 | 6 | 7)
 }
 
+/// Channel rotation bits; only BC7 modes 4 and 5 have a rotation field.
+/// Ported from trustno1-coder/VIctory-NVIDIA (GPL-3.0-or-later), original
+/// author fxceless/VIctory-Belobug-AMD.
+fn rotation(ctrl: u16) -> usize {
+    if matches!(ctrl & 7, 4 | 5) {
+        usize::from(ctrl >> 3 & 3)
+    } else {
+        0
+    }
+}
+
 /// Channel precisions: the p-bit is red's lowest bit; rotation swaps alpha
 /// with the rotated channel.
 fn bc7_precision(ctrl: u16) -> [u8; 4] {
-    let (mode, rot) = (ctrl & 7, usize::from(ctrl >> 3 & 3));
+    let (mode, rot) = (ctrl & 7, rotation(ctrl));
     let mut p = BC7_BITS[usize::from(mode)];
     if rot != 0 {
         p.swap(3, rot - 1);
@@ -852,7 +863,7 @@ fn bc7_pack(ep: &Bc7Ep, ix: &Bc7Ix, prec: [u8; 4], out: &mut [u8]) {
     let mode = ctrl & 7;
     let subsets = usize::from((ctrl & 0xff) >> 6);
     let part = usize::from(ctrl >> 8 & 63);
-    let rot = usize::from(ctrl >> 3 & 3);
+    let rot = rotation(ctrl);
     let mut w = Bits::default();
     w.put(1 << mode, u32::from(mode) + 1);
     match mode {
@@ -1603,6 +1614,26 @@ mod tests {
             let anchor = 0..1 << (ix.bits[0] - 1);
             let ok = (ix.bits[1] != 0 || ix.ix[1] == [0; 16]) && anchor.contains(&ix.ix[0][0]);
             assert!(ok, "entry {k}: {:?}", ix.ix);
+        }
+    }
+
+    #[test]
+    fn bc7_rotation_applies_only_to_modes_4_and_5() {
+        for mode in [0u16, 1, 2, 3, 6, 7] {
+            for rot in 1..=3u16 {
+                let ctrl = mode | (rot << 3);
+                assert_eq!(rotation(ctrl), 0, "mode {mode} rot {rot}");
+                assert_eq!(bc7_precision(ctrl), bc7_precision(mode), "mode {mode} rot {rot}");
+            }
+        }
+        for mode in [4u16, 5] {
+            for rot in 1..=3usize {
+                let ctrl = (1 << 6) | ((rot as u16) << 3) | mode;
+                let mut want = bc7_precision(mode);
+                want.swap(3, rot - 1);
+                assert_eq!(rotation(ctrl), rot, "mode {mode} rot {rot}");
+                assert_eq!(bc7_precision(ctrl), want, "mode {mode} rot {rot}");
+            }
         }
     }
 }

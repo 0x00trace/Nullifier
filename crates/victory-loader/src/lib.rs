@@ -25,6 +25,7 @@
 mod console_insn;
 mod crash;
 pub mod prepare;
+pub mod frame_rate;
 pub mod resolution;
 pub mod resolve;
 #[cfg(all(windows, feature = "diagnostics"))]

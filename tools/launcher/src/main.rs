@@ -26,7 +26,7 @@ const ACCENT: egui::Color32 = egui::Color32::from_rgb(77, 122, 235);
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// The translation layer's build string. Kept beside `BUILD` in
 /// `crates/victory-gpu/src/host.rs` (bumped by hand there).
-const LAYER_VERSION: &str = "0.007";
+const LAYER_VERSION: &str = "0.008";
 
 
 fn apply_theme(ctx: &egui::Context) {
@@ -4333,6 +4333,7 @@ impl App {
         let mut info = None;
         let mut render_scale = self.settings.render_scale;
         let mut display_changed = false;
+        let mut frame_changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.spacing_mut().interact_size.y = 28.0;
             let sets = &mut self.settings.sets;
@@ -4386,6 +4387,64 @@ impl App {
                     )
                     .wrap(),
                 );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Title frame rate");
+                    let current = match sets
+                        .get("VICTORY_FRAME_INTERVAL_MS")
+                        .map(String::as_str)
+                    {
+                        Some("16.667") => "60 fps",
+                        Some("8.333") => "120 fps",
+                        Some("6.944") => "144 fps",
+                        Some("0") => "Unlimited",
+                        _ => "Title's 30 fps",
+                    };
+                    egui::ComboBox::from_id_salt("title frame rate")
+                        .selected_text(current)
+                        .width(160.0)
+                        .show_ui(ui, |ui| {
+                            for (label, value) in [
+                                ("Title's 30 fps", None),
+                                ("60 fps", Some("16.667")),
+                                ("120 fps", Some("8.333")),
+                                ("144 fps", Some("6.944")),
+                                ("Unlimited", Some("0")),
+                            ] {
+                                let selected = match value {
+                                    None => !sets.contains_key("VICTORY_FRAME_INTERVAL_MS"),
+                                    Some(v) => {
+                                        sets.get("VICTORY_FRAME_INTERVAL_MS")
+                                            .is_some_and(|now| now == v)
+                                    }
+                                };
+                                if ui.selectable_label(selected, label).clicked() && !selected {
+                                    match value {
+                                        Some(v) => {
+                                            sets.insert(
+                                                "VICTORY_FRAME_INTERVAL_MS".into(),
+                                                v.into(),
+                                            );
+                                        }
+                                        None => {
+                                            sets.remove("VICTORY_FRAME_INTERVAL_MS");
+                                        }
+                                    }
+                                    frame_changed = true;
+                                }
+                            }
+                        });
+                });
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "Patches the title's own 30 fps setting and makes our frame clock follow. Off leaves the title at 30. The world must be able to reach the rate to see a difference.",
+                        )
+                        .small()
+                        .color(egui::Color32::from_rgb(120, 126, 138)),
+                    )
+                    .wrap(),
+                );
             });
             ui.add_space(4.0);
             card(ui, |ui| {
@@ -4416,6 +4475,8 @@ impl App {
                 if info.is_none() { info = asked; }
                 let asked = switch_info(ui, sets, "VICTORY_INDIRECT_RUNS");
                 if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_WATER_LIGHT");
+                if info.is_none() { info = asked; }
             });
             ui.add_space(4.0);
             card(ui, |ui| {
@@ -4432,6 +4493,9 @@ impl App {
         });
         if display_changed {
             self.settings.render_scale = render_scale;
+            self.settings.save();
+        }
+        if frame_changed {
             self.settings.save();
         }
         if let Some(key) = info {
@@ -5229,6 +5293,8 @@ const KNOWN_SWITCHES: &[(&str, &str)] = &[
     ("VICTORY_RELAY_QUEUE", "1"),
     ("VICTORY_LATE_WAIT", "1"),
     ("VICTORY_LOG", "info"),
+    ("VICTORY_WATER_LIGHT", "1"),
+    ("VICTORY_FRAME_INTERVAL_MS", "16.667"),
 ];
 
 fn danger_remove(ui: &mut egui::Ui) -> egui::Response {
@@ -5258,6 +5324,16 @@ fn describe(key: &str) -> Option<Desc> {
             "World memory kept on the card",
             "The game's working memory mirrored on the card. Too much competes with textures.",
             "512 MB measured best on 16 GB; 256 MB on an 8 GB card.",
+        ),
+        "VICTORY_WATER_LIGHT" => d(
+            "Water's tiled light",
+            "The title's two tiled water-light programs. On a 32-lane host they leave whole tiles of open water dark and cost about 15 ms a frame; off (the default) drops them.",
+            "Off. Turn it on to compare; the water is greener but has dark blocks.",
+        ),
+        "VICTORY_FRAME_INTERVAL_MS" => d(
+            "Title frame rate",
+            "Patches the title's own 30 fps setting and makes Nullifier's frame clock follow it. Off leaves the title at 30.",
+            "16.667 (60 fps), 8.333 (120), 6.944 (144), 0 (no wait). The world must reach the rate to see a difference.",
         ),
         "VICTORY_CARD_BUFFERS_MIN_MB" => d(
             "Smallest buffer kept on the card",

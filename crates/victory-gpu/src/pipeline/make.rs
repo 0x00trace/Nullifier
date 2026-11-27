@@ -39,9 +39,27 @@ pub(crate) struct Pending {
     begun: OnceLock<Instant>,
 }
 
+/// The light in water's volume, in tiles (water_shading:CS_TransmissionVolumetrics_Tiled
+/// and _Tiled_LocalLights, the title 1.0.2.1): one 64-lane wave a group, which
+/// a host of 32-lane waves gets in a wave-wide form that leaves whole tiles of
+/// open water dark (around boats, along shores, under bridges) and cost about
+/// 15 ms of the card a frame on an RTX 5070. Left out on such a host, the water
+/// is darker and bluer but has no blocks; `VICTORY_WATER_LIGHT=1` runs them.
+/// Ported from trustno1-coder/VIctory-NVIDIA (GPL-3.0-or-later).
+const WATER_LIGHT: [&str; 2] = ["5dc3b25986622949", "6f225b641c5b0708"];
+
+fn water_light_left_out(shaders: &[Arc<Shader>]) -> bool {
+    static ASKED: OnceLock<bool> = OnceLock::new();
+    !*ASKED.get_or_init(|| std::env::var_os("VICTORY_WATER_LIGHT").is_some_and(|v| v == "1"))
+        && victory_shader::emit::host_max_wave() == 32
+        && shaders.iter().any(|s| WATER_LIGHT.contains(&s.hash.as_str()))
+}
+
 /// Why a pipeline with these shaders is not made, if it is not.
 fn left_out(shaders: &[Arc<Shader>]) -> Option<&'static str> {
-    if without_structures(shaders) {
+    if water_light_left_out(shaders) {
+        Some("the water's tiled light on a host of 32-lane waves (dark blocks; VICTORY_WATER_LIGHT=1 runs it), left out")
+    } else if without_structures(shaders) {
         Some("shades ray-tracing hits, left out")
     } else if too_dear(shaders) {
         Some("too dear to compile, left out")
