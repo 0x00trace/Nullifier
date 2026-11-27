@@ -143,6 +143,11 @@ pub(crate) fn cards() -> bool {
 /// most bytes of such copies (their "before" twins not counted: a copy
 /// shaders write takes its size twice), both in bytes:
 /// `VICTORY_CARD_BUFFERS_MIN_MB` (16) and `VICTORY_CARD_BUFFERS_MB` (512).
+/// `VICTORY_CARD_BUFFERS_MIN_KB`, when set, gives the smallest in KiB instead
+/// (copies are made in 64 KiB steps, so 64 or less takes every buffer): a
+/// buffer below 1 MiB that shaders update with atomics, such as the 52-byte
+/// counters of the shadow-mask pass, has them done over the bus one after
+/// another while its copy is in the PC's memory.
 /// Run 69's gameplay has ten title buffers of 16 MiB or more, 494 MB, and
 /// 1,650 MB of the card's budget free.
 fn card_limits() -> (u64, u64) {
@@ -151,8 +156,24 @@ fn card_limits() -> (u64, u64) {
         let mb = |name: &str, default: u64| {
             std::env::var(name).ok().and_then(|v| v.trim().parse::<u64>().ok()).unwrap_or(default) << 20
         };
-        (mb("VICTORY_CARD_BUFFERS_MIN_MB", 16).max(1 << 20), mb("VICTORY_CARD_BUFFERS_MB", 512))
+        let least = card_least(
+            std::env::var("VICTORY_CARD_BUFFERS_MIN_KB").ok().as_deref(),
+            std::env::var("VICTORY_CARD_BUFFERS_MIN_MB").ok().as_deref(),
+        );
+        (least, mb("VICTORY_CARD_BUFFERS_MB", 512))
     })
+}
+
+/// [`card_limits`]' smallest buffer from the two switches' values, in bytes:
+/// `VICTORY_CARD_BUFFERS_MIN_KB` when it reads as a number (at least 64 KiB,
+/// the step copies are made in), else `VICTORY_CARD_BUFFERS_MIN_MB` (16 when
+/// unset or unreadable; at least 1 MiB). Pure, for testing.
+fn card_least(min_kb: Option<&str>, min_mb: Option<&str>) -> u64 {
+    let number = |v: Option<&str>| v.and_then(|v| v.trim().parse::<u64>().ok());
+    match number(min_kb) {
+        Some(kb) => (kb << 10).max(1 << 16),
+        None => (number(min_mb).unwrap_or(16) << 20).max(1 << 20),
+    }
 }
 
 /// Bytes alive of copies' card sides, and of their "before" twins.
@@ -391,6 +412,27 @@ fn card_span_of(start: usize, from: usize, to: usize) -> CardSpan {
 fn card_piece_of(start: usize, len: usize, span: &CardSpan, i: u32) -> (usize, usize) {
     let (lo, hi) = piece_at(start, len, (span.first + i) as usize);
     (lo.max(span.from as usize), hi.min(span.to as usize))
+}
+
+#[cfg(test)]
+mod card_least_tests {
+    use super::card_least;
+
+    #[test]
+    fn the_smallest_card_copy_takes_kib_before_mib() {
+        // Unset: 16 MiB; the profile's 1 MiB; the floor of 1 MiB.
+        assert_eq!(card_least(None, None), 16 << 20);
+        assert_eq!(card_least(None, Some("1")), 1 << 20);
+        assert_eq!(card_least(None, Some("0")), 1 << 20);
+        assert_eq!(card_least(None, Some("lots")), 16 << 20);
+        // KiB first, down to the 64 KiB step copies are made in.
+        assert_eq!(card_least(Some("64"), Some("1")), 64 << 10);
+        assert_eq!(card_least(Some(" 256 "), Some("1")), 256 << 10);
+        assert_eq!(card_least(Some("0"), None), 64 << 10);
+        assert_eq!(card_least(Some("4"), Some("1")), 64 << 10);
+        // An unreadable KiB value falls back to the MiB one.
+        assert_eq!(card_least(Some("small"), Some("2")), 2 << 20);
+    }
 }
 
 #[cfg(test)]

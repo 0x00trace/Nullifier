@@ -5260,8 +5260,9 @@ struct Desc {
 fn example(key: &str) -> Option<&'static str> {
     match key {
         "VICTORY_TEXTURE_BUDGET_MB" => Some("2048, 3072 or 4096 (MB)"),
-        "VICTORY_CARD_BUFFERS_MB" => Some("256, 512 or 1024 (MB)"),
+        "VICTORY_CARD_BUFFERS_MB" => Some("256, 512, 1024 or 2048 (MB)"),
         "VICTORY_CARD_BUFFERS_MIN_MB" => Some("1 (MB)"),
+        "VICTORY_CARD_BUFFERS_MIN_KB" => Some("64 (KiB): every buffer"),
         "VICTORY_LATE_WAIT" => Some("0 to 3"),
         "VICTORY_CARD_REHASH_RUNS" => Some("0, 1 or 2"),
         "VICTORY_INDIRECT_RUNS" | "VICTORY_INDIRECT_WINDOW" | "VICTORY_RELAY_QUEUE" => Some("1"),
@@ -5317,6 +5318,7 @@ const KNOWN_SWITCHES: &[(&str, &str)] = &[
     ("VICTORY_TEXTURE_BUDGET_MB", "4096"),
     ("VICTORY_CARD_BUFFERS_MB", "1024"),
     ("VICTORY_CARD_BUFFERS_MIN_MB", "1"),
+    ("VICTORY_CARD_BUFFERS_MIN_KB", "64"),
     ("VICTORY_TEXTURE_NO_WAIT", "1"),
     ("VICTORY_CARD_HASH_LANES", "1"),
     ("VICTORY_WIDE_BACK", "1"),
