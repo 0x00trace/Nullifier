@@ -17,7 +17,7 @@ machine.
 | | World fps |
 |---|---|
 | Linux · RX 9070 XT | **5.9–6.4** |
-| Linux · RTX 5080 | **5.2–5.3** |
+| Linux · RTX 5080 | **6.2–6.4** |
 | Windows · reported | **3–5** |
 
 Menus run at 30; the world is ~160–170 ms a frame. The picture is correct.

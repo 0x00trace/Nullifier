@@ -302,8 +302,9 @@ waits on this.
 * `LATE_WAIT >= 2`, `JOIN_COPIES=1` and `RELAY` are not defaulted on Linux:
   on AMD (RADV) they remove the device (`0x887A0005`) within minutes. One
   profile is an exception, with its evidence in `docs/FORK.md`:
-  `linux-nvidia-16gb` sets `LATE_WAIT=3`, measured on an RTX 5080 with the
-  built wineserver. `--safe` turns all send-ahead off if a run still dies.
+  `linux-nvidia-16gb` sets `LATE_WAIT=3` and `RELAY=2` with
+  `RELAY_QUEUE=1`, measured on an RTX 5080 with the built wineserver.
+  `--safe` turns all send-ahead off if a run still dies.
 * vkd3d-proton below build **5742** segfaults RADV on the first world mesh
   pipeline. The launcher installs the newest one it can find (Proton
   Experimental) into the prefix once, keeps `.bak` copies, and records the

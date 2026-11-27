@@ -1341,6 +1341,67 @@ the revert, one run has a black face in one street shot.
 a part of it is applied again), whether the bursts follow other use of the
 machine, and what the face defects are.
 
+## 2.20 The relay with its queue, the own view and lazy tracking in the `linux-nvidia-16gb` profile (2026-11-27)
+
+2.12, 2.14 and 2.18 each left a switch off by default. The profile for
+NVIDIA cards of 13 GB or more under Linux now sets them:
+`VICTORY_RELAY=2 VICTORY_RELAY_QUEUE=1 VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1`.
+
+**The own view and lazy tracking on top of the relay and its queue** (twelve
+runs in turn, three rounds, 200 s, `5aa7b69`, RTX 5080; a browser playing
+video and a music player ran beside this set, as beside the last set of
+2.18):
+
+| | median fps (lines under 10 fps) | n | median fps (lines of 500 draws or more) | frame at 3,000 draws | presents apart | sent up to the card, a frame | copying title memory, a frame |
+|---|---|---|---|---|---|---|---|
+| the profile with the relay and its queue | 6.00 / 5.40 / 5.80 | 27 / 27 / 27 | 6.15 / 5.40 / 6.10 | 156.2 / 170.0 / 159.0 ms | 84 to 158 / 100 to 176 / 91 to 158 ms | 120 / 118 / 117 MB | 35.3 / 38.2 / 38.3 ms |
+| + `VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1` | 6.20 / 6.40 / 6.50 | 27 / 27 / 27 | 6.40 / 6.60 / 6.60 | 151.4 / 151.9 / 141.8 ms | 76 to 155 / 74 to 156 / 72 to 144 ms | 80 / 82 / 81 MB | 25.3 / 25.5 / 24.3 ms |
+| 2560x1440 output with the relay and its queue | 8.30 / 8.50 / 7.90 | 26 / 27 / 27 | 8.50 / 8.50 / 8.15 | 108.9 / 112.8 / 111.2 ms | 73 to 124 / 71 to 123 / 75 to 127 ms | 90 / 84 / 88 MB | 32.8 / 31.6 / 31.0 ms |
+| + `VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1` | 8.40 / 8.40 / 8.70 | 24 / 24 / 25 | 8.70 / 8.70 / 8.90 | 109.3 / 108.4 / 104.7 ms | 63 to 123 / 62 to 119 / 61 to 117 ms | 62 / 66 / 60 MB | 23.5 / 24.6 / 22.9 ms |
+
+The two switches take a third off what is sent up to the card (118 MB a
+frame becomes 81) and 12 ms off the copying of title memory. The frame at
+3,000 draws is 148 ms against 162 (the second run of the first row is slower
+than its two neighbours; without it, against 158), and at 2560x1440 output
+107 ms against 111.
+
+**The profile as the launcher picks it** (six runs in turn, three rounds,
+200 s, `ef36883`: the profile's new values against its old ones, which were
+set by exporting `VICTORY_RELAY=0 VICTORY_RELAY_QUEUE=0
+VICTORY_BACK_OWN_VIEW=0 VICTORY_ALIAS_LAZY=0`; the same two programs ran
+beside it):
+
+| | median fps (lines under 10 fps) | n | median fps (lines of 500 draws or more) | frame at 3,000 draws | presents apart | sent up to the card, a frame | copying title memory, a frame |
+|---|---|---|---|---|---|---|---|
+| the profile's old values | 5.30 / 5.35 / 5.50 | 28 / 28 / 28 | 5.40 / 5.40 / 5.50 | 175.4 / 174.8 / 170.8 ms | 138 to 180 / 134 to 178 / 138 to 176 ms | 194 / 187 / 192 MB | 33.5 / 33.3 / 33.8 ms |
+| the profile | 6.20 / 6.40 / 6.40 | 28 / 26 / 28 | 6.35 / 6.50 / 6.45 | 154.0 / 143.7 / 148.3 ms | 74 to 156 / 71 to 150 / 74 to 151 ms | 79 / 80 / 79 MB | 23.6 / 24.5 / 25.2 ms |
+
+**Two runs of 20 minutes** with the four switches (`5aa7b69`). They pass the
+opening and stay in the scene after it (about 4,830 draws a frame). Medians
+of the frame lines of 500 draws or more:
+
+| | the first 400 s of the world | the scene after the opening | the whole run | frame in that scene | presents apart there | device removed |
+|---|---|---|---|---|---|---|
+| 3840x2160 output | 6.70 fps (74 lines) | 7.20 fps (135 lines; 6.5 to 7.5) | 7.10 fps (209 lines) | 139.3 ms | 40 to 201 ms (medians 64 to 125) | 0 |
+| 2560x1440 output | 9.40 fps (76 lines) | 9.80 fps (144 lines; 8.0 to 11.9) | 9.70 fps (220 lines) | 102.5 ms | 36 to 219 ms (medians 52 to 109) | 0 |
+
+The 20-minute run of the profile as it was gave 6.30 fps (2.9). No run of
+this section lost the device or stopped on a fault.
+
+**The picture.** The man's top is black in all 18 runs of the two sets (the
+grey top of 2.19 is in none), and the opening and the scene after it are
+drawn in both long runs. The older defects are in runs with and without the
+switches: dark patches around the man's eyes in two runs with the four
+switches, and his face black in the last capture of the close shot in one
+run without the own view. One credits card of the long run at 2560x1440
+output has a blocky area.
+
+**Not measured:** the four switches on AMD (the relay is not safe under
+RADV, `AGENTS.md` section 6) and under Windows, where a profile sets the
+relay without its queue; NVIDIA cards under 16 GB, which keep
+`linux-nvidia`; other driver versions; play beyond the scene after the
+opening; and the picture defects of 2.19 over more runs than these 20.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
