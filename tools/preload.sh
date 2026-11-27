@@ -3,10 +3,10 @@
 #
 #   VICTORY_GAME_DIR=DIR ./tools/preload.sh
 #
-# Starts the title until the world is drawing (two frame lines below 10 fps,
-# as tools/bench_scene.sh gates it), lets the first world pipelines compile,
-# then stops. About two minutes. The pipeline library saves itself every 20 s
-# while it has new pipelines, so the next real run starts warm.
+# Translates the title's shaders from its archives and builds their compute
+# pipelines, without starting the title. About a minute. The pipeline library
+# saves itself every 20 s while it has new pipelines, so the next real run
+# starts warm.
 #
 # Optional; a first run compiles the same pipelines during its own loading.
 set -uo pipefail
@@ -29,4 +29,3 @@ else
   echo "preload: warming failed (see $LOG)" >&2
 fi
 exit "$STATUS"
-exit 0
