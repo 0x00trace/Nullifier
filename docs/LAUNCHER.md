@@ -111,7 +111,11 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   The rest are the title's settings. Values with a small named set are
   drop-downs (anisotropic 4×/8×/16×, FSR quality, quality presets, water
   reflection sizes), whole-number ranges are sliders, and 0–1 values show
-  percentages. **Apply** writes the file and keeps `settings.xml.bak` beside it;
+  percentages. Only **gamma** is confirmed to change the picture; values
+  measured to change nothing (frame rate, draws and copy-back) are marked
+  **no effect**: among them motion blur, ray-traced shadows, `lodScale`,
+  `grassLod`, FSR quality, the quality preset and the particle/alpha shadow
+  switches. **Apply** writes the file and keeps `settings.xml.bak` beside it;
   **Discard edits** rereads the file, **Restore backup** puts the last backup
   back, and **Reset to defaults** moves the file aside (`settings.xml.reset`
   keeps a copy) so the game writes fresh defaults the next time it starts. The
@@ -154,9 +158,9 @@ opens on that tab. The game settings also work headless:
 ```
 
 **Inert on purpose:** FSR upscaling and ray-traced light are shown but
-disabled; each needs engine work (see `docs/ROADMAP.md`). Motion blur and
-ray-traced shadows in the title's own settings are marked **no effect**: the
-title ignores them in this build.
+disabled; each needs engine work (see `docs/ROADMAP.md`). The title's own
+settings that changed nothing in the 2026-11-27 measurements are marked **no
+effect** in the page (`docs/FINDINGS.md` 3.29c).
 
 The crate is its own workspace: `cargo clippy --workspace` at the root does
 not build it, and CI shared with the layer needs no GUI libraries.

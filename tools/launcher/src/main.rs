@@ -2803,7 +2803,7 @@ impl App {
                 ui.set_width(ui.available_width());
                 ui.label(
                     egui::RichText::new(
-                        "Experimental — some settings are saved but do not affect the game yet.",
+                        "Experimental — only gamma is confirmed to change the picture. Values marked no effect changed nothing in tests.",
                     )
                     .color(egui::Color32::from_rgb(240, 200, 120)),
                 );
@@ -5182,7 +5182,7 @@ fn example(key: &str) -> Option<&'static str> {
         "fsrQuality" => Some("0 = off, 1 = quality, 2 = balanced, 3 = performance"),
         "fsrSharpen" => Some("0.0 to 1.0 (0.2 is the default)"),
         "sharpenIntensity" => Some("0.0 to 2.0 (1.0 is the default)"),
-        "lodScale" | "grassLod" => Some("1.0 is the default; lower is faster"),
+        "lodScale" | "grassLod" => Some("1.0 is the default"),
         "texLodScale_Global" => Some("1.0 is the default"),
         "texLodScale_LOD" => Some("2.0 is the default"),
         "texLodScale_SLOD1" => Some("4.0 is the default"),
@@ -5911,11 +5911,23 @@ fn limits(key: &str) -> Option<(f64, f64, f64)> {
     }
 }
 
-/// The title ignores these in the current build; say so next to the value.
+/// The title ignores these in the current build. Measured on 2026-11-27
+/// (docs/FINDINGS.md 3.29c): neither frame rate, draws nor copy-back moved;
+/// only gamma is confirmed to change the picture.
 fn no_effect(key: &str) -> bool {
     matches!(
         key,
-        "motionBlur" | "rtDynamicShadows" | "rtLODLightShadows"
+        "motionBlur"
+            | "rtDynamicShadows"
+            | "rtLODLightShadows"
+            | "lodScale"
+            | "grassLod"
+            | "fsrQuality"
+            | "asyncComputeEnabled"
+            | "waterReflectionSSR"
+            | "shadowParticleShadows"
+            | "shadowAlphaTintedShadows"
+            | "graphicsQualityPreset"
     )
 }
 
@@ -5936,7 +5948,9 @@ fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
                     .small()
                     .color(egui::Color32::from_rgb(232, 179, 74)),
             )
-            .on_hover_text("The title ignores this setting in the current build.");
+            .on_hover_text(
+                "In the 2026-11-27 measurements this changed neither frame rate, draws nor copy-back. Only gamma is confirmed to change the picture.",
+            );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if let Some(options) = choices(&setting.key) {
