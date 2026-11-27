@@ -1,0 +1,1 @@
+Nullifier runs an Xbox Series title natively on AMD/NVIDIA, Linux and Windows. Hardware-aware launcher, measured profiles, AI contributor guide. No game files.

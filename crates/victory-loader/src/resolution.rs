@@ -34,7 +34,7 @@ pub fn asked_output() -> Option<(u32, u32)> {
     let size = parse_output(&spec);
     if size.is_none() {
         eprintln!(
-            "VIctory: VICTORY_OUTPUT={spec}: expected one of the title's modes: 1920x1080, 2560x1440, 1280x720, 1664x936, 3840x2160"
+            "Nullifier: VICTORY_OUTPUT={spec}: expected one of the title's modes: 1920x1080, 2560x1440, 1280x720, 1664x936, 3840x2160"
         );
     }
     size
@@ -52,7 +52,7 @@ pub fn asked_render_scale() -> Option<f32> {
     let spec = std::env::var("VICTORY_RENDER_SCALE").ok()?;
     let scale = parse_render_scale(&spec);
     if scale.is_none() {
-        eprintln!("VIctory: VICTORY_RENDER_SCALE={spec}: expected 0.5 to 1.0");
+        eprintln!("Nullifier: VICTORY_RENDER_SCALE={spec}: expected 0.5 to 1.0");
     }
     scale
 }

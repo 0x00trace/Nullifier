@@ -1,6 +1,6 @@
 # AGENTS.md — read this before you touch anything
 
-You are working on **a fork of VIctory**, a compatibility layer that runs an
+You are working on **Nullifier**, a distinct rebrand and fork of VIctory: a compatibility layer that runs an
 Xbox Series title natively on a PC. It is not an emulator: the title's x86-64
 code runs in our process and we supply the console's platform underneath it.
 This file is the operating manual for AI agents (and humans) contributing to
