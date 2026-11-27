@@ -2049,6 +2049,13 @@ fn card_audit() -> u64 {
 /// The most pieces an audit fetches for one submission ([`card_audit`]).
 const CARD_AUDIT_PIECES: usize = 64;
 
+/// With [`card_audit`]: every how many settles the whole of the card's
+/// side of each copy that the settled submissions declared is fetched and
+/// compared with the CPU's side (`crate::shadow::Shadow::card_full_audit`).
+/// A settle has run every submission and merged what their shaders wrote,
+/// so the two sides then differ only in what is still to be sent up.
+const CARD_FULL_EVERY: u64 = 512;
+
 /// What a submission does for copies in the card's memory.
 struct CardPlan {
     ranges: Vec<CardRange>,
@@ -4303,6 +4310,59 @@ impl Host {
         }
     }
 
+    /// With [`card_audit`], in a settle after its merges: fetches the whole
+    /// card's side of each of `copies` and has it compared with the CPU's
+    /// side.
+    fn card_full_audit(
+        &self,
+        submitted: &mut u64,
+        copies: &[std::sync::Arc<crate::shadow::Shadow>],
+    ) {
+        let mut work = CARD_WORK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(work) = work.as_mut() else {
+            return;
+        };
+        for shadow in copies {
+            let Some((_, _, size)) = shadow.card_sides() else {
+                continue;
+            };
+            if work.fetched.as_ref().is_none_or(|f| f.2 < size) {
+                let room = size.next_multiple_of(16 << 20);
+                work.fetched = self
+                    .shared_buffer(room)
+                    .map(|(buffer, data)| (buffer, data as usize, room));
+            }
+            let Some((fetched, data, _)) = &work.fetched else {
+                return;
+            };
+            let (allocator, list) = &work.fetch;
+            // SAFETY: the list's last run was waited for; live buffers; the
+            // fence and event are ours, under the submission lock.
+            let ran = unsafe {
+                (|| -> windows::core::Result<()> {
+                    allocator.Reset()?;
+                    list.Reset(allocator, None)?;
+                    list.CopyBufferRegion(fetched, 0, &shadow.buffer, 0, size);
+                    list.Close()?;
+                    self.queue.ExecuteCommandLists(&[Some(list.cast()?)]);
+                    *submitted += 1;
+                    self.queue.Signal(&self.fence, *submitted)?;
+                    self.fence.SetEventOnCompletion(*submitted, self.event)?;
+                    WaitForSingleObject(self.event, INFINITE);
+                    Ok(())
+                })()
+            };
+            if let Err(e) = ran {
+                tracing::warn!(error = %e, "the card's side of a copy could not be fetched for the audit");
+                return;
+            }
+            // SAFETY: the mapping of the fetched bytes; the copy into it
+            // has run.
+            let gpu = unsafe { std::slice::from_raw_parts(*data as *const u8, size as usize) };
+            shadow.card_full_audit(gpu);
+        }
+    }
+
     /// Runs closed lists and waits for them, and with [`late`] for
     /// everything sent to the card before them, which is settled first.
     pub(crate) fn execute(&self, runs: &[&HostList]) {
@@ -4508,6 +4568,29 @@ impl Host {
                             }
                             None => back.push((shadow.clone(), ranges.clone())),
                         }
+                    }
+                }
+                if card_audit() != 0 {
+                    static SETTLES: std::sync::atomic::AtomicU64 =
+                        std::sync::atomic::AtomicU64::new(0);
+                    let mut copies: Vec<std::sync::Arc<crate::shadow::Shadow>> = Vec::new();
+                    for item in &items {
+                        if let Late::Run(flight) = item
+                            && let Some(card) = &flight.card
+                        {
+                            for r in &card.ranges {
+                                if !copies.iter().any(|s| std::sync::Arc::ptr_eq(s, &r.shadow)) {
+                                    copies.push(r.shadow.clone());
+                                }
+                            }
+                        }
+                    }
+                    if !copies.is_empty()
+                        && SETTLES
+                            .fetch_add(1, Ordering::Relaxed)
+                            .is_multiple_of(CARD_FULL_EVERY)
+                    {
+                        self.card_full_audit(submitted, &copies);
                     }
                 }
                 hand_back(&back);

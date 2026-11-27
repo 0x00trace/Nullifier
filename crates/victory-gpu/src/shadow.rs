@@ -2936,6 +2936,93 @@ impl Shadow {
         }
     }
 
+    /// With `crate::host`'s `card_audit`: `gpu` is the whole of the card's
+    /// side, fetched in a settle after its merges. Compares it with the
+    /// CPU's side piece by piece, leaving out what is still to be sent up,
+    /// and says how many pieces differ and which differ most. Nothing is
+    /// changed.
+    pub(crate) fn card_full_audit(&self, gpu: &[u8]) {
+        static TURN: AtomicU64 = AtomicU64::new(0);
+        let Some(card) = &self.card else {
+            return;
+        };
+        let len = (self.len as usize).min(gpu.len());
+        let start = self.start as usize;
+        // SAFETY: inside the mapping; only the submitting thread writes
+        // it, and this is that thread.
+        let held = unsafe { std::slice::from_raw_parts(self.data.cast_const(), len) };
+        let dirty = joined(card.dirty.lock().unwrap_or_else(|e| e.into_inner()).clone());
+        // By piece: bytes that differ, the first of them, and whether all
+        // of them are zero on the card's side, or on the CPU's.
+        let mut pieces: Vec<(usize, usize, bool, bool)> = Vec::new();
+        let (mut total, mut left_out) = (0usize, 0usize);
+        let mut at = 0;
+        while at < len {
+            let end = (((start + at) / PIECE + 1) * PIECE - start).min(len);
+            let skip: Vec<(usize, usize)> = dirty
+                .iter()
+                .copied()
+                .filter(|&(a, b)| a < end && b > at)
+                .collect();
+            left_out += skip
+                .iter()
+                .map(|&(a, b)| b.min(end) - a.max(at))
+                .sum::<usize>();
+            let (mut n, mut first, mut card_zero, mut cpu_zero) = (0usize, usize::MAX, true, true);
+            for (a, b) in outside(at, end, skip) {
+                if gpu[a..b] == held[a..b] {
+                    continue;
+                }
+                for i in a..b {
+                    if gpu[i] != held[i] {
+                        n += 1;
+                        first = first.min(i);
+                        card_zero &= gpu[i] == 0;
+                        cpu_zero &= held[i] == 0;
+                    }
+                }
+            }
+            if n > 0 {
+                total += n;
+                pieces.push((n, first, card_zero, cpu_zero));
+            }
+            at = end;
+        }
+        let turn = TURN.fetch_add(1, Ordering::Relaxed) + 1;
+        let card_zero = pieces.iter().filter(|p| p.2).count();
+        let cpu_zero = pieces.iter().filter(|p| p.3 && !p.2).count();
+        tracing::info!(
+            copy = self.id,
+            start = format_args!("{start:#x}"),
+            mb = len >> 20,
+            turn,
+            frame = crate::frame::current(),
+            "the whole card's side of a copy against its CPU side (VICTORY_CARD_AUDIT): {} of {} pieces differ in {} bytes ({} pieces only where the card holds zeros, {} only where the CPU's side holds zeros); {} bytes still to be sent up were left out",
+            pieces.len(),
+            len.div_ceil(PIECE),
+            total,
+            card_zero,
+            cpu_zero,
+            left_out
+        );
+        pieces.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+        for &(n, first, card_zero, cpu_zero) in pieces.iter().take(24) {
+            let shown = (first + 24).min(len);
+            tracing::info!(
+                copy = self.id,
+                turn,
+                piece = format_args!("{:#x}", (start + first) / PIECE * PIECE),
+                differing = n,
+                first = format_args!("{:#x}", start + first),
+                card_zero,
+                cpu_zero,
+                card = format_args!("{:02x?}", &gpu[first..shown]),
+                cpu = format_args!("{:02x?}", &held[first..shown]),
+                "a piece whose card side differs from its CPU side (VICTORY_CARD_AUDIT)"
+            );
+        }
+    }
+
     /// After a submission, for a copy in the card's memory: `gpu` is what
     /// the card's side holds at offset `at` on, in a piece the compare
     /// found differing. The bytes shaders wrote (those that differ from the
