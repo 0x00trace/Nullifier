@@ -1038,40 +1038,70 @@ mod tests {
     };
     const MEM_WRITE_WATCH: u32 = 0x20_0000;
 
+    /// Takes `[start, end)` out of the journal. The journal keeps a page's
+    /// last asking for as long as the process lives, and Windows gives the
+    /// addresses of a freed allocation out again: a test that expects
+    /// nothing written in memory it has just allocated forgets the range
+    /// first.
+    fn forget(start: usize, end: usize) {
+        let (first, last) = (start / PAGE, end.div_ceil(PAGE));
+        let mut j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+        let stale: Vec<usize> = j
+            .written
+            .range(first..last)
+            .map(|(&page, _)| page)
+            .collect();
+        for page in stale {
+            j.written.remove(&page);
+        }
+    }
+
     #[test]
     fn written_pages_are_reported_to_every_asker() {
-        // SAFETY: a fresh write-watched allocation, freed at the end.
-        let p = unsafe {
-            VirtualAlloc(
-                std::ptr::null(),
-                4 * PAGE,
-                MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH,
-                PAGE_READWRITE,
-            )
-        } as usize;
-        assert_ne!(p, 0);
-        let (start, end) = (p, p + 4 * PAGE);
-        let (_, before) = writes(start, end, false).expect("watched");
-        assert!(before.is_empty());
-        // SAFETY: committed pages of ours.
-        unsafe { ((p + PAGE + 8) as *mut u8).write(1) };
-        let (now, after) = writes(start, end, false).expect("watched");
-        assert_eq!(after, [(p / PAGE + 1, now)]);
-        // Another asker after the kernel's bit was cleared still sees it.
-        let (later, again) = writes(p + PAGE, p + 2 * PAGE, false).expect("watched");
-        assert!(later > now);
-        assert_eq!(again, [(p / PAGE + 1, now)]);
-        let mut plain = vec![0u8; PAGE];
-        assert!(
-            writes(
-                plain.as_mut_ptr() as usize,
-                plain.as_ptr() as usize + PAGE,
-                true
-            )
-            .is_none()
-        );
-        // SAFETY: our allocation.
-        unsafe { VirtualFree(p as *mut _, 0, MEM_RELEASE) };
+        // Twice, the second time at the address of the first: what the
+        // first pass left in the journal is not the second's. A test that
+        // ran before this one and freed its memory leaves the same.
+        let mut at = std::ptr::null();
+        for pass in 0..2 {
+            // SAFETY: a fresh write-watched allocation, freed at the end.
+            let p = unsafe {
+                VirtualAlloc(
+                    at,
+                    4 * PAGE,
+                    MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH,
+                    PAGE_READWRITE,
+                )
+            } as usize;
+            if pass == 1 && p == 0 {
+                // Another thread's allocation took the address meanwhile.
+                return;
+            }
+            assert_ne!(p, 0);
+            at = p as *const _;
+            let (start, end) = (p, p + 4 * PAGE);
+            forget(start, end);
+            let (_, before) = writes(start, end, false).expect("watched");
+            assert!(before.is_empty());
+            // SAFETY: committed pages of ours.
+            unsafe { ((p + PAGE + 8) as *mut u8).write(1) };
+            let (now, after) = writes(start, end, false).expect("watched");
+            assert_eq!(after, [(p / PAGE + 1, now)]);
+            // Another asker after the kernel's bit was cleared still sees it.
+            let (later, again) = writes(p + PAGE, p + 2 * PAGE, false).expect("watched");
+            assert!(later > now);
+            assert_eq!(again, [(p / PAGE + 1, now)]);
+            let mut plain = vec![0u8; PAGE];
+            assert!(
+                writes(
+                    plain.as_mut_ptr() as usize,
+                    plain.as_ptr() as usize + PAGE,
+                    true
+                )
+                .is_none()
+            );
+            // SAFETY: our allocation.
+            unsafe { VirtualFree(p as *mut _, 0, MEM_RELEASE) };
+        }
     }
 
     /// A kernel read into a guarded view block fails; opened first, it
@@ -1119,6 +1149,9 @@ mod tests {
             guard(view, view + 2 * BLOCK),
             Some((view / PAGE..view / PAGE + 1).collect())
         );
+        // Told before the view goes: once it is unmapped its address can be
+        // another test's, and that test's guards would be dropped.
+        title_memory_remapped(view, 2 * BLOCK);
         // SAFETY: our view.
         unsafe {
             UnmapViewOfFile(
@@ -1127,7 +1160,6 @@ mod tests {
                 },
             )
         };
-        title_memory_remapped(view, 2 * BLOCK);
     }
 
     /// A copy guards a block again between the opening and the system call
@@ -1180,6 +1212,9 @@ mod tests {
         // SAFETY: the bytes just read.
         let landed = unsafe { std::slice::from_raw_parts((view + 100) as *const u8, 13) };
         assert_eq!(landed, b"from the disk");
+        // Told before the view goes: once it is unmapped its address can be
+        // another test's, and that test's guards would be dropped.
+        title_memory_remapped(view, 2 * BLOCK);
         // SAFETY: our view.
         unsafe {
             UnmapViewOfFile(
@@ -1188,7 +1223,6 @@ mod tests {
                 },
             )
         };
-        title_memory_remapped(view, 2 * BLOCK);
     }
 
     /// A store through a view of our own is in the journal as a write of
@@ -1346,6 +1380,8 @@ mod tests {
         let mut local = [0u8; 16];
         let at = local.as_mut_ptr() as usize;
         assert!(!is_view(at, at + local.len()));
+        // Told before the memory goes, as above.
+        title_memory_remapped(p, 3 * BLOCK);
         // SAFETY: our views and placeholder.
         unsafe {
             UnmapViewOfFile2(GetCurrentProcess(), first, MEM_PRESERVE_PLACEHOLDER);
@@ -1355,7 +1391,6 @@ mod tests {
             }
             windows_sys::Win32::Foundation::CloseHandle(section);
         }
-        title_memory_remapped(p, 3 * BLOCK);
     }
 
     /// Blocks of a placeholder between views are reported once, then not
@@ -1430,6 +1465,8 @@ mod tests {
         title_memory_remapped(p + BLOCK, BLOCK);
         assert_eq!(guard(p, p + 3 * BLOCK), Some(pages(1).collect()));
         assert_eq!(guard(p, p + 3 * BLOCK), Some(Vec::new()));
+        // Told before the memory goes, as above.
+        title_memory_remapped(p, 3 * BLOCK);
         // SAFETY: our views and placeholder.
         unsafe {
             UnmapViewOfFile2(GetCurrentProcess(), first, MEM_PRESERVE_PLACEHOLDER);
@@ -1439,7 +1476,6 @@ mod tests {
             }
             windows_sys::Win32::Foundation::CloseHandle(section);
         }
-        title_memory_remapped(p, 3 * BLOCK);
     }
 
     /// A pagefile section mapped twice: two views of the same physical
