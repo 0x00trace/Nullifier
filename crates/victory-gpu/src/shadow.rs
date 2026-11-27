@@ -568,6 +568,29 @@ fn own_audit() -> u8 {
     })
 }
 
+/// For the question [`own_audit`] asks: whether a store through our own
+/// view notes the page current for its copy. With
+/// `VICTORY_BACK_OWN_NOTE=0` it does not: the journal says the page was
+/// written, and the copy takes it again at its next refresh, as after a
+/// store at the title's address.
+fn own_note() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_BACK_OWN_NOTE").is_none_or(|v| v != "0"))
+}
+
+/// For the question [`own_audit`] asks: whether a page noted current for a
+/// copy in the card's memory is sent up to the card's side again, whole,
+/// before the next submission (`VICTORY_BACK_OWN_RESEND=1`), as the refresh
+/// after a store at the title's address sends it. Not with the relay, whose
+/// stores are made while later submissions run on the card.
+fn own_resend() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var_os("VICTORY_BACK_OWN_RESEND").is_some_and(|v| v == "1")
+            && !crate::host::relay()
+    })
+}
+
 /// With [`own_audit`]: the pages noted current by a store through our own
 /// view and not looked at since, by copy and page number: the asking of
 /// the store, and the first and last offset in the page that stores wrote.
@@ -2152,14 +2175,17 @@ impl Shadow {
         // `crate::watch::writing` tells the texture table on the old way).
         crate::descriptor::host::remapped(at, bytes.len());
         let base = self.start as usize / PAGE;
+        let mut resend = false;
         {
             let mut copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(taken) = page.checked_sub(base).and_then(|i| copied.get_mut(i))
                 && *taken != 0
                 && *taken >= before
+                && own_note()
             {
                 *taken = (*taken).max(now);
                 OWN_WRITES[2].fetch_add(1, Ordering::Relaxed);
+                resend = own_resend();
                 if own_audit() != 0 {
                     let (lo, hi) = ((at % PAGE) as u32, (at % PAGE + bytes.len() - 1) as u32);
                     OWN_NOTED
@@ -2191,6 +2217,13 @@ impl Shadow {
                         }
                     }
                 }
+            }
+        }
+        if resend {
+            let (start, end) = (self.start as usize, (self.start + self.len) as usize);
+            let (lo, hi) = ((page * PAGE).max(start), ((page + 1) * PAGE).min(end));
+            if lo < hi {
+                self.card_changed(lo - start, hi - start);
             }
         }
         OWN_WRITES[1].fetch_add(bytes.len() as u64, Ordering::Relaxed);
