@@ -1934,6 +1934,59 @@ fn rehash_runs() -> bool {
     *ON.get_or_init(|| std::env::var_os("VICTORY_CARD_REHASH_RUNS").is_some_and(|v| v == "1"))
 }
 
+/// Whether the list that brings copies in the card's memory up to date
+/// records every copy first, then one barrier for all the copies whose pieces
+/// are hashed again, then every hash pass (`VICTORY_SYNC_GROUPED=1`; off by
+/// default). Before, each copy's hash passes stood behind a barrier of its own,
+/// and the card waited at each: with every title buffer's copy on the card
+/// (`VICTORY_CARD_BUFFERS_MIN_KB`) that was about 1,500 hash passes a frame,
+/// and the lists took 19.7 ms of a timing run's frame against 9.4 ms with 98
+/// copies (`docs/FINDINGS.md` 2.23). The same copies and passes in another
+/// order: a hash pass still reads its copy after that copy's ranges were sent
+/// up, and the hash passes write pieces of their own copy's hashes only.
+fn sync_grouped() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_SYNC_GROUPED").is_some_and(|v| v == "1"))
+}
+
+/// Records the hash passes of [`Host::card_before`]'s list over the pieces of
+/// `ranges` just sent up to `shadow`'s side in the card's memory (all of its
+/// pieces when `whole`), into `before`, which holds a hash of each piece.
+///
+/// # Safety
+/// An open list; live buffers. The ranges were copied to the card's side
+/// earlier in the list, and a barrier since has made them readable.
+unsafe fn record_sent_hashes(
+    list: &ID3D12GraphicsCommandList,
+    work: &CardWork,
+    (shadow, ranges, whole): (&crate::shadow::Shadow, &[(usize, usize)], bool),
+    before: &ID3D12Resource,
+    size: u64,
+) {
+    // SAFETY: as the caller promises.
+    unsafe {
+        list.SetComputeRootSignature(&work.root);
+        list.SetPipelineState(&work.pso);
+        list.SetComputeRootShaderResourceView(1, shadow.buffer.GetGPUVirtualAddress());
+        list.SetComputeRootUnorderedAccessView(2, before.GetGPUVirtualAddress());
+        list.SetComputeRootUnorderedAccessView(3, work.differs.0.GetGPUVirtualAddress());
+        let runs: Vec<crate::shadow::CardSpan> = if whole {
+            vec![shadow.card_run(0, usize::MAX)]
+        } else {
+            ranges.iter().map(|&(a, b)| shadow.card_run(a, b)).collect()
+        };
+        // The same pieces in fewer passes (`rehash_runs`).
+        let runs = if rehash_runs() { crate::shadow::joined_piece_runs(runs) } else { runs };
+        CARD_PASSES[0].fetch_add(runs.len() as u64, Ordering::Relaxed);
+        CARD_PASSES[1].fetch_add(runs.iter().map(|r| u64::from(r.pieces)).sum::<u64>(), Ordering::Relaxed);
+        for run in runs {
+            let constants = [run.first, run.skew, size as u32, run.pieces, 0, 0];
+            list.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
+            list.Dispatch(card_compare_groups(run.pieces, card_hash_lanes()), 1, 1);
+        }
+    }
+}
+
 /// Since the last frame-rate line, of our own passes over copies in the
 /// card's memory: hash passes after ranges were sent up, the pieces they
 /// hashed, and compare passes after the lists.
@@ -3525,6 +3578,18 @@ impl Host {
                 (|| -> windows::core::Result<()> {
                     allocator.Reset()?;
                     list.Reset(allocator, None)?;
+                    // No twin (it cost the card the copy's size again, 399 MB
+                    // in run 75): `before` holds a 128-bit hash of each
+                    // 64 KiB piece. The pieces just sent up are hashed again,
+                    // all of them the first time; the compare after the lists
+                    // hashes the declared pieces and flags those whose hash is
+                    // another. Grouped (`sync_grouped`): every copy first, one
+                    // barrier for all the copies that are hashed, then every
+                    // hash pass, so that the card waits once; else each copy's
+                    // hash passes stand behind a barrier of their own.
+                    let grouped = sync_grouped();
+                    let mut reads = Vec::new();
+                    let mut hashes = Vec::new();
                     for (shadow, ranges) in &dirty {
                         let Some((staging, before, size)) = shadow.card_sides() else {
                             continue;
@@ -3537,38 +3602,29 @@ impl Host {
                         let Some(before) = before else {
                             continue;
                         };
-                        // No twin (it cost the card the copy's size again,
-                        // 399 MB in run 75): `before` holds a 128-bit hash
-                        // of each 64 KiB piece. The pieces just sent up are
-                        // hashed again, all of them the first time; the
-                        // compare after the lists hashes the declared
-                        // pieces and flags those whose hash is another.
-                        if !ranges.is_empty() {
-                            list.ResourceBarrier(&[transition(
+                        let read = (!ranges.is_empty()).then(|| {
+                            transition(
                                 &shadow.buffer,
                                 D3D12_RESOURCE_STATE_COPY_DEST,
                                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                            )]);
-                        }
-                        list.SetComputeRootSignature(&work.root);
-                        list.SetPipelineState(&work.pso);
-                        list.SetComputeRootShaderResourceView(1, shadow.buffer.GetGPUVirtualAddress());
-                        list.SetComputeRootUnorderedAccessView(2, before.GetGPUVirtualAddress());
-                        list.SetComputeRootUnorderedAccessView(3, work.differs.0.GetGPUVirtualAddress());
-                        let runs: Vec<crate::shadow::CardSpan> = if whole.iter().any(|s| Arc::ptr_eq(s, shadow)) {
-                            vec![shadow.card_run(0, usize::MAX)]
+                            )
+                        });
+                        let whole = whole.iter().any(|s| Arc::ptr_eq(s, shadow));
+                        if grouped {
+                            reads.extend(read);
+                            hashes.push((shadow, ranges, before, size, whole));
                         } else {
-                            ranges.iter().map(|&(a, b)| shadow.card_run(a, b)).collect()
-                        };
-                        // The same pieces in fewer passes (`rehash_runs`).
-                        let runs = if rehash_runs() { crate::shadow::joined_piece_runs(runs) } else { runs };
-                        CARD_PASSES[0].fetch_add(runs.len() as u64, Ordering::Relaxed);
-                        CARD_PASSES[1].fetch_add(runs.iter().map(|r| u64::from(r.pieces)).sum::<u64>(), Ordering::Relaxed);
-                        for run in runs {
-                            let constants = [run.first, run.skew, size as u32, run.pieces, 0, 0];
-                            list.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
-                            list.Dispatch(card_compare_groups(run.pieces, card_hash_lanes()), 1, 1);
+                            if let Some(read) = read {
+                                list.ResourceBarrier(&[read]);
+                            }
+                            record_sent_hashes(list, work, (shadow, ranges, whole), &before, size);
                         }
+                    }
+                    if !reads.is_empty() {
+                        list.ResourceBarrier(&reads);
+                    }
+                    for (shadow, ranges, before, size, whole) in hashes {
+                        record_sent_hashes(list, work, (shadow, ranges, whole), &before, size);
                     }
                     list.Close()?;
                     self.queue.ExecuteCommandLists(&[Some(list.cast()?)]);
@@ -6841,7 +6897,7 @@ impl Meter {
         let Some(caption) = &self.caption else { return };
         // The fork's name and build, shown after the title's own caption.
         // Bumped by hand: this tree commits often and never cuts releases.
-        const BUILD: &str = "v0.010";
+        const BUILD: &str = "v0.011";
         let text = format!(
             " | Nullifier {BUILD} {fps:.0} fps {ms:.1} ms/frame {draws:.0} draws/frame"
         );
