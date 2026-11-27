@@ -3,170 +3,95 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nullifier — run an Xbox Series title on your PC</title>
-<meta name="description" content="Nullifier runs an Xbox Series title natively on AMD/NVIDIA, Linux and Windows. Hardware-aware launcher, measured profiles. No game files.">
+<title>Nullifier — run your Xbox copy on a PC</title>
+<meta name="description" content="Nullifier runs an Xbox Series title natively on AMD/NVIDIA, Linux and Windows. No game files.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <header class="wrap">
   <a class="brand" href="./">Nullifier</a>
-  <nav>
-    <a href="https://github.com/iNiKKo/Nullifier">GitHub</a>
-  </nav>
+  <nav><a href="https://github.com/iNiKKo/Nullifier">GitHub</a></nav>
 </header>
 
 <main class="wrap">
   <section class="hero">
     <h1>Run your Xbox copy on a PC.</h1>
-    <p class="lead">A compatibility layer, not an emulator. The game's own code runs
-    natively; Nullifier supplies the console platform and translates graphics to
-    D3D12. Linux and Windows, AMD and NVIDIA.</p>
-    <p class="note">Bring your own copy. This project contains no game files.</p>
+    <p class="lead">A compatibility layer, not an emulator. Bring your own copy;
+    the project contains no game files.</p>
+    <p class="note">Tech demo: 5–6 fps in the world today. Not playable at speed yet.</p>
   </section>
 
   <section class="choice" id="start">
-    <h2>Do you want to&hellip;</h2>
+    <h2>What do you want to do?</h2>
     <div class="buttons">
       <button class="big" data-view="play">Play</button>
-      <button class="big" data-view="contribute">Contribute</button>
+      <button class="big" data-view="setup">Set up</button>
     </div>
   </section>
 
   <section class="pane" id="play" hidden>
     <button class="back" data-view="start">&larr; Back</button>
     <h2>Play</h2>
-    <div class="status">
-      <span><strong>5.9&ndash;6.4 fps</strong> &middot; RX 9070 XT, Linux</span>
-      <span>5.2&ndash;5.3 &middot; RTX 5080</span>
-      <span>3&ndash;5 &middot; Windows, reported</span>
-    </div>
-    <p class="warn"><strong>This is a tech demo.</strong> Menus, cutscenes, the prologue,
-    the world, audio, input and saves work, but 5&ndash;6 fps is not playable at speed.
-    The title's ray-traced light is missing, so shadowed areas are black.</p>
+    <p>You need your own copy of the game. Linux or Windows, AMD or NVIDIA.</p>
 
-    <h3>You need</h3>
-    <ul>
-      <li>Your own copy of the title (the folder with its <code>.exe</code> files).</li>
-      <li>Linux: a Vulkan-capable AMD or NVIDIA card, <code>clang</code>, <code>lld</code>,
-        <code>python3</code>, <code>curl</code>, and Proton (Steam installs one).</li>
-      <li>Windows 10/11: a D3D12 card with shader model 6.6 and mesh shaders.</li>
-    </ul>
-
-    <h3>Get it</h3>
-    <p>There are no prebuilt binaries in the repository: build once, about ten
-    minutes, then starts are instant. When releases are published they are
-    <strong>torrent-only</strong> &mdash; download the magnet and keep seeding.</p>
-
-    <div class="tabs">
-      <button class="tab active" data-tab="linux">Linux</button>
-      <button class="tab" data-tab="windows">Windows</button>
-    </div>
-    <div class="tabbody" id="tab-linux">
-      <pre><code>git clone https://github.com/iNiKKo/Nullifier.git
-cd Nullifier
-./tools/setup.sh
-./tools/build-wineserver.sh   # optional, several times the frame rate
-./Nullifier.sh</code></pre>
-      <p>In the launcher: drop your game folder on the page, press <strong>Play</strong>.
-      If the engine is missing, <strong>Set up now</strong> builds it.</p>
-    </div>
-    <div class="tabbody" id="tab-windows" hidden>
-      <pre><code># in PowerShell, inside the repository
-cargo build --release -p nullifier
-cargo build --release --manifest-path tools\launcher\Cargo.toml</code></pre>
-      <p>Install Rust from <a href="https://rustup.rs">rustup.rs</a> first. Then
-      double-click <strong>Nullifier.bat</strong>, choose the game folder and press Play.</p>
+    <h3>Linux — one command</h3>
+    <div class="copybox">
+      <pre><code id="linux-cmd">curl -fsSL https://raw.githubusercontent.com/iNiKKo/Nullifier/main/install.sh | bash</code></pre>
+      <button class="copy" data-copy="linux-cmd">Copy</button>
     </div>
 
-    <h3>If it does not start</h3>
-    <ul>
-      <li>Use <code>--safe</code> with the command-line launcher.</li>
-      <li>Read the log in the launcher footer, or the console output.</li>
-      <li>Ask in <a href="https://github.com/iNiKKo/Nullifier/discussions">Discussions</a>.</li>
-    </ul>
+    <h3>Windows — one command</h3>
+    <p class="note">Install <a href="https://rustup.rs">Rust</a> first, then in PowerShell:</p>
+    <div class="copybox">
+      <pre><code id="win-cmd">irm https://raw.githubusercontent.com/iNiKKo/Nullifier/main/install.ps1 | iex</code></pre>
+      <button class="copy" data-copy="win-cmd">Copy</button>
+    </div>
+
+    <p>When the launcher opens, drop your game folder on the page and press
+    <strong>Play</strong>.</p>
+    <p class="note">Prefer to do it by hand? <a href="https://github.com/iNiKKo/Nullifier#install">README → Install</a>.
+    Releases, when published, are torrent-only: keep seeding.</p>
   </section>
 
-  <section class="pane" id="contribute" hidden>
+  <section class="pane" id="setup" hidden>
     <button class="back" data-view="start">&larr; Back</button>
-    <h2>Contribute</h2>
-    <p>Nullifier is GPL-3.0-or-later and needs help with the launcher, the
-    community features, documentation, testing and performance. No game files
-    ever go in the repository.</p>
+    <h2>Set up</h2>
+    <p>An AI assistant can clone, build and open Nullifier for you. Copy this
+    prompt and paste it into yours.</p>
 
-    <div class="choice">
-      <h3>Have you used an AI assistant before?</h3>
-      <div class="buttons">
-        <button class="big" data-view="ai-yes">Yes</button>
-        <button class="big" data-view="ai-no">No, help me get one</button>
-      </div>
+    <div class="copybox">
+      <pre id="ai-prompt">Set up Nullifier for me.
+
+Clone https://github.com/iNiKKo/Nullifier.git into ~/Nullifier, then read
+AGENTS.md and docs/AI-NOTICE.md first. This is a GPL compatibility layer with
+no game files; I supply my own copy.
+
+Run ./tools/setup.sh (Linux) or the cargo builds for Windows, build the
+launcher too, and open it. Tell me when it is ready and how to choose my game
+folder. Ask before anything destructive.</pre>
+      <button class="copy" data-copy="ai-prompt">Copy prompt</button>
     </div>
+
+    <p class="note">No AI yet? Install <a href="https://opencode.ai">opencode</a>,
+    open a terminal in the folder and run <code>opencode</code>, then paste the
+    prompt.</p>
+
+    <h3>Want to help build it?</h3>
+    <p>Ask the same assistant: <em>“Read AGENTS.md, then suggest three small
+    tasks I can do.”</em> Launcher, docs and testing need no game running.
+    <a href="https://github.com/iNiKKo/Nullifier/blob/main/AGENTS.md">AGENTS.md</a>
+    &middot;
+    <a href="https://github.com/iNiKKo/Nullifier/blob/main/docs/AI-NOTICE.md">AI notice</a></p>
   </section>
 
-  <section class="pane" id="ai-no" hidden>
-    <button class="back" data-view="contribute">&larr; Back</button>
-    <h2>Get an AI assistant</h2>
-    <p>You do not need to be a programmer to start. An AI coding assistant can
-    read the project rules, build the layer and make a first change with you.</p>
-    <ol class="steps">
-      <li><strong>Install opencode</strong> &mdash; free and open source:
-        <a href="https://opencode.ai">opencode.ai</a>
-        (<a href="https://github.com/sst/opencode">source</a>). Follow the install
-        for your OS.</li>
-      <li><strong>Get the code</strong>:
-        <pre><code>git clone https://github.com/iNiKKo/Nullifier.git
-cd Nullifier</code></pre></li>
-      <li><strong>Open the folder in opencode</strong> (run <code>opencode</code>
-        inside it) and paste:
-        <pre><code>Read AGENTS.md and docs/AI-NOTICE.md before touching anything.
-This is a GPL compatibility layer with no game files; users supply their own copy.
-Help me set up the project and pick a small first task.</code></pre></li>
-      <li><strong>Build it</strong> with <code>./tools/setup.sh</code> (Linux) or the
-        two cargo commands under Play &rarr; Windows.</li>
-    </ol>
-    <p class="note">Other assistants work too: Claude Code, Cursor, Copilot. Point
-    them at <code>AGENTS.md</code> and <code>docs/AI-NOTICE.md</code>.</p>
-  </section>
-
-  <section class="pane" id="ai-yes" hidden>
-    <button class="back" data-view="contribute">&larr; Back</button>
-    <h2>Start with your assistant</h2>
-    <p>Open the repository in your assistant and paste the same brief:</p>
-    <pre><code>Read AGENTS.md and docs/AI-NOTICE.md before touching anything.
-This is a GPL compatibility layer with no game files; users supply their own copy.
-Then show me the build steps and three small tasks I can choose from.</code></pre>
-    <h3>Good first areas</h3>
-    <ul>
-      <li><strong>Launcher &amp; Community</strong> &mdash; layout, filters, sharing; no game needed.</li>
-      <li><strong>Docs &amp; onboarding</strong> &mdash; this site, guides, troubleshooting.</li>
-      <li><strong>Testing</strong> &mdash; reproduce a report, add a check, write it down.</li>
-      <li><strong>Performance</strong> &mdash; the hard one; read <code>docs/FINDINGS.md</code> first.</li>
-    </ul>
-    <h3>The rules that matter</h3>
-    <ul>
-      <li>No game files, assets or screenshots of the title.</li>
-      <li>A performance claim needs three runs, median world frames, a picture over 50 KB,
-        and the commit, GPU and environment reported.</li>
-      <li>One idea per pull request; say what you measured.</li>
-    </ul>
-    <p><a href="https://github.com/iNiKKo/Nullifier/blob/main/AGENTS.md">AGENTS.md</a>
-    &middot; <a href="https://github.com/iNiKKo/Nullifier/blob/main/docs/AI-NOTICE.md">AI notice</a>
-    &middot; <a href="https://github.com/iNiKKo/Nullifier/blob/main/docs/README.md">docs index</a></p>
-  </section>
-
-  <section class="shots">
-    <h2>What it looks like</h2>
-    <div class="gallery">
-      <figure><img src="assets/play.png" alt="Nullifier Play page"><figcaption>Play &mdash; one action, measured profile, in-game vs menu fps.</figcaption></figure>
-      <figure><img src="assets/community.png" alt="Nullifier Community page"><figcaption>Community &mdash; share fps and a sanitized log.</figcaption></figure>
-      <figure><img src="assets/controls.png" alt="Nullifier Controls page"><figcaption>Controls &mdash; pads, keyboard, opt-in mouse look.</figcaption></figure>
-      <figure><img src="assets/graphics.png" alt="Nullifier Graphics page"><figcaption>Graphics &mdash; the title's own settings, marked experimental.</figcaption></figure>
-    </div>
+  <section class="shot">
+    <img src="assets/play.png" alt="Nullifier Play page">
   </section>
 </main>
 
 <footer class="wrap">
-  <p>Nullifier is GPL-3.0-or-later. No game files. Not affiliated with or endorsed
-  by the game's developer or publisher.</p>
+  <p>GPL-3.0-or-later. No game files. Not affiliated with the game's developer
+  or publisher.</p>
 </footer>
 <script src="app.js"></script>
 </body>

@@ -1,4 +1,4 @@
-const panes = ["start", "play", "contribute", "ai-no", "ai-yes"];
+const panes = ["start", "play", "setup"];
 function show(id) {
   for (const pane of panes) {
     const el = document.getElementById(pane);
@@ -11,11 +11,22 @@ function show(id) {
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => show(button.dataset.view));
 });
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
-    for (const body of document.querySelectorAll(".tabbody")) {
-      body.hidden = body.id !== "tab-" + tab.dataset.tab;
+document.querySelectorAll("[data-copy]").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const el = document.getElementById(button.dataset.copy);
+    if (!el) return;
+    const text = el.innerText;
+    try {
+      await navigator.clipboard.writeText(text);
+      button.textContent = "Copied";
+      setTimeout(() => (button.textContent = "Copy"), 1500);
+    } catch {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      document.execCommand("copy");
+      button.textContent = "Copied";
     }
   });
 });

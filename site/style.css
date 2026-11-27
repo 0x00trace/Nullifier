@@ -29,6 +29,16 @@ h3 { font-size: 18px; margin: 24px 0 8px; }
 .note { color: var(--muted); font-size: 14px; }
 .warn { background: #241f14; border: 1px solid #5a4720; color: #f0d6a0; padding: 12px 14px; border-radius: 10px; }
 a { color: var(--accent-2); }
+.copybox { position: relative; }
+.copy {
+  position: absolute; top: 10px; right: 10px;
+  font: inherit; font-size: 13px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 7px; padding: 5px 10px; cursor: pointer;
+}
+.copy:hover { border-color: #4b5566; }
+.shot { margin: 40px 0 0; }
+.shot img { display: block; width: 100%; border: 1px solid var(--line); border-radius: 12px; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; background: #0d0f12; border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; }
 pre { background: #0d0f12; border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; }
 pre code { background: none; border: 0; padding: 0; }

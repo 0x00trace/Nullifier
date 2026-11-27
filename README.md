@@ -84,7 +84,21 @@ There are **no prebuilt binaries in the repository**. Build from source once
 be **torrent-only** — download the magnet and keep seeding; that is how the
 project can afford to distribute the build without a store.
 
-### Linux
+### One command
+
+```bash
+# Linux: clones, builds the engine and launcher, opens the launcher
+curl -fsSL https://raw.githubusercontent.com/iNiKKo/Nullifier/main/install.sh | bash
+```
+
+```powershell
+# Windows: install Rust first (https://rustup.rs), then in PowerShell
+irm https://raw.githubusercontent.com/iNiKKo/Nullifier/main/install.ps1 | iex
+```
+
+### By hand
+
+#### Linux
 
 You need a Vulkan-capable AMD or NVIDIA card, `clang`, `lld`, `python3`,
 `curl`, and Proton (a Steam install already has one).
@@ -101,7 +115,7 @@ Drop your game folder on the launcher page (the one with
 `game_scarlett_master.exe`) and press **Play**. If the engine is missing,
 **Set up now** builds it without a terminal.
 
-### Windows
+#### Windows
 
 Windows 10/11 and a D3D12 GPU with shader model 6.6 and mesh shaders.
 
