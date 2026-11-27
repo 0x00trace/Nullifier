@@ -24,7 +24,9 @@ pub(crate) struct Hardware {
 
 pub(crate) fn hardware(root: &Path) -> Hardware {
     let raw = detect(root);
-    let mut hw = Hardware { ..Default::default() };
+    let mut hw = Hardware {
+        ..Default::default()
+    };
     for line in raw.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("GPU vendor") {
@@ -36,11 +38,7 @@ pub(crate) fn hardware(root: &Path) -> Hardware {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
         } else if let Some(rest) = line.strip_prefix("profile") {
-            hw.profile = rest
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .to_string();
+            hw.profile = rest.split_whitespace().next().unwrap_or("").to_string();
         }
     }
     hw

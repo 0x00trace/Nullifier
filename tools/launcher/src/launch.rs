@@ -89,7 +89,10 @@ pub(crate) fn launch_command(root: &Path, settings: &Settings, profile_file: &Pa
         cmd.env("VICTORY_OUTPUT", settings.output.trim());
     }
     if settings.render_scale > 0.0 {
-        cmd.env("VICTORY_RENDER_SCALE", format!("{:.2}", settings.render_scale));
+        cmd.env(
+            "VICTORY_RENDER_SCALE",
+            format!("{:.2}", settings.render_scale),
+        );
     }
     if settings.input_mode != "auto" {
         cmd.env("VICTORY_INPUT", settings.input_mode.trim());

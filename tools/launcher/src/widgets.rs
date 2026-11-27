@@ -35,16 +35,32 @@ pub(crate) fn danger_remove(ui: &mut egui::Ui) -> egui::Response {
                 .color(egui::Color32::from_rgb(240, 126, 126)),
         )
         .fill(egui::Color32::from_rgb(43, 27, 29))
-        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(126, 62, 62)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(126, 62, 62),
+        ))
         .min_size(egui::vec2(70.0, 28.0))
         .corner_radius(6),
     )
     .on_hover_text("Removing a setting turns it off")
 }
 
-pub(crate) fn preset_card(ui: &mut egui::Ui, selected: bool, title: &str, desc: &str) -> egui::Response {
-    let fill = if selected { ACCENT } else { egui::Color32::from_rgb(38, 41, 48) };
-    let stroke = if selected { ACCENT } else { egui::Color32::from_rgb(52, 56, 64) };
+pub(crate) fn preset_card(
+    ui: &mut egui::Ui,
+    selected: bool,
+    title: &str,
+    desc: &str,
+) -> egui::Response {
+    let fill = if selected {
+        ACCENT
+    } else {
+        egui::Color32::from_rgb(38, 41, 48)
+    };
+    let stroke = if selected {
+        ACCENT
+    } else {
+        egui::Color32::from_rgb(52, 56, 64)
+    };
     let frame = egui::Frame::new()
         .fill(fill)
         .stroke(egui::Stroke::new(1.0_f32, stroke))
@@ -54,27 +70,30 @@ pub(crate) fn preset_card(ui: &mut egui::Ui, selected: bool, title: &str, desc: 
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
                 let painter = ui.painter();
                 if selected {
                     painter.circle_filled(rect.center(), 6.0, egui::Color32::WHITE);
                     painter.circle_filled(rect.center(), 3.0, ACCENT);
                 } else {
-                    painter.circle_stroke(rect.center(), 6.0, egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 125, 136)));
+                    painter.circle_stroke(
+                        rect.center(),
+                        6.0,
+                        egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 125, 136)),
+                    );
                 }
                 ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new(title)
-                            .strong()
-                            .color(if selected { egui::Color32::WHITE } else { egui::Color32::from_rgb(225, 228, 236) }),
-                    );
-                    ui.label(
-                        egui::RichText::new(desc).size(11.5).color(if selected {
-                            egui::Color32::from_rgb(235, 240, 255)
-                        } else {
-                            egui::Color32::from_rgb(158, 163, 174)
-                        }),
-                    );
+                    ui.label(egui::RichText::new(title).strong().color(if selected {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::from_rgb(225, 228, 236)
+                    }));
+                    ui.label(egui::RichText::new(desc).size(11.5).color(if selected {
+                        egui::Color32::from_rgb(235, 240, 255)
+                    } else {
+                        egui::Color32::from_rgb(158, 163, 174)
+                    }));
                 });
             });
         })
@@ -93,7 +112,11 @@ pub(crate) fn pair(ms: Option<f32>, mb: Option<f32>) -> Option<String> {
 pub(crate) fn stat(ui: &mut egui::Ui, label: &str, value: Option<String>) {
     ui.vertical(|ui| {
         ui.set_min_width(150.0);
-        ui.label(egui::RichText::new(label).small().color(egui::Color32::GRAY));
+        ui.label(
+            egui::RichText::new(label)
+                .small()
+                .color(egui::Color32::GRAY),
+        );
         ui.label(value.unwrap_or_else(|| "—".into()));
     });
 }
@@ -128,17 +151,27 @@ pub(crate) fn help_button(ui: &mut egui::Ui) -> egui::Response {
 pub(crate) fn secondary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).color(egui::Color32::from_rgb(220, 224, 233)))
         .fill(egui::Color32::from_rgb(43, 48, 59))
-        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(57, 64, 78)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(57, 64, 78),
+        ))
         .corner_radius(7)
         .min_size(egui::vec2(width, height))
 }
 
 pub(crate) fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).strong().color(egui::Color32::WHITE))
-        .fill(ACCENT)
-        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(105, 145, 245)))
-        .corner_radius(7)
-        .min_size(egui::vec2(width, height))
+    egui::Button::new(
+        egui::RichText::new(text)
+            .strong()
+            .color(egui::Color32::WHITE),
+    )
+    .fill(ACCENT)
+    .stroke(egui::Stroke::new(
+        1.0_f32,
+        egui::Color32::from_rgb(105, 145, 245),
+    ))
+    .corner_radius(7)
+    .min_size(egui::vec2(width, height))
 }
 
 pub(crate) fn nav_group(ui: &mut egui::Ui, label: &str) {
@@ -166,7 +199,10 @@ pub(crate) fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::
         ui.painter().rect_filled(rect, 7.0, background);
         if selected {
             ui.painter().rect_filled(
-                egui::Rect::from_min_size(rect.left_top() + egui::vec2(0.0, 7.0), egui::vec2(3.0, rect.height() - 14.0)),
+                egui::Rect::from_min_size(
+                    rect.left_top() + egui::vec2(0.0, 7.0),
+                    egui::vec2(3.0, rect.height() - 14.0),
+                ),
                 2.0,
                 ACCENT,
             );
@@ -205,7 +241,10 @@ pub(crate) fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 pub(crate) fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(egui::Color32::from_rgb(30, 33, 41))
-        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(47, 52, 64)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(47, 52, 64),
+        ))
         .corner_radius(10)
         .inner_margin(egui::Margin::symmetric(18, 16))
         .show(ui, |ui| {
@@ -220,13 +259,23 @@ pub(crate) fn warnings_card(ui: &mut egui::Ui, list: &[String]) {
     }
     egui::Frame::group(ui.style())
         .fill(egui::Color32::from_rgb(45, 38, 24))
-        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
+        .stroke(egui::Stroke::new(
+            1.0_f32,
+            egui::Color32::from_rgb(120, 95, 45),
+        ))
         .inner_margin(egui::Margin::symmetric(14, 12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-            ui.label(egui::RichText::new("Check these").strong().color(egui::Color32::from_rgb(240, 200, 120)));
+            ui.label(
+                egui::RichText::new("Check these")
+                    .strong()
+                    .color(egui::Color32::from_rgb(240, 200, 120)),
+            );
             for line in list {
-                ui.label(egui::RichText::new(format!("• {line}")).color(egui::Color32::from_rgb(225, 210, 180)));
+                ui.label(
+                    egui::RichText::new(format!("• {line}"))
+                        .color(egui::Color32::from_rgb(225, 210, 180)),
+                );
             }
         });
     ui.add_space(4.0);
@@ -272,8 +321,12 @@ pub(crate) fn number_info(
         });
         if let Some(d) = &desc {
             ui.add(
-                egui::Label::new(egui::RichText::new(d.plain).small().color(egui::Color32::GRAY))
-                    .wrap(),
+                egui::Label::new(
+                    egui::RichText::new(d.plain)
+                        .small()
+                        .color(egui::Color32::GRAY),
+                )
+                .wrap(),
             );
             if let Some(eg) = example(key) {
                 ui.add(
@@ -303,7 +356,10 @@ pub(crate) fn switch_info(
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         ui.horizontal(|ui| {
-            if ui.checkbox(&mut on, desc.as_ref().map(|d| d.name).unwrap_or(key)).changed() {
+            if ui
+                .checkbox(&mut on, desc.as_ref().map(|d| d.name).unwrap_or(key))
+                .changed()
+            {
                 if on {
                     sets.insert(key.to_string(), "1".into());
                 } else {
@@ -316,8 +372,12 @@ pub(crate) fn switch_info(
         });
         if let Some(d) = &desc {
             ui.add(
-                egui::Label::new(egui::RichText::new(d.plain).small().color(egui::Color32::GRAY))
-                    .wrap(),
+                egui::Label::new(
+                    egui::RichText::new(d.plain)
+                        .small()
+                        .color(egui::Color32::GRAY),
+                )
+                .wrap(),
             );
         }
     });

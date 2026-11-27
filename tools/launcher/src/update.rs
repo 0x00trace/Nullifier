@@ -77,7 +77,12 @@ fn tag_from(text: &str) -> Option<String> {
         return name.starts_with('v').then(|| name.to_string());
     }
     let line = text.lines().map(str::trim).find(|line| {
-        line.starts_with('v') || line.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+        line.starts_with('v')
+            || line
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false)
     })?;
     Some(line.to_string())
 }
@@ -91,7 +96,10 @@ fn fetch_latest_tag() -> Option<String> {
 }
 
 /// Once a day at most, in the background. A cached answer is used as is.
-pub(crate) fn update_check() -> (Option<String>, Option<std::sync::mpsc::Receiver<Option<String>>>) {
+pub(crate) fn update_check() -> (
+    Option<String>,
+    Option<std::sync::mpsc::Receiver<Option<String>>>,
+) {
     if std::env::var_os("NULLIFIER_NO_UPDATE_CHECK").is_some() {
         return (None, None);
     }

@@ -9,7 +9,11 @@ use crate::widgets::{card, danger_remove, help_button, page_header, small_label}
 
 impl App {
     pub(super) fn advanced(&mut self, ui: &mut egui::Ui) {
-        page_header(ui, "Advanced", "Exact settings and environment, for troubleshooting.");
+        page_header(
+            ui,
+            "Advanced",
+            "Exact settings and environment, for troubleshooting.",
+        );
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.spacing_mut().interact_size.y = 28.0;
             card(ui, |ui| {

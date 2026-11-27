@@ -94,10 +94,14 @@ pub(crate) fn title_exe(dir: &Path) -> Option<PathBuf> {
         if depth > 2 {
             continue;
         }
-        let Ok(entries) = std::fs::read_dir(&at) else { continue };
+        let Ok(entries) = std::fs::read_dir(&at) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            let Ok(kind) = entry.file_type() else { continue };
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
             if kind.is_dir() {
                 stack.push((path, depth + 1));
             } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {

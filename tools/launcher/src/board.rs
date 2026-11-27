@@ -145,7 +145,11 @@ fn mask_ipv4(text: &str) -> String {
             }
             let token = &text[start..i];
             let parts: Vec<&str> = token.split('.').collect();
-            if parts.len() == 4 && parts.iter().all(|p| !p.is_empty() && p.parse::<u8>().is_ok()) {
+            if parts.len() == 4
+                && parts
+                    .iter()
+                    .all(|p| !p.is_empty() && p.parse::<u8>().is_ok())
+            {
                 out.push_str("<ip>");
             } else {
                 out.push_str(token);
@@ -225,7 +229,10 @@ pub(crate) fn sanitize_log(raw: &str, settings: &Settings) -> String {
     if kept.len() > 240 {
         let mut cut = kept[..20].to_vec();
         cut.extend(kept[kept.len() - 220..].iter().cloned());
-        cut.insert(20, format!("... {} lines omitted ...", kept.len() - cut.len()));
+        cut.insert(
+            20,
+            format!("... {} lines omitted ...", kept.len() - cut.len()),
+        );
         cut.join("\n")
     } else {
         kept.join("\n")
@@ -239,8 +246,12 @@ pub(crate) fn world_stats(raw: &str) -> (Option<f32>, Option<f32>, Option<f32>, 
     let mut values: Vec<f32> = Vec::new();
     let (mut frame, mut gpu, mut draws) = (None, None, None);
     for line in clean.lines() {
-        let Some(rest) = after(line, "host: ") else { continue };
-        let line_draws = before(rest, " draws/frame").and_then(last_num).map(|v| v as u32);
+        let Some(rest) = after(line, "host: ") else {
+            continue;
+        };
+        let line_draws = before(rest, " draws/frame")
+            .and_then(last_num)
+            .map(|v| v as u32);
         if let Some(value) = before(rest, " fps,").and_then(|v| v.trim().parse().ok()) {
             if line_draws.is_some_and(|draws| draws >= 200) {
                 values.push(value);

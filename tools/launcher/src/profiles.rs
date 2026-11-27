@@ -46,9 +46,16 @@ pub(crate) fn profiles(root: &Path) -> Vec<Profile> {
                     Some(Profile {
                         name,
                         sets,
-                        note: p.get("note").and_then(|n| n.as_str()).unwrap_or("").to_string(),
+                        note: p
+                            .get("note")
+                            .and_then(|n| n.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         os: get("os").and_then(|o| o.as_str()).unwrap_or("").to_string(),
-                        vendor: get("vendor").and_then(|o| o.as_str()).unwrap_or("").to_string(),
+                        vendor: get("vendor")
+                            .and_then(|o| o.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                         vram_min: get("vram_min_mb").and_then(|o| o.as_u64()).unwrap_or(0) as u32,
                         vram_max: get("vram_max_mb")
                             .and_then(|o| o.as_u64())
