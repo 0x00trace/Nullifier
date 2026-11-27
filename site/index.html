@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nullifier — run your Xbox copy on a PC</title>
-<meta name="description" content="Nullifier runs an Xbox Series title natively on AMD/NVIDIA, Linux and Windows. No game files.">
+<title>Get started with Nullifier</title>
+<meta name="description" content="Nullifier: a compatibility layer for your own Xbox copy. No game files.">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -15,24 +15,21 @@
 
 <main class="wrap">
   <section class="hero">
-    <h1>Run your Xbox copy on a PC.</h1>
-    <p class="lead">A compatibility layer, not an emulator. Bring your own copy;
-    the project contains no game files.</p>
-    <p class="note">Tech demo: 5–6 fps in the world today. Not playable at speed yet.</p>
+    <h1>Get started with Nullifier</h1>
   </section>
 
   <section class="choice" id="start">
     <h2>What do you want to do?</h2>
     <div class="buttons">
       <button class="big" data-view="play">Play</button>
-      <button class="big" data-view="setup">Set up</button>
+      <button class="big" data-view="contribute">Contribute</button>
     </div>
   </section>
 
   <section class="pane" id="play" hidden>
     <button class="back" data-view="start">&larr; Back</button>
     <h2>Play</h2>
-    <p>You need your own copy of the game. Linux or Windows, AMD or NVIDIA.</p>
+    <p>You need your own copy of the game.</p>
 
     <h3>Linux — one command</h3>
     <div class="copybox">
@@ -53,12 +50,29 @@
     Releases, when published, are torrent-only: keep seeding.</p>
   </section>
 
-  <section class="pane" id="setup" hidden>
+  <section class="pane" id="contribute" hidden>
     <button class="back" data-view="start">&larr; Back</button>
-    <h2>Set up</h2>
-    <p>An AI assistant can clone, build and open Nullifier for you. Copy this
-    prompt and paste it into yours.</p>
+    <h2>Contribute</h2>
+    <p>You need an AI coding assistant. It will clone, build and open Nullifier
+    for you — no manual setup.</p>
 
+    <h3>Do you have an AI assistant?</h3>
+    <div class="buttons">
+      <button class="big" id="have-yes">Yes</button>
+      <button class="big" id="have-no">No, get me one</button>
+    </div>
+
+    <div id="no-ai" hidden>
+      <ol class="steps">
+        <li>Install <a href="https://opencode.ai">opencode</a> — free and open
+          source. Follow the install for your OS.</li>
+        <li>Open a terminal and run <code>opencode</code>.</li>
+        <li>Paste the prompt below into it.</li>
+      </ol>
+      <p class="note">We recommend <strong>DeepSeek V4.1</strong> as your model.</p>
+    </div>
+
+    <h3>Copy this prompt</h3>
     <div class="copybox">
       <pre id="ai-prompt">Set up Nullifier for me.
 
@@ -68,25 +82,14 @@ no game files; I supply my own copy.
 
 Run ./tools/setup.sh (Linux) or the cargo builds for Windows, build the
 launcher too, and open it. Tell me when it is ready and how to choose my game
-folder. Ask before anything destructive.</pre>
+folder. Ask before anything destructive.
+
+Then suggest three small tasks I can help with, starting with ones that do not
+need the game to be running.</pre>
       <button class="copy" data-copy="ai-prompt">Copy prompt</button>
     </div>
-
-    <p class="note">No AI yet? Install <a href="https://opencode.ai">opencode</a>,
-    open a terminal in the folder and run <code>opencode</code>, then paste the
-    prompt.</p>
-
-    <h3>Want to help build it?</h3>
-    <p>Ask the same assistant: <em>“Read AGENTS.md, then suggest three small
-    tasks I can do.”</em> Launcher, docs and testing need no game running.
-    <a href="https://github.com/iNiKKo/Nullifier/blob/main/AGENTS.md">AGENTS.md</a>
-    &middot;
-    <a href="https://github.com/iNiKKo/Nullifier/blob/main/docs/AI-NOTICE.md">AI notice</a></p>
   </section>
 
-  <section class="shot">
-    <img src="assets/play.png" alt="Nullifier Play page">
-  </section>
 </main>
 
 <footer class="wrap">

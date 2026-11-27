@@ -1,4 +1,4 @@
-const panes = ["start", "play", "setup"];
+const panes = ["start", "play", "contribute"];
 function show(id) {
   for (const pane of panes) {
     const el = document.getElementById(pane);
@@ -11,6 +11,21 @@ function show(id) {
 document.querySelectorAll("[data-view]").forEach((button) => {
   button.addEventListener("click", () => show(button.dataset.view));
 });
+const noAi = document.getElementById("no-ai");
+const yes = document.getElementById("have-yes");
+const no = document.getElementById("have-no");
+if (yes && no && noAi) {
+  yes.addEventListener("click", () => {
+    noAi.hidden = true;
+    yes.classList.add("chosen");
+    no.classList.remove("chosen");
+  });
+  no.addEventListener("click", () => {
+    noAi.hidden = false;
+    no.classList.add("chosen");
+    yes.classList.remove("chosen");
+  });
+}
 document.querySelectorAll("[data-copy]").forEach((button) => {
   button.addEventListener("click", async () => {
     const el = document.getElementById(button.dataset.copy);

@@ -37,8 +37,6 @@ a { color: var(--accent-2); }
   border-radius: 7px; padding: 5px 10px; cursor: pointer;
 }
 .copy:hover { border-color: #4b5566; }
-.shot { margin: 40px 0 0; }
-.shot img { display: block; width: 100%; border: 1px solid var(--line); border-radius: 12px; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .92em; background: #0d0f12; border: 1px solid var(--line); border-radius: 6px; padding: 1px 5px; }
 pre { background: #0d0f12; border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; }
 pre code { background: none; border: 0; padding: 0; }
