@@ -1006,6 +1006,18 @@ fn open_here(g: &mut Guards, start: usize, end: usize) -> bool {
     !blocks.is_empty()
 }
 
+/// The runtime wrote `[at, at + len)` through a path that does not fault
+/// into the guards (a file read or a decompressor writing plain title
+/// memory): the placed textures there are due again, as after a page write.
+/// Call after the write: told before, the texture pass could upload the
+/// bytes from before it and keep them, which is how a texture that was
+/// streamed in came out black.
+pub fn title_memory_written(at: usize, len: usize) {
+    if len != 0 {
+        crate::descriptor::host::remapped(at, len);
+    }
+}
+
 /// Before our own write into title memory `[at, at + len)` through the
 /// kernel (which does not fault into our handler): opens its guarded blocks.
 /// The runtime calls it (as `kernel_will_write`) before the title's kernel
