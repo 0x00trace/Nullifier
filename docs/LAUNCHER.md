@@ -262,6 +262,16 @@ it got.
 Measured on an RTX 5080, six runs in turn: 3.55 / 3.45 / 3.50 fps with the
 built server, 0.60 / 0.65 / 0.70 with Proton's own.
 
+## Host wave width
+
+`VICTORY_HOST_WAVE=32` runs every shader at 32 lanes even on a card that allows
+64; unset uses the card's maximum. On a 64-lane card this puts the console's
+wave64 compute programs in two host halves, the exact form the face network's
+16-bit sums need, and it costs frame rate. It is the comparison to make when
+mouths or teeth look wrong on AMD: `32` should be exact, `64` is the default and
+uses a single-precision shortcut in `CS_TransposeVecMatMul*` that only lanes
+inside the matrix reach.
+
 ## The title's own 30 fps cap
 
 The title's graphics settings hold a frame rate of 30, and its own limiter and

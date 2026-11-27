@@ -5333,6 +5333,7 @@ const KNOWN_SWITCHES: &[(&str, &str)] = &[
     ("VICTORY_WATER_LIGHT", "1"),
     ("VICTORY_FRAME_INTERVAL_MS", "16.667"),
     ("VICTORY_PIPELINE_WAIT_ONCE", "0"),
+    ("VICTORY_HOST_WAVE", "32"),
 ];
 
 fn danger_remove(ui: &mut egui::Ui) -> egui::Response {
@@ -5367,6 +5368,11 @@ fn describe(key: &str) -> Option<Desc> {
             "Wait once for a pipeline",
             "A host pipeline is waited for at most one budget over the whole run, not one budget every frame. After that its draws are dropped until it is made. Prevents a slow driver compile from stalling every frame it is in view.",
             "On. Turn it off only if a pipeline must be waited for again and again.",
+        ),
+        "VICTORY_HOST_WAVE" => d(
+            "Host wave width",
+            "Run shaders at 32 or 64 lanes even if the card allows both. 32 on a 64-lane card puts every console wave64 program in two host halves: exact for the face network, slower.",
+            "32 or 64. Leave it unset for the card's maximum.",
         ),
         "VICTORY_WATER_LIGHT" => d(
             "Water's tiled light",
