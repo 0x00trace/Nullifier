@@ -1734,13 +1734,34 @@ impl<'a> Lower<'a> {
                     dword(self, at)?
                 }
                 Some((width, signed)) => {
-                    // shortcut: the field is taken not to cross a dword.
                     let (not3, three) = (self.s.m.i32(!3), self.s.m.i32(3));
                     let at = self.s.m.bin(c, Bin::And, off, not3);
                     let w = dword(self, at)?;
                     let byte = self.s.m.bin(c, Bin::And, off, three);
                     let sh = self.s.m.bin(c, Bin::Shl, byte, three);
-                    let x = self.s.m.bin(c, Bin::LShr, w, sh);
+                    let mut x = self.s.m.bin(c, Bin::LShr, w, sh);
+                    if width == 16 {
+                        // A half at byte 3 of a dword has its high byte in
+                        // the next one; take it from there (the title's
+                        // face network reads some blendshape weights this
+                        // way). At the other offsets the next read repeats
+                        // this dword, so no other address is touched.
+                        // Ported from Marvisak/VIctory pull request #3333.
+                        let four = self.s.m.i32(4);
+                        let zero = self.s.m.i32(0);
+                        let is3 = self.s.m.cmp(c, pred::EQ, byte, three);
+                        let step = self.s.m.select(c, is3, four, zero);
+                        let next_at = self.s.m.bin(c, Bin::Add, at, step);
+                        let next = dword(self, next_at)?;
+                        let ff = self.s.m.i32(0xFF);
+                        let eight = self.s.m.i32(8);
+                        let masked = self.s.m.bin(c, Bin::And, next, ff);
+                        let hi = self.s.m.bin(c, Bin::Shl, masked, eight);
+                        let shifted = self.s.m.bin(c, Bin::Shl, w, eight);
+                        let low = self.s.m.bin(c, Bin::LShr, shifted, eight);
+                        let joined = self.s.m.bin(c, Bin::Or, low, hi);
+                        x = self.s.m.select(c, is3, joined, x);
+                    }
                     let left = self.s.m.i32(32 - width);
                     let x = self.s.m.bin(c, Bin::Shl, x, left);
                     self.s
@@ -9793,7 +9814,8 @@ impl<'a> Lower<'a> {
             _ => None,
         };
         // d16: two 16-bit channels per VGPR, low half first.
-        let d16 = name.starts_with("buffer_") && name.contains("_format_d16_");
+        let d16 = (name.starts_with("buffer_") || name.starts_with("tbuffer_"))
+            && name.contains("_format_d16_");
         let plain = name.replace("_format_d16_", "_format_");
         let (typed, count) = match plain
             .strip_prefix("buffer_load_")
@@ -10157,8 +10179,48 @@ impl<'a> Lower<'a> {
             let Some(Operand::Vector { reg, .. }) = *data else {
                 return Err("a buffer result");
             };
-            for (k, x) in self.format_load(h, off, f, count)?.into_iter().enumerate() {
-                self.write(inst, Reg::V(reg + k as u8), x, guard);
+            let vals = self.format_load(h, off, f, count)?;
+            if d16 {
+                // Two 16-bit channels a VGPR, low half first. A console
+                // tbuffer_load_format_d16_* was left as 32-bit channels
+                // (the first two) and the rest dropped; the face network's
+                // teeth and blendshape weights travel this way.
+                let (_, numeric) = buffer_format(f).ok_or("a buffer format")?;
+                let k16 = self.s.m.i32(16);
+                let mask16 = self.s.m.i32(0xFFFF);
+                let i32t = self.s.t.i32;
+                let pack = |l: &mut Self, x: V| match numeric {
+                    Numeric::Uint => {
+                        let hi = l.s.m.i32(0xFFFF);
+                        l.s.op(c, "binary.i32", Attr::ReadNone, i32t, 40, &[x, hi])
+                    }
+                    Numeric::Sint => {
+                        let lo = l.s.m.i32((-32768i32) as u32);
+                        let hi = l.s.m.i32(32767);
+                        let t = l.s.op(c, "binary.i32", Attr::ReadNone, i32t, 37, &[x, lo]);
+                        let t = l.s.op(c, "binary.i32", Attr::ReadNone, i32t, 38, &[t, hi]);
+                        l.s.m.bin(c, Bin::And, t, mask16)
+                    }
+                    _ => {
+                        let fv = l.as_float(x);
+                        l.s.op(c, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[fv])
+                    }
+                };
+                for k in 0..count.div_ceil(2) {
+                    let lo = pack(self, vals[(2 * k) as usize]);
+                    let packed = if 2 * k + 1 < count {
+                        let hi = pack(self, vals[(2 * k + 1) as usize]);
+                        let hi = self.s.m.bin(c, Bin::Shl, hi, k16);
+                        self.s.m.bin(c, Bin::Or, lo, hi)
+                    } else {
+                        lo
+                    };
+                    self.write(inst, Reg::V(reg + k as u8), packed, guard);
+                }
+            } else {
+                for (k, x) in vals.into_iter().enumerate() {
+                    self.write(inst, Reg::V(reg + k as u8), x, guard);
+                }
             }
             return Ok(());
         }
