@@ -2052,18 +2052,72 @@ impl<'a> Lower<'a> {
         self.f16_nearest(f)
     }
 
-    /// The sum of the low halves of `x` over the lanes that run here, in
-    /// single precision, as a half.
-    fn half_sum_here(&mut self, x: V) -> V {
+    /// [`Self::half_sum`] on one host wave of 64 lanes where some of its lanes are elsewhere:
+    /// the console's tree, in which the lanes that are not here take part with +0 (the
+    /// identity the console gives the lanes outside the mask). A lane that is elsewhere
+    /// cannot be read. So at each step a lane takes the partial sum of the run of lanes
+    /// beside its own from the first lane of that run that is here (every lane of a run that
+    /// is here holds the run's partial sum), and +0 where none of them is here; adding +0 is
+    /// the addition the console makes there. The high half is lane 0's, +0's when lane 0 is
+    /// elsewhere.
+    fn half_sum_among(&mut self, x: V) -> V {
         let c = self.cur;
-        let (i32t, f32t) = (self.s.t.i32, self.s.t.f32);
+        let i32t = self.s.t.i32;
         self.s.flags |= flags::WAVE_OPS;
-        let low = self.s.m.i32(0xFFFF);
-        let h = self.s.m.bin(c, Bin::And, x, low);
-        let f = self.s.op(c, "legacyF16ToF32", Attr::ReadNone, f32t, 131, &[h]);
-        let k = self.s.m.i8(0);
-        let sum = self.s.op(c, "waveActiveOp.f32", Attr::NoUnwind, f32t, 119, &[f, k, k]);
-        self.s.op(c, "legacyF32ToF16", Attr::ReadNone, i32t, 130, &[sum])
+        let lane = self
+            .s
+            .op(c, "waveGetLaneIndex", Attr::ReadOnly, i32t, 111, &[]);
+        let here = self.s.m.bool(true);
+        let four = self.s.m.named_struct("dx.types.fouri32", vec![i32t; 4]);
+        let ballot = self
+            .s
+            .op(c, "waveActiveBallot", Attr::NoUnwind, four, 116, &[here]);
+        let (lo, hi) = (
+            self.s.m.extract(c, ballot, 0),
+            self.s.m.extract(c, ballot, 1),
+        );
+        let (zero, one, k31, k32) = (
+            self.s.m.i32(0),
+            self.s.m.i32(1),
+            self.s.m.i32(31),
+            self.s.m.i32(32),
+        );
+        let mut sum = x;
+        for step in 0..6 {
+            // the run beside this lane's: its first lane, and which of its lanes are here
+            let size = 1u32 << step;
+            let (bit, start) = (self.s.m.i32(size), self.s.m.i32(!(size - 1)));
+            let beside = self.s.m.bin(c, Bin::Xor, lane, bit);
+            let base = self.s.m.bin(c, Bin::And, beside, start);
+            let low = self.s.m.cmp(c, pred::IULT, base, k32);
+            let word = self.s.m.select(c, low, lo, hi);
+            let shift = self.s.m.bin(c, Bin::And, base, k31);
+            let mut lanes = self.s.m.bin(c, Bin::LShr, word, shift);
+            if size < 32 {
+                let run = self.s.m.i32((1 << size) - 1);
+                lanes = self.s.m.bin(c, Bin::And, lanes, run);
+            }
+            let any = self.s.m.cmp(c, pred::NE, lanes, zero);
+            // FirstbitLo (dx.op 32): the lowest set bit
+            let first = self
+                .s
+                .op(c, "unaryBits.i32", Attr::ReadNone, i32t, 32, &[lanes]);
+            let from = self.s.m.bin(c, Bin::Add, base, first);
+            // none of them here: read this lane (one that is here); the read is not used
+            let from = self.s.m.select(c, any, from, lane);
+            let theirs = self.read_lane(sum, from);
+            let theirs = self.s.m.select(c, any, theirs, zero);
+            sum = self.add_halves(sum, theirs);
+        }
+        let (high, low) = (self.s.m.i32(0xFFFF_0000), self.s.m.i32(0xFFFF));
+        let first_here = self.s.m.bin(c, Bin::And, lo, one);
+        let first_here = self.s.m.cmp(c, pred::NE, first_here, zero);
+        let from = self.s.m.select(c, first_here, zero, lane);
+        let first = self.read_lane(x, from);
+        let first = self.s.m.select(c, first_here, first, zero);
+        let first = self.s.m.bin(c, Bin::And, first, high);
+        let sum = self.s.m.bin(c, Bin::And, sum, low);
+        self.s.m.bin(c, Bin::Or, first, sum)
     }
 
     /// `WaveActiveSum` of 16-bit floats (`x`: each lane's term in its low half, +0 in the
@@ -2074,9 +2128,10 @@ impl<'a> Lower<'a> {
     /// lane whose number differs in one bit, step by step; two host waves of 32 then exchange
     /// their halves' sums for the last addition. The high half of the result is lane 0's,
     /// which no `v_add_f16` writes.
-    /// That needs every lane of a full wave there to be read: refused where not every lane
-    /// runs, in a thread group that does not fill its waves, and for each half-wave on its
-    /// own (half a sum is no sum).
+    /// Two host waves of 32 need every lane of the full wave there to exchange: refused where
+    /// not every lane runs. One host wave of 64 follows the tree among the lanes that are
+    /// there ([`Self::half_sum_among`]). Refused in a thread group that does not fill its
+    /// waves, and for each half-wave on its own (half a sum is no sum).
     fn half_sum(&mut self, x: V) -> Result<V, Why> {
         const WHERE: Why = "a wave sum of 16-bit floats where not every lane runs";
         let threads = self.s.threads.ok_or("a wave sum of 16-bit floats outside compute")?;
@@ -2102,14 +2157,11 @@ impl<'a> Lower<'a> {
                 need(self.cur_ir);
                 return Err(WHERE);
             }
-            // One host wave of 64, some of its lanes elsewhere: their terms
-            // are +0 on the console, so the sum of the lanes here is the
-            // sum.
-            // shortcut: in single precision, rounded once; the console
-            // rounds every addition to 16 bits. (the title's
-            // neural networks, CS_TransposeVecMatMulAlignedOperation, in a
-            // block only the lanes inside the matrix reach.)
-            return Ok(self.half_sum_here(x));
+            // One host wave of 64, some of its lanes elsewhere: their terms are +0 on the
+            // console. (The title's neural networks,
+            // CS_TransposeVecMatMulAlignedOperation, in a block only the lanes inside the
+            // matrix reach.)
+            return Ok(self.half_sum_among(x));
         }
         let c = self.cur;
         let i32t = self.s.t.i32;
