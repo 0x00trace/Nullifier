@@ -70,8 +70,8 @@ shaders and emulates the one instruction.
   there: each sums the totals of the waves before its own in a loop and carries
   the sum through a first-lane read, which the lowering refused where not every
   lane runs. A value loaded from shared memory at an address that is the same
-  in every lane now counts as the same in every lane, so the read is the
-  lane's own value.
+  in every lane, into a register that held such a value before, now counts as
+  the same in every lane, so the read is the lane's own value.
 - With the builder running and `VICTORY_BVH_QUARANTINE=1`, one run of the
   opening (RTX 5080, 2560x1440 output): a world frame took 8 to 22 s, with 31
   to 165 GB of refreshes a frame, and after about 60 s the title's own code
