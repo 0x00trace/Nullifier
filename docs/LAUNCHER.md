@@ -165,7 +165,7 @@ not build it, and CI shared with the layer needs no GUI libraries.
 |---|---|---|
 | OS | `uname -s` | always `windows` |
 | Vendor | `lspci` VGA/3D line | `Win32_VideoController` name, discrete adapter preferred |
-| VRAM | `/sys/class/drm/*/mem_info_vram_total` | `HardwareInformation.qwMemorySize` (AdapterRAM caps at 4 GB) |
+| VRAM | `/sys/class/drm/*/mem_info_vram_total` | `nvidia-smi` for NVIDIA, then `HardwareInformation.qwMemorySize` (two registry roots), then AdapterRAM if it is at least 1024 MB |
 
 macOS reports `vendor=apple` and exits with "not supported yet" — see
 `docs/ROADMAP.md`. Intel is matched as `intel` but only by the `*-other`

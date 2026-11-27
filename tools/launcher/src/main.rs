@@ -437,6 +437,16 @@ fn readable_value(key: &str, value: &str) -> String {
     value.to_string()
 }
 
+fn vram_label(mb: u32) -> String {
+    if mb == 0 {
+        "unknown VRAM".into()
+    } else if mb >= 1024 {
+        format!("{:.0} GB", mb as f32 / 1024.0)
+    } else {
+        format!("{mb} MB")
+    }
+}
+
 fn settings_summary(settings: &Settings, hardware: &Hardware) -> String {
     let mut parts: Vec<String> = settings
         .sets
@@ -465,10 +475,10 @@ fn settings_summary(settings: &Settings, hardware: &Hardware) -> String {
     }
     parts.push(format!("profile={}", settings.profile));
     format!(
-        "{} | {} {:.0} GB VRAM, {}",
+        "{} | {} {}, {}",
         parts.join(" "),
         hardware.vendor.to_uppercase(),
-        hardware.vram_mb as f32 / 1024.0,
+        vram_label(hardware.vram_mb),
         std::env::consts::OS
     )
 }
@@ -1092,17 +1102,29 @@ fn settings_root_readiness(settings: &Settings) -> Readiness {
     settings.root.as_deref().map(readiness).unwrap_or_default()
 }
 
+/// The engine binary a run or a preload starts.
+fn engine_exe(root: &Path) -> Option<PathBuf> {
+    if cfg!(windows) {
+        [
+            root.join("target/release/nullifier.exe"),
+            root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe"),
+        ]
+        .into_iter()
+        .find(|path| path.is_file())
+    } else {
+        let path = root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
+        path.is_file().then_some(path)
+    }
+}
+
 /// What still has to be built or installed before Play can work.
 fn readiness(root: &Path) -> Readiness {
-    let engine = if cfg!(windows) {
-        root.join("target/release/nullifier.exe").is_file()
-            || root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe").is_file()
-    } else {
-        root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe").is_file()
-    };
-    let wineserver = data_dir()
-        .map(|d| d.join("wineserver/bin/wineserver").is_file())
-        .unwrap_or(false);
+    let engine = engine_exe(root).is_some();
+    // The built wineserver is a Linux/Wine thing; Windows uses its own server.
+    let wineserver = cfg!(windows)
+        || data_dir()
+            .map(|d| d.join("wineserver/bin/wineserver").is_file())
+            .unwrap_or(false);
     Readiness { engine, wineserver }
 }
 
@@ -1840,12 +1862,16 @@ impl App {
             self.status = "repo root not found".into();
             return;
         };
+        if cfg!(windows) && kind == Prep::Wineserver {
+            self.status = "the built wineserver is not used on Windows".into();
+            return;
+        }
         let script = match kind {
             Prep::Engine => root.join("tools/setup.sh"),
             Prep::Wineserver => root.join("tools/build-wineserver.sh"),
             Prep::Preload => root.join("tools/preload.sh"),
         };
-        if !script.is_file() {
+        if !cfg!(windows) && !script.is_file() {
             self.status = format!("missing {}", script.display());
             return;
         }
@@ -1860,16 +1886,47 @@ impl App {
                 let _ = std::fs::create_dir_all(dir);
             }
         }
-        let mut cmd = Command::new("sh");
-        cmd.arg(&script).current_dir(&root);
-        if kind == Prep::Preload {
-            cmd.env("VICTORY_GAME_DIR", &self.settings.game_dir);
-            if let Some(profile) = custom_profile(&self.settings) {
-                cmd.env("VICTORY_PROFILES", profile);
+        let mut cmd = if cfg!(windows) {
+            // The scripts are bash; Windows has cargo and the engine itself.
+            match kind {
+                Prep::Engine => {
+                    let mut c = Command::new("cargo");
+                    c.args(["build", "--release", "-p", "nullifier"])
+                        .current_dir(&root);
+                    c
+                }
+                Prep::Preload => {
+                    let Some(exe) = engine_exe(&root) else {
+                        self.status = "the engine is not built yet - build it first".into();
+                        return;
+                    };
+                    let mut c = Command::new(exe);
+                    c.arg("warm")
+                        .arg(self.settings.game_dir.trim())
+                        .current_dir(&root);
+                    c
+                }
+                Prep::Wineserver => unreachable!(),
             }
-            if !self.settings.keyboard.trim().is_empty() {
-                cmd.env("VICTORY_KEYBOARD", self.settings.keyboard.trim());
+        } else {
+            let mut c = Command::new("sh");
+            c.arg(&script).current_dir(&root);
+            if kind == Prep::Preload {
+                c.env("VICTORY_GAME_DIR", &self.settings.game_dir);
+                if let Some(profile) = custom_profile(&self.settings) {
+                    c.env("VICTORY_PROFILES", profile);
+                }
+                if !self.settings.keyboard.trim().is_empty() {
+                    c.env("VICTORY_KEYBOARD", self.settings.keyboard.trim());
+                }
             }
+            c
+        };
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
         if let Some(path) = &log {
             if let Ok(file) = std::fs::File::create(path) {
@@ -1879,6 +1936,15 @@ impl App {
                 cmd.stderr(Stdio::from(file));
             }
         }
+        let label = if cfg!(windows) {
+            match kind {
+                Prep::Engine => "cargo".to_string(),
+                Prep::Preload => "the engine".to_string(),
+                Prep::Wineserver => String::new(),
+            }
+        } else {
+            script.display().to_string()
+        };
         match cmd.spawn() {
             Ok(child) => {
                 self.prep = Some(child);
@@ -1892,7 +1958,7 @@ impl App {
                     Prep::Preload => "preloading shaders".into(),
                 };
             }
-            Err(e) => self.status = format!("cannot run {}: {e}", script.display()),
+            Err(e) => self.status = format!("cannot run {label}: {e}"),
         }
     }
 
@@ -2325,9 +2391,13 @@ impl App {
                     self.prepare(Prep::Engine);
                 }
                 ui.label(
-                    egui::RichText::new("Needs clang and lld, and an internet connection.")
-                        .small()
-                        .color(egui::Color32::GRAY),
+                    egui::RichText::new(if cfg!(windows) {
+                        "Needs the Rust toolchain with MSVC, and an internet connection."
+                    } else {
+                        "Needs clang and lld, and an internet connection."
+                    })
+                    .small()
+                    .color(egui::Color32::GRAY),
                 );
             });
         });
@@ -2339,9 +2409,9 @@ impl App {
                 "your hardware".to_string()
             } else {
                 format!(
-                    "{} · {:.0} GB",
+                    "{} · {}",
                     self.hardware.vendor.to_uppercase(),
-                    self.hardware.vram_mb as f32 / 1024.0
+                    vram_label(self.hardware.vram_mb)
                 )
             };
             ui.horizontal(|ui| {
@@ -3479,9 +3549,9 @@ impl App {
             sets: self.settings.sets.clone(),
             launcher: VERSION.to_string(),
             hardware: format!(
-                "{} {:.0} GB VRAM, {}",
+                "{} {}, {}",
                 self.hardware.vendor.to_uppercase(),
-                self.hardware.vram_mb as f32 / 1024.0,
+                vram_label(self.hardware.vram_mb),
                 std::env::consts::OS
             ),
             when,
@@ -4485,9 +4555,9 @@ impl App {
                         "Not checked yet".to_string()
                     } else {
                         format!(
-                            "{} · {:.0} GB of graphics memory",
+                            "{} · {} of graphics memory",
                             self.hardware.vendor.to_uppercase(),
-                            self.hardware.vram_mb as f32 / 1024.0
+                            vram_label(self.hardware.vram_mb)
                         )
                     });
                     if ui
@@ -5189,8 +5259,8 @@ fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
     if sets.contains_key("VICTORY_JOIN_COPIES") {
         out.push("Joined copies can crash the graphics driver; it did before on this project.".into());
     }
-    if setting_value(sets, "VICTORY_RELAY") == Some(2) {
-        out.push("Relay 2 has crashed the driver before. If a run dies, set it to 0.".into());
+    if setting_value(sets, "VICTORY_RELAY") == Some(2) && !cfg!(windows) && hw.vendor != "nvidia" {
+        out.push("Relay 2 has crashed the driver before on Linux. If a run dies, set it to 0.".into());
     }
     for key in sets.keys() {
         if key.starts_with("VICTORY_") && describe(key).is_none() {
