@@ -254,7 +254,8 @@ causes the defect is not found. → Before a change to how descriptor slots, a
 texture's host side or retired resources are held is merged, run it in turn
 with `main` about 30 times and look at the close shot with raised hands in
 every run (`docs/FINDINGS.md` 2.13). One clean run, or eight, does not show
-that a build is free of it.
+that a build is free of it. 2.19 has the counts over every run, and what was
+ruled out as the cause before the locks were tried.
 
 **World under 1.5 fps on Linux, `wineserver` at a whole core.** Wine's server
 walks a list of every view of the process at each map and unmap, and the title
