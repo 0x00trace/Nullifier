@@ -71,50 +71,21 @@ unsafe impl Sync for Host {}
 /// releases reach the host at once, from its own threads, while the host
 /// runs a submission: freeing there is a GPU page fault on the freed
 /// texture (a device hang).
-///
-/// In [`RETIRED_LISTS`] lists, one to a thread that retires (more threads
-/// than lists share them): the recording threads retire a resource for
-/// nearly every descriptor slot of the tables they make for their draws,
-/// and on one list they waited for one another's turn.
-static RETIRED: [Mutex<Vec<(u64, Retired)>>; RETIRED_LISTS] =
-    [const { Mutex::new(Vec::new()) }; RETIRED_LISTS];
-const RETIRED_LISTS: usize = 16;
-
-/// The list of [`RETIRED`] this thread retires into.
-fn retired_list() -> &'static Mutex<Vec<(u64, Retired)>> {
-    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    thread_local! {
-        static MINE: usize = NEXT.fetch_add(1, Ordering::Relaxed) % RETIRED_LISTS;
-    }
-    &RETIRED[MINE.with(|mine| *mine)]
-}
+static RETIRED: Mutex<Vec<(u64, Retired)>> = Mutex::new(Vec::new());
 /// Submissions started and finished (waited for).
 static STARTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static FINISHED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// A retired object, dropped on whatever thread finishes the submission:
-/// a host resource as it is (a descriptor slot's old one: the most
-/// frequent by far, and no block of memory is made for it), anything else
-/// in a box.
-enum Retired {
-    Resource(#[allow(dead_code)] ID3D12Resource),
-    Other(#[allow(dead_code)] Box<dyn std::any::Any>),
-}
+/// A retired object, dropped on whatever thread finishes the submission.
+struct Retired(#[allow(dead_code)] Box<dyn std::any::Any>);
 // SAFETY: what is retired is D3D12 objects (free-threaded) and the
 // reference-counted wrappers holding them, dropped once.
 unsafe impl Send for Retired {}
 
-/// Milliseconds since the first call, by the system's tick count: good to
-/// some 16 ms, which is finer than anything that asks (the nearest is
-/// [`moment`], in tenths of a second). The tick count is read from memory
-/// the system keeps up to date. `Instant::now` is a call into the system,
-/// and under Wine a system call of its own each time: every ask for a
-/// host copy stamps it with [`moment`], on five recording threads at once.
+/// Milliseconds since the first call.
 pub(crate) fn now_ms() -> u64 {
-    static EPOCH: OnceLock<u64> = OnceLock::new();
-    // SAFETY: a plain query.
-    let now = unsafe { windows_sys::Win32::System::SystemInformation::GetTickCount64() };
-    now.saturating_sub(*EPOCH.get_or_init(|| now))
+    static EPOCH: OnceLock<std::time::Instant> = OnceLock::new();
+    EPOCH.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64
 }
 
 /// This moment, for telling later how long ago it was ([`long_ago`]): the
@@ -133,19 +104,6 @@ pub(crate) fn long_ago(moment: u64, ms: u64, frames: u64) -> bool {
     let now = self::moment();
     let tenths = (now & 0xffff_ffff).saturating_sub(moment & 0xffff_ffff);
     (now >> 32).saturating_sub(moment >> 32) >= frames && tenths * 100 >= ms
-}
-
-#[cfg(test)]
-mod clock_tests {
-    /// The tick count the stamps are made from goes on while this process
-    /// calls nothing.
-    #[test]
-    fn the_coarse_clock_goes_on() {
-        let before = super::now_ms();
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        let passed = super::now_ms() - before;
-        assert!((100..2000).contains(&passed), "{passed} ms");
-    }
 }
 
 /// How many references are held on a host object (its COM count): ours
@@ -195,53 +153,33 @@ fn sweep() {
 /// Drops `object` once every submission running now has finished: at once
 /// if none is.
 pub(crate) fn retire<T: 'static>(object: T) {
-    if let Some(started) = running() {
-        retired_list()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((started, Retired::Other(Box::new(object))));
-    }
-}
-
-/// As [`retire`], for a host resource a descriptor slot held.
-pub(crate) fn retire_resource(resource: ID3D12Resource) {
-    if let Some(started) = running() {
-        retired_list()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .push((started, Retired::Resource(resource)));
-    }
-}
-
-/// The count of submissions started, if one of them is still running: what
-/// is retired now waits for those. `None`: none is running, and the caller
-/// drops its object at once.
-fn running() -> Option<u64> {
     let started = STARTED.load(Ordering::Acquire);
     if started <= FINISHED.load(Ordering::Acquire) {
         RETIREMENTS[0].fetch_add(1, Ordering::Relaxed);
-        return None;
+        drop(object);
+        return;
     }
     RETIREMENTS[1].fetch_add(1, Ordering::Relaxed);
-    Some(started)
+    RETIRED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((started, Retired(Box::new(object))));
 }
 
 /// Drops what waited for submissions up to `finished`.
 fn bury(finished: u64) {
-    for list in &RETIRED {
-        let done: Vec<(u64, Retired)> = {
-            let mut retired = list.lock().unwrap_or_else(|e| e.into_inner());
-            if retired.is_empty() {
-                continue;
-            }
-            let (done, keep) = std::mem::take(&mut *retired)
-                .into_iter()
-                .partition(|(at, _)| *at <= finished);
-            *retired = keep;
-            done
-        };
-        drop(done);
-    }
+    let done: Vec<(u64, Retired)> = {
+        let mut retired = RETIRED.lock().unwrap_or_else(|e| e.into_inner());
+        if retired.is_empty() {
+            return;
+        }
+        let (done, keep) = std::mem::take(&mut *retired)
+            .into_iter()
+            .partition(|(at, _)| *at <= finished);
+        *retired = keep;
+        done
+    };
+    drop(done);
 }
 
 /// Objects [`retire`] dropped at once (no submission was running) and
@@ -5128,24 +5066,8 @@ impl HostList {
         resource: crate::object::This,
         wanted: u32,
     ) -> Option<(&'static ID3D12Resource, u32)> {
-        let (texture, name) = crate::resource::host_named(resource)?;
-        // The list holds the copy already, for all but its first use of the
-        // texture: its state there is all that changes, and no reference
-        // to the copy is counted. (Every texture view of every draw's
-        // tables comes here, on five recording threads at once, and each
-        // took a reference of the copy and gave it back.)
-        {
-            let mut states = self.states.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(held) = states.get_mut(&name) {
-                let wanted = legal_state(texture, wanted);
-                let before = std::mem::replace(&mut held.1, wanted);
-                return (before != wanted).then_some((texture, before));
-            }
-        }
-        // The first use: the list holds the copy from here on.
+        let texture = crate::resource::host_resource(resource)?;
         let copy = crate::resource::host_copy(resource)?;
-        // SAFETY: the list holds the copy until it is reset.
-        let texture: &'static ID3D12Resource = unsafe { &*std::ptr::from_ref(&copy.texture) };
         let wanted = legal_state(texture, wanted);
         let mut states = self.states.lock().unwrap_or_else(|e| e.into_inner());
         match states.entry(std::sync::Arc::as_ptr(&copy) as usize) {
@@ -6909,7 +6831,7 @@ impl Meter {
         let Some(caption) = &self.caption else { return };
         // The fork's name and build, shown after the title's own caption.
         // Bumped by hand: this tree commits often and never cuts releases.
-        const BUILD: &str = "v0.003";
+        const BUILD: &str = "v0.004";
         let text = format!(
             " | Nullifier {BUILD} {fps:.0} fps {ms:.1} ms/frame {draws:.0} draws/frame"
         );

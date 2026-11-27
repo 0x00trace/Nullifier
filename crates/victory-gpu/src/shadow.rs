@@ -1510,7 +1510,7 @@ static LET_GO: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
 #[cfg(feature = "diagnostics")]
 pub(crate) fn windows() -> [u64; 3] {
     let asked: u64 = {
-        let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
+        let loose = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
         loose
             .values()
             .map(|s| {
@@ -1534,7 +1534,7 @@ pub(crate) fn windows() -> [u64; 3] {
 #[cfg(feature = "diagnostics")]
 pub(crate) fn window_use() -> [u64; 8] {
     let mut out = [0u64; 8];
-    let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
+    let loose = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
     for s in loose.values() {
         let copied = s.copied.lock().unwrap_or_else(|e| e.into_inner());
         let pages = copied.iter().filter(|&&at| at != 0).count() as u64;
@@ -1574,10 +1574,9 @@ pub(crate) fn let_go_idle() {
     const IDLE_MS: u64 = 10_000;
     const IDLE_FRAMES: u64 = 4;
     let gone: Vec<Arc<Shadow>> = {
-        // Held from the look to the removal, to change the table: `loose`
-        // hands a copy out as a reader of it at least, so none is handed
-        // out in between.
-        let mut map = LOOSE.write().unwrap_or_else(|e| e.into_inner());
+        // Held from the look to the removal: `loose` hands a copy out
+        // under the same lock, so none is handed out in between.
+        let mut map = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
         let idle: Vec<(u64, u64)> = map
             .iter()
             .filter(|(_, s)| {
@@ -1610,7 +1609,7 @@ pub(crate) fn let_go_idle() {
 #[cfg(feature = "diagnostics")]
 pub(crate) fn memory() -> [u64; 6] {
     let (windows, window_bytes) = {
-        let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
+        let loose = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
         // Each copy once: a window may stand under several keys.
         let mut seen = std::collections::HashSet::new();
         let bytes: u64 = loose
@@ -2774,22 +2773,10 @@ struct Entry {
 }
 
 /// Title buffers by (start address, resource), with their copy once made.
-///
-/// Read far more often than changed: every buffer view of a draw's tables
-/// asks which buffer holds its range ([`lookup`]), on five recording
-/// threads at once, and the answer is nearly always a copy that is there.
-/// Readers do not wait for one another.
-static BUFFERS: std::sync::RwLock<BTreeMap<(u64, usize), Entry>> =
-    std::sync::RwLock::new(BTreeMap::new());
+static BUFFERS: Mutex<BTreeMap<(u64, usize), Entry>> = Mutex::new(BTreeMap::new());
 
-/// The table to change.
-fn buffers() -> std::sync::RwLockWriteGuard<'static, BTreeMap<(u64, usize), Entry>> {
-    BUFFERS.write().unwrap_or_else(|e| e.into_inner())
-}
-
-/// The table to read.
-fn buffers_read() -> std::sync::RwLockReadGuard<'static, BTreeMap<(u64, usize), Entry>> {
-    BUFFERS.read().unwrap_or_else(|e| e.into_inner())
+fn buffers() -> std::sync::MutexGuard<'static, BTreeMap<(u64, usize), Entry>> {
+    BUFFERS.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// A title buffer exists at `start` (`len` bytes).
@@ -2812,7 +2799,7 @@ pub(crate) fn unregister(resource: usize, start: u64) {
 /// its copy (diagnostics: which buffer a dropped program's root view names).
 #[cfg(feature = "diagnostics")]
 pub(crate) fn extent(address: u64) -> Option<(u64, u64)> {
-    buffers_read()
+    buffers()
         .range(..=(address, usize::MAX))
         .rev()
         .take(64)
@@ -2828,7 +2815,7 @@ pub(crate) fn in_place_let_go(at: u64, len: u64) -> u64 {
     let end = at.saturating_add(len);
     let mut gone: Vec<Arc<Shadow>> = Vec::new();
     {
-        let mut map = LOOSE.write().unwrap_or_else(|e| e.into_inner());
+        let mut map = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
         let keys: Vec<(u64, u64)> = map
             .range((at.saturating_sub(WINDOW), 0)..(end, 0))
             .filter(|(key, shadow)| shadow.place.is_some() && key.0 + key.1 > at)
@@ -2856,11 +2843,8 @@ pub(crate) fn in_place_let_go(at: u64, len: u64) -> u64 {
 /// bytes, false) and the windows outside buffers that have a copy (start,
 /// bytes, true).
 pub(crate) fn spans() -> Vec<(u64, u64, bool)> {
-    let mut spans: Vec<(u64, u64, bool)> = buffers_read()
-        .iter()
-        .map(|(key, entry)| (key.0, entry.end - key.0, false))
-        .collect();
-    let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
+    let mut spans: Vec<(u64, u64, bool)> = buffers().iter().map(|(key, entry)| (key.0, entry.end - key.0, false)).collect();
+    let loose = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
     spans.extend(loose.keys().map(|&(start, len)| (start, len, true)));
     spans
 }
@@ -2899,33 +2883,17 @@ pub(crate) fn find_any(address: u64, len: u64) -> Option<Arc<Shadow>> {
 
 fn lookup(address: u64, len: u64, any: bool) -> Option<Arc<Shadow>> {
     let end = address.checked_add(len.max(1))?;
-    // As a reader first: the buffer's copy is there already, or no buffer
-    // holds the range, for all but a buffer's first ask.
-    let key = {
-        let map = buffers_read();
-        let found = map
-            .range(..=(address, usize::MAX))
-            .rev()
-            .take(64)
-            .find(|(_, e)| e.end >= end);
-        match found {
-            Some((
-                _,
-                Entry {
-                    shadow: Some(shadow),
-                    ..
-                },
-            )) => return Some(shadow.clone()),
-            Some((key, _)) => Some(*key),
-            None => None,
-        }
-    };
+    let mut map = buffers();
+    let key = map
+        .range(..=(address, usize::MAX))
+        .rev()
+        .take(64)
+        .find(|(_, e)| e.end >= end)
+        .map(|(k, _)| *k);
     let Some(key) = key else {
+        drop(map);
         return loose(address, end, len <= 1, any);
     };
-    // The buffer's first ask (or the title released it meanwhile, or
-    // another thread made the copy: looked at again).
-    let mut map = buffers();
     let entry = map.get_mut(&key)?;
     if entry.shadow.is_none() {
         let len = entry.end - key.0;
@@ -3092,7 +3060,7 @@ fn fine() -> bool {
 /// which is copied once for each.
 #[cfg(feature = "diagnostics")]
 pub(crate) fn window_cover() -> u64 {
-    let loose = LOOSE.read().unwrap_or_else(|e| e.into_inner());
+    let loose = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
     cover(loose.keys().copied())
 }
 
@@ -3123,69 +3091,33 @@ fn longest_tail(windows: impl Iterator<Item = (u64, u64)>, address: u64, end: u6
 }
 
 /// Copies of title memory outside buffers, by (start, length).
-///
-/// Read far more often than changed, as [`BUFFERS`] is: readers do not
-/// wait for one another, and a window is made (and let go) by the one
-/// thread that holds the table to change it.
-static LOOSE: std::sync::RwLock<BTreeMap<(u64, u64), Arc<Shadow>>> =
-    std::sync::RwLock::new(BTreeMap::new());
+static LOOSE: Mutex<BTreeMap<(u64, u64), Arc<Shadow>>> = Mutex::new(BTreeMap::new());
 
 fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Shadow>> {
-    // The window the ask takes, by the windows that are there (with tails
-    // or a finer grid the choice depends on them).
-    let name = |map: &BTreeMap<(u64, u64), Arc<Shadow>>| {
-        let (cell, _) = window_of(address, end, WINDOW);
-        let named = window_of(address, end, if unsized_ask { WINDOW } else { window() });
-        if unsized_ask && tails() {
-            let there = map
-                .range((cell, 0)..=(address, u64::MAX))
-                .map(|(key, _)| *key);
-            longest_tail(there, address, end).unwrap_or_else(|| tail_of(address, end))
-        } else if any && fine() && !unsized_ask {
-            // The windows that begin in the ask's cell at or below the ask (one
-            // that begins in a cell below and reaches this far is passed over:
-            // the ask then makes its own).
-            let there = map
-                .range((cell, 0)..=(address, u64::MAX))
-                .map(|(key, _)| *key);
-            holder(there, address, end).unwrap_or(named)
-        } else {
-            named
-        }
+    let mut map = LOOSE.lock().unwrap_or_else(|e| e.into_inner());
+    let (cell, _) = window_of(address, end, WINDOW);
+    let named = window_of(address, end, if unsized_ask { WINDOW } else { window() });
+    let (start, len) = if unsized_ask && tails() {
+        let there = map.range((cell, 0)..=(address, u64::MAX)).map(|(key, _)| *key);
+        longest_tail(there, address, end).unwrap_or_else(|| tail_of(address, end))
+    } else if any && fine() && !unsized_ask {
+        // The windows that begin in the ask's cell at or below the ask (one
+        // that begins in a cell below and reaches this far is passed over:
+        // the ask then makes its own).
+        let there = map.range((cell, 0)..=(address, u64::MAX)).map(|(key, _)| *key);
+        holder(there, address, end).unwrap_or(named)
+    } else {
+        named
     };
-    // Under the lock (as a reader or to change the table), with the handing
-    // out: see `let_go_idle`, which holds the table to change it.
-    // Each word is written only when the ask changes it: five recording
-    // threads ask for the same windows all the time, and every ask wrote
-    // these words, which lie beside what the same threads read of the
-    // copy. (Of the asks without a length only whether one came is read.)
+    // Under the lock, with the handing out: see `let_go_idle`.
     let note = |shadow: &Shadow| {
-        let now = crate::host::moment();
-        if shadow.used.load(Ordering::Relaxed) != now {
-            shadow.used.store(now, Ordering::Relaxed);
-        }
-        if shadow.asked[0].load(Ordering::Relaxed) > address {
-            shadow.asked[0].fetch_min(address, Ordering::Relaxed);
-        }
-        if shadow.asked[1].load(Ordering::Relaxed) < end {
-            shadow.asked[1].fetch_max(end, Ordering::Relaxed);
-        }
-        if unsized_ask && shadow.unsized_asks.load(Ordering::Relaxed) == 0 {
+        shadow.used.store(crate::host::moment(), Ordering::Relaxed);
+        shadow.asked[0].fetch_min(address, Ordering::Relaxed);
+        shadow.asked[1].fetch_max(end, Ordering::Relaxed);
+        if unsized_ask {
             shadow.unsized_asks.fetch_add(1, Ordering::Relaxed);
         }
     };
-    // As a reader first: the window is there for all but its first ask.
-    {
-        let map = LOOSE.read().unwrap_or_else(|e| e.into_inner());
-        if let Some(shadow) = map.get(&name(&map)) {
-            note(shadow);
-            return Some(shadow.clone());
-        }
-    }
-    // To make it (named again: the windows may have changed meanwhile, and
-    // another thread may have made this one).
-    let mut map = LOOSE.write().unwrap_or_else(|e| e.into_inner());
-    let (start, len) = name(&map);
     if let Some(shadow) = map.get(&(start, len)) {
         note(shadow);
         return Some(shadow.clone());
@@ -3334,49 +3266,6 @@ mod own_view_tests {
 }
 
 #[cfg(test)]
-mod loose_tests {
-    use super::{Arc, LOOSE, Ordering, Shadow, WINDOW, find};
-
-    /// Threads that ask for one window at once get the one copy, made once,
-    /// and what they asked for is noted on it.
-    #[test]
-    fn threads_asking_for_one_window_get_the_same_copy() {
-        if crate::host::host().is_none() {
-            return; // no host GPU
-        }
-        // A cell of its own (never read: a copy is filled when a list
-        // brings it up to date).
-        let cell = 0x7a_5000_0000u64;
-        let found: Vec<Arc<Shadow>> = std::thread::scope(|s| {
-            let asks: Vec<_> = (0..8u64)
-                .map(|k| s.spawn(move || find(cell + 0x1000 * k, 256).expect("a copy")))
-                .collect();
-            asks.into_iter().map(|ask| ask.join().unwrap()).collect()
-        });
-        assert!(found.iter().all(|copy| Arc::ptr_eq(copy, &found[0])));
-        // The eight asks and the table.
-        assert_eq!(Arc::strong_count(&found[0]), 9);
-        assert_eq!((found[0].start, found[0].len), (cell, WINDOW));
-        assert_eq!(found[0].asked[0].load(Ordering::Relaxed), cell);
-        assert_eq!(
-            found[0].asked[1].load(Ordering::Relaxed),
-            cell + 0x7000 + 256
-        );
-        // Asks without a length: whether one came is all that is kept.
-        assert_eq!(found[0].unsized_asks.load(Ordering::Relaxed), 0);
-        for _ in 0..3 {
-            assert!(Arc::ptr_eq(
-                &find(cell + 0x20_0000, 1).expect("the copy"),
-                &found[0]
-            ));
-        }
-        assert_eq!(found[0].unsized_asks.load(Ordering::Relaxed), 1);
-        assert_eq!(found[0].asked[1].load(Ordering::Relaxed), cell + 0x20_0001);
-        LOOSE.write().unwrap().remove(&(cell, WINDOW));
-    }
-}
-
-#[cfg(test)]
 mod window_tests {
     use super::{WINDOW, cover, grid, holder, longest_tail, tail_of, window_of};
 
@@ -3485,13 +3374,13 @@ mod window_tests {
 /// For device-removed reports: the copy of title memory whose host range
 /// starts closest below host GPU address `va`, and where `va` is in it.
 pub(crate) fn near(va: u64) -> String {
-    let mut all: Vec<(u64, u64, u64)> = buffers_read()
+    let mut all: Vec<(u64, u64, u64)> = buffers()
         .values()
         .filter_map(|e| e.shadow.as_deref().map(|s| (s.gpu, s.start, s.len)))
         .collect();
     all.extend(
         LOOSE
-            .read()
+            .lock()
             .unwrap_or_else(|e| e.into_inner())
             .values()
             .map(|s| (s.gpu, s.start, s.len)),
