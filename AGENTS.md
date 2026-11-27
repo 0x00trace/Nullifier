@@ -377,6 +377,16 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   there: `tools/bench.sh` counts lines under 10 fps, and cuts lines off
   from 10 fps on. docs/LAUNCHER.md says what is not checked about the
   picture at a smaller output.
+* **With the relay, its fetches need a queue of their own (2.18).** The
+  thread that copies back fetched what a flight's compare flagged behind
+  every submission sent since: 85 ms a frame of waiting.
+  `VICTORY_RELAY_QUEUE=1` (with `VICTORY_RELAY=2`) sends the fetches to a
+  copy queue: 6.20 / 6.45 / 6.75 fps against 5.65 / 6.00 / 6.25 with the relay
+  alone and 5.50 / 5.90 / 5.55 without it, and 9.20 / 8.70 / 9.85 against 7.80 / 8.20 / 8.40 at
+  2560x1440 output with 512 lists in the air too (frame lines of 500 draws
+  or more), with evenly spaced presents. Off by default and in no profile:
+  not run under Windows or on AMD, and the man's face was black in two of
+  the three runs with 512 lists at 3840x2160.
 
 The next wins are on the copy lane — joined submission parts, measured in
 fxceless/victory-fork and not yet ported here, and what 2.16 leads to. The
