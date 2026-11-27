@@ -1550,6 +1550,25 @@ Under Nsight Systems, in 12 s of world frames: no stalled stretch of 4.5 ms or m
 
 Data: `~/.cache/victory-captures/92-nsys` (run1 and run2 before, run3 after), `95-small-card`, `96-small-card-profile` and `97-verify` on the machine of these runs.
 
+## 2.24 The list that sends changes up: every copy, one barrier, every hash pass (2026-11-27)
+
+With every title buffer's copy in the card's memory (2.23), the list that brings the copies up to date before a submission (`Host::card_before`) records about 1,500 hash passes a frame, against about 960 with 98 copies. Each copy's hash passes stood behind a barrier of their own, which moves that copy's buffer from the copy's state to the read state, and the card waits at each such barrier for everything before it. In a timing run the lists took 19.7 ms a frame against 9.4 ms with 98 copies: about 19 µs more for each added hash pass, which is a wait for the card to empty rather than the cost of hashing.
+
+**The change** (`VICTORY_SYNC_GROUPED=1`, off by default, set in `linux-nvidia-16gb`): every copy first, then one barrier call that moves every buffer whose pieces are hashed again, then every hash pass. The copies and passes are the same: a hash pass still reads its copy after that copy's ranges were sent up, and the hash passes write pieces of their own copy's hashes only, so they need no barrier between them. This was rank 9 of the audit of 2026-11-27, after 2.8, which measured 0.40 ms for one group of passes against 1.95 ms for 40.
+
+**Measured** (RTX 5080, the profile of 2.23 with and without the switch, `VICTORY_OUTPUT=2560x1440`, 200 s runs in turn, medians of world frames by the rule of 200 draws or more, n = 31 each):
+
+| | round 1 | round 2 | round 3 |
+|---|---|---|---|
+| the profile of 2.23 | 10.40 fps | 10.70 fps | 10.50 fps |
+| with `VICTORY_SYNC_GROUPED=1` | **11.10 fps** | **11.00 fps** | **10.80 fps** |
+
+No device was removed and the driver logged no new errors. In a pair of timing runs the lists took 10.0 ms a frame instead of 19.4 ms for the same 1,500 hash passes, all commands of the title 49.0 ms instead of 58.3 ms, and the wait for the card 76.6 ms instead of 85.7 ms. The frame gains less than the timing run shows, since a timing run runs each list on its own while in a frame the card's waits overlap other work in part.
+
+**The picture**, compared as in 2.23: the best matches between the arms differ by a median of 2.4 to 2.9 (of 255), between two runs of one arm 1.8 to 3.1; the median luminance is 14.5 to 17.1 in the arm with the switch and 15.9 to 17.3 without it. The worst matches, looked at, are two different scenes at the same point of the sequence.
+
+**Not measured:** AMD, Windows, and the switch without every buffer's copy on the card (the 98 copies of before have fewer hash passes to group). Data: `~/.cache/victory-captures/98-sync-grouped` and `99-sync-grouped-profile` on the machine of these runs.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
