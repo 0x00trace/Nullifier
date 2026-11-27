@@ -1,6 +1,6 @@
 [package]
 name = "nullifier-launcher"
-version = "0.0.28"
+version = "0.0.29"
 edition = "2021"
 publish = false
 description = "Graphical front end for Nullifier: profiles, PC settings and debug switches."

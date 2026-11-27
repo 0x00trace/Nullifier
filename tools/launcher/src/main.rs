@@ -2735,6 +2735,19 @@ impl App {
             "Graphics",
             "The game's own graphics settings, from its settings.xml. Close the game before changing them.",
         );
+        egui::Frame::group(ui.style())
+            .fill(egui::Color32::from_rgb(45, 38, 24))
+            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
+            .inner_margin(egui::Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    egui::RichText::new(
+                        "Experimental — some settings are saved but do not affect the game yet.",
+                    )
+                    .color(egui::Color32::from_rgb(240, 200, 120)),
+                );
+            });
         let running = self.running();
         let mut reload = false;
         let mut advanced_open = self.game_advanced_open;
