@@ -5405,6 +5405,26 @@ fn describe(key: &str) -> Option<Desc> {
             "Show a frame without waiting for a texture upload. Faster; a texture can be black until it arrives. Off waits, which is slower but has no black pop-in.",
             "On. Turn it off only if textures look wrong.",
         ),
+        "VICTORY_TEXTURE_GUARD" => d(
+            "Check every texture every frame",
+            "Textures in the title's own memory are guarded and hashed only every eighth frame, so a write the guard misses can show a picture up to eight frames old. 0 hashes each at every check: slower, and the closer comparison when textures flicker.",
+            "Leave it unset. 0 is the comparison for flickering or black textures.",
+        ),
+        "VICTORY_KEEP_VIEWS" => d(
+            "Keep a texture's old view while it sharpens",
+            "A slot keeps showing the old view of a streamed texture until the new one is made, instead of going black for a frame. 0 makes it black at once.",
+            "On. 0 is the comparison.",
+        ),
+        "VICTORY_VIEW_GUARD" => d(
+            "Guard every view of a shared page",
+            "A write through another address of the same physical page is seen. 0 leaves those writes unseen.",
+            "On.",
+        ),
+        "VICTORY_TEXTURE_SWEEP" => d(
+            "Look for black texture slots",
+            "Goes over the title's texture views and queues those whose host slot is empty, so a texture that nothing wrote again is not black for the rest of the run. 0 turns it off.",
+            "On. 0 is the comparison.",
+        ),
         "VICTORY_CARD_HASH_LANES" => d(
             "Faster card checks",
             "Check card copies with a team of threads. Without it the check is the largest thing on the card.",
