@@ -31,32 +31,45 @@ const LAYER_VERSION: &str = "0.004";
 
 fn apply_theme(ctx: &egui::Context) {
     use egui::{Color32, FontFamily, FontId, Stroke, TextStyle};
+
+    // Shared visual tokens. Keep the palette deliberately restrained so the
+    // launcher feels at home on KDE while remaining consistent on Windows.
+    let bg = Color32::from_rgb(23, 25, 31);
+    let surface = Color32::from_rgb(34, 38, 48);
+    let raised = Color32::from_rgb(41, 46, 57);
+    let border = Color32::from_rgb(52, 58, 71);
+    let text = Color32::from_rgb(230, 233, 240);
+    let muted = Color32::from_rgb(150, 157, 171);
+
     let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-    style.spacing.button_padding = egui::vec2(12.0, 6.0);
-    style.spacing.interact_size = egui::vec2(40.0, 30.0);
-    style.spacing.indent = 16.0;
+    style.spacing.item_spacing = egui::vec2(10.0, 10.0);
+    style.spacing.button_padding = egui::vec2(13.0, 8.0);
+    style.spacing.interact_size = egui::vec2(40.0, 34.0);
+    style.spacing.indent = 18.0;
+    style.spacing.window_margin = egui::Margin::same(18);
     style.text_styles = [
-        (TextStyle::Heading, FontId::new(21.0, FontFamily::Proportional)),
+        (TextStyle::Heading, FontId::new(23.0, FontFamily::Proportional)),
         (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
         (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
         (TextStyle::Small, FontId::new(11.5, FontFamily::Proportional)),
         (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
-    ]
-    .into();
+    ].into();
+
     let mut v = egui::Visuals::dark();
-    let panel = Color32::from_rgb(24, 26, 30);
-    let card = Color32::from_rgb(30, 32, 38);
-    let line = Color32::from_rgb(50, 53, 61);
-    let ink = Color32::from_rgb(233, 235, 241);
-    v.panel_fill = Color32::from_rgb(17, 18, 21);
-    v.window_fill = panel;
-    v.faint_bg_color = card;
-    v.extreme_bg_color = Color32::from_rgb(25, 28, 33);
-    v.override_text_color = Some(ink);
+    v.panel_fill = bg;
+    v.window_fill = surface;
+    v.faint_bg_color = raised;
+    v.extreme_bg_color = Color32::from_rgb(19, 21, 26);
+    v.override_text_color = Some(text);
+    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, muted);
     v.hyperlink_color = ACCENT;
-    v.selection.bg_fill = ACCENT;
-    v.selection.stroke = Stroke::new(1.0_f32, Color32::WHITE);
+    v.selection.bg_fill = Color32::from_rgb(54, 83, 143);
+    v.selection.stroke = Stroke::new(1.0_f32, Color32::from_rgb(132, 164, 235));
+    v.window_corner_radius = 10.into();
+    v.menu_corner_radius = 8.into();
+    v.window_stroke = Stroke::new(1.0_f32, border);
+    v.popup_shadow = egui::Shadow::NONE;
+
     for w in [
         &mut v.widgets.noninteractive,
         &mut v.widgets.inactive,
@@ -66,21 +79,22 @@ fn apply_theme(ctx: &egui::Context) {
     ] {
         w.corner_radius = 7.into();
     }
-    v.widgets.noninteractive.bg_fill = card;
-    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, line);
-    v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(52, 57, 67));
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(72, 80, 94));
-    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
-    v.widgets.inactive.bg_fill = Color32::from_rgb(40, 43, 50);
-    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(36, 39, 45);
-    v.widgets.hovered.bg_fill = Color32::from_rgb(45, 49, 58);
-    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(45, 49, 58);
+    v.widgets.noninteractive.bg_fill = surface;
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, border);
+    v.widgets.inactive.bg_fill = raised;
+    v.widgets.inactive.weak_bg_fill = surface;
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, border);
+    v.widgets.hovered.bg_fill = Color32::from_rgb(49, 56, 69);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(49, 56, 69);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(76, 88, 108));
     v.widgets.active.bg_fill = ACCENT;
-    v.widgets.open.bg_fill = Color32::from_rgb(45, 49, 58);
-    v.window_corner_radius = 10.into();
-    v.menu_corner_radius = 8.into();
+    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(111, 151, 246));
+    v.widgets.open.bg_fill = raised;
+    v.widgets.open.bg_stroke = Stroke::new(1.0_f32, border);
+
     style.visuals = v;
     ctx.set_style(style);
+
 }
 
 fn main() -> eframe::Result<()> {
@@ -375,17 +389,6 @@ fn small_label(text: &str) -> egui::RichText {
         .color(egui::Color32::from_rgb(140, 146, 158))
 }
 
-fn filter_block(ui: &mut egui::Ui, width: f32, label: &str, add: impl FnOnce(&mut egui::Ui)) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(width, 44.0),
-        egui::Layout::top_down(egui::Align::Min),
-        |ui| {
-            ui.label(small_label(label));
-            add(ui);
-        },
-    );
-}
-
 fn field_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -412,6 +415,32 @@ fn field_row(
             .changed();
     });
     changed
+}
+
+fn readable_value(key: &str, value: &str) -> String {
+    if matches!(
+        key,
+        "VICTORY_VSYNC"
+            | "VICTORY_TEXTURE_NO_WAIT"
+            | "VICTORY_CARD_HASH_LANES"
+            | "VICTORY_WIDE_BACK"
+            | "VICTORY_JOIN_COPIES"
+            | "VICTORY_INDIRECT_RUNS"
+            | "VICTORY_INDIRECT_WINDOW"
+    ) {
+        return match value {
+            "1" => "on".into(),
+            "0" => "off".into(),
+            other => other.into(),
+        };
+    }
+    if key.ends_with("_MB") {
+        return format!("{value} MB");
+    }
+    if key.ends_with("_KB") {
+        return format!("{value} KB");
+    }
+    value.to_string()
 }
 
 fn settings_summary(settings: &Settings, hardware: &Hardware) -> String {
@@ -2221,55 +2250,8 @@ impl App {
         });
     }
 
-    fn launch_card(&mut self, ui: &mut egui::Ui, dir: &Path, exe: Option<&Path>) {
+    fn launch_card(&mut self, ui: &mut egui::Ui, dir: &Path, _exe: Option<&Path>) {
         card(ui, |ui| {
-            ui.horizontal(|ui| {
-                let name = dir
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("game");
-                ui.label(egui::RichText::new(name).size(16.0).strong());
-                ui.label(
-                    egui::RichText::new("game found")
-                        .small()
-                        .color(egui::Color32::from_rgb(87, 199, 133)),
-                );
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if chip_button(ui, "Change…").clicked() {
-                        self.open_game_picker();
-                    }
-                });
-            });
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(format!(
-                        "{}{}",
-                        dir.display(),
-                        exe.and_then(|e| e.file_name())
-                            .and_then(|n| n.to_str())
-                            .map(|n| format!("  ·  {n}"))
-                            .unwrap_or_default()
-                    ))
-                    .small()
-                    .color(egui::Color32::GRAY),
-                )
-                .wrap(),
-            );
-            let cold = pipeline_cache().map(|(count, _)| count == 0).unwrap_or(true);
-            if cold && self.prep.is_none() {
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("First run: shaders compile while the game loads.")
-                            .small()
-                            .color(egui::Color32::from_rgb(232, 179, 74)),
-                    );
-                    if chip_button(ui, "Preload first").clicked() {
-                        self.prepare(Prep::Preload);
-                    }
-                });
-            }
-            ui.add_space(10.0);
             let vendor = if self.hardware.vendor.is_empty() {
                 "your hardware".to_string()
             } else {
@@ -2280,49 +2262,46 @@ impl App {
                 )
             };
             ui.horizontal(|ui| {
-                if self.running() {
-                    ui.label(
-                        egui::RichText::new("Running - Esc pauses the game")
-                            .color(egui::Color32::from_rgb(87, 199, 133)),
-                    );
-                } else {
-                    let display = if self.settings.output.is_empty() {
-                        String::new()
-                    } else {
-                        format!(
-                            " · {} output{}",
-                            self.settings.output,
-                            if self.settings.render_scale > 0.0 {
-                                ", scale 1.0"
-                            } else {
-                                ""
-                            }
-                        )
-                    };
-                    ui.label(
-                        egui::RichText::new(format!("Measured settings for {vendor}{display}"))
+                ui.vertical(|ui| {
+                    let name = dir
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("game");
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(name).size(18.0).strong())
+                            .truncate(),
+                    )
+                    .on_hover_text(dir.display().to_string());
+                    let state = if self.running() {
+                        egui::RichText::new("running · Esc pauses")
                             .small()
-                            .color(if display.is_empty() {
-                                egui::Color32::GRAY
-                            } else {
-                                egui::Color32::from_rgb(232, 179, 74)
-                            }),
-                    );
-                    if chip_button(ui, "Settings…").clicked() {
-                        self.settings.show_advanced = true;
-                        self.tab = Tab::Rendering;
-                        self.settings.save();
+                            .color(egui::Color32::from_rgb(87, 199, 133))
+                    } else {
+                        egui::RichText::new(format!("game found · {vendor}"))
+                            .small()
+                            .color(egui::Color32::from_rgb(87, 199, 133))
+                    };
+                    ui.label(state);
+                    if !self.settings.output.is_empty() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} output · experimental",
+                                self.settings.output
+                            ))
+                            .small()
+                            .color(egui::Color32::from_rgb(232, 179, 74)),
+                        );
                     }
-                }
+                });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let button = if self.running() {
                         egui::Button::new(
                             egui::RichText::new("Stop").strong().color(egui::Color32::WHITE),
                         )
                         .fill(egui::Color32::from_rgb(176, 68, 68))
-                        .min_size(egui::vec2(150.0, 38.0))
+                        .min_size(egui::vec2(150.0, 40.0))
                     } else {
-                        primary("Play", 150.0, 38.0)
+                        primary("Play", 150.0, 40.0)
                     };
                     if ui.add_enabled(!self.prep.is_some() || self.running(), button).clicked() {
                         if self.running() {
@@ -2330,6 +2309,66 @@ impl App {
                         } else {
                             self.launch();
                         }
+                    }
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(34.0, 40.0),
+                        egui::Layout::centered_and_justified(egui::Direction::TopDown),
+                        |ui| {
+                            ui.menu_button(egui::RichText::new("…").size(20.0), |ui| {
+                                if ui.button("Change folder…").clicked() {
+                                    self.open_game_picker();
+                                    ui.close_menu();
+                                }
+                                if ui.button("Settings…").clicked() {
+                                    self.settings.show_advanced = true;
+                                    self.tab = Tab::Rendering;
+                                    self.settings.save();
+                                    ui.close_menu();
+                                }
+                                if ui.button("Open game folder").clicked() {
+                                    open_path(dir);
+                                    ui.close_menu();
+                                }
+                            });
+                        },
+                    );
+                });
+            });
+            ui.separator();
+            let cold = pipeline_cache().map(|(count, _)| count == 0).unwrap_or(true);
+            ui.horizontal(|ui| {
+                match pipeline_cache() {
+                    Some((count, bytes)) if count > 0 => {
+                        ui.label(
+                            egui::RichText::new("Shader cache")
+                                .small()
+                                .color(egui::Color32::from_rgb(150, 156, 168)),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{count} pipelines · {:.0} KB",
+                                bytes as f32 / 1024.0
+                            ))
+                            .small(),
+                        );
+                    }
+                    _ => {
+                        ui.label(
+                            egui::RichText::new("Shader cache is empty — the first run compiles while it loads.")
+                                .small()
+                                .color(egui::Color32::from_rgb(232, 179, 74)),
+                        );
+                    }
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let can = self.prep.is_none() && !self.running();
+                    let label = if cold { "Preload first" } else { "Preload" };
+                    if ui
+                        .add_enabled(can, secondary(label, 110.0, 28.0))
+                        .on_hover_text("Run the opening once to compile and save the pipelines.")
+                        .clicked()
+                    {
+                        self.prepare(Prep::Preload);
                     }
                 });
             });
@@ -2662,14 +2701,20 @@ impl App {
         ui.label(egui::RichText::new(&game.note).small().color(egui::Color32::GRAY));
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.spacing_mut().interact_size.y = 28.0;
-            section_header(ui, "Display");
-            render_pairs(ui, game, DISPLAY_KEYS);
-
-            section_header(ui, "Graphics");
-            render_pairs(ui, game, GRAPHICS_KEYS);
-
-            section_header(ui, "Shadows and water");
-            render_pairs(ui, game, SHADOW_KEYS);
+            card(ui, |ui| {
+                section_header(ui, "Display");
+                render_pairs(ui, game, DISPLAY_KEYS);
+            });
+            ui.add_space(6.0);
+            card(ui, |ui| {
+                section_header(ui, "Graphics");
+                render_pairs(ui, game, GRAPHICS_KEYS);
+            });
+            ui.add_space(6.0);
+            card(ui, |ui| {
+                section_header(ui, "Shadows and water");
+                render_pairs(ui, game, SHADOW_KEYS);
+            });
 
             // Everything the game writes that is not in the short lists above.
             let rest: Vec<usize> = game
@@ -2694,33 +2739,36 @@ impl App {
             )
             .fill(egui::Color32::from_rgb(32, 35, 42))
             .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(55, 60, 70)))
-            .min_size(egui::vec2(ui.available_width(), 32.0));
+            .min_size(egui::vec2(ui.available_width(), 36.0));
             if ui.add(button).clicked() {
                 advanced_open = !advanced_open;
             }
             if advanced_open {
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(
-                            "Less common values, mostly for troubleshooting. The defaults are a good starting point.",
+                ui.add_space(4.0);
+                card(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(
+                                "Less common values, mostly for troubleshooting. The defaults are a good starting point.",
+                            )
+                            .small()
+                            .color(egui::Color32::GRAY),
                         )
-                        .small()
-                        .color(egui::Color32::GRAY),
-                    )
-                    .wrap(),
-                );
-                let mut current = String::new();
-                for index in rest {
-                    let section = game.settings[index].section.clone();
-                    if section != current {
-                        if !current.is_empty() {
-                            ui.add_space(8.0);
+                        .wrap(),
+                    );
+                    let mut current = String::new();
+                    for index in rest {
+                        let section = game.settings[index].section.clone();
+                        if section != current {
+                            if !current.is_empty() {
+                                ui.add_space(8.0);
+                            }
+                            current = section.clone();
+                            section_header(ui, section_title(&section));
                         }
-                        current = section.clone();
-                        section_header(ui, section_title(&section));
+                        render_index(ui, game, index);
                     }
-                    render_index(ui, game, index);
-                }
+                });
             }
 
             ui.add_space(14.0);
@@ -3102,7 +3150,13 @@ impl App {
                             ui.ctx().copy_text(markdown);
                         }
                     }
-                    if ui.add(secondary("Copy settings", 130.0, 32.0)).clicked() {
+                    if ui
+                        .add(secondary("Copy active settings", 170.0, 32.0))
+                        .on_hover_text(
+                            "Copies the exact VICTORY_* settings and the GPU summary. No log, no paths.",
+                        )
+                        .clicked()
+                    {
                         ui.ctx()
                             .copy_text(settings_summary(&self.settings, &self.hardware));
                     }
@@ -3170,25 +3224,45 @@ impl App {
                         }
                     });
                 });
-                ui.add_space(2.0);
-                egui::Grid::new("community filters")
-                    .num_columns(3)
-                    .spacing([12.0, 8.0])
-                    .show(ui, |ui| {
+                ui.add_space(4.0);
+                let mut games: Vec<String> =
+                    self.community.iter().map(|entry| entry.game.clone()).collect();
+                games.sort();
+                games.dedup();
+                let mut areas: Vec<String> = self
+                    .community
+                    .iter()
+                    .map(|entry| entry.area.clone())
+                    .filter(|area| !area.is_empty())
+                    .collect();
+                areas.sort();
+                areas.dedup();
+                let mut versions: Vec<String> =
+                    self.community.iter().map(|entry| entry.version.clone()).collect();
+                versions.sort();
+                versions.dedup();
+                let active_filters = usize::from(!self.community_game.is_empty())
+                    + usize::from(!self.community_area_filter.is_empty())
+                    + usize::from(!self.community_version_filter.is_empty())
+                    + usize::from(self.community_notes_only);
+                ui.horizontal(|ui| {
                     ui.spacing_mut().interact_size.y = 28.0;
-                    filter_block(ui, 270.0, "Search", |ui| {
-                        ui.add_sized(
-                            [260.0, 28.0],
-                            egui::TextEdit::singleline(&mut self.community_filter)
-                                .hint_text("name, area, note, settings")
-                                .vertical_align(egui::Align::Center),
-                        );
-                    });
-                    let mut games: Vec<String> =
-                        self.community.iter().map(|e| e.game.clone()).collect();
-                    games.sort();
-                    games.dedup();
-                    filter_block(ui, 160.0, "Game", |ui| {
+                    let search_width = (ui.available_width() - 230.0).max(180.0);
+                    ui.add_sized(
+                        [search_width, 28.0],
+                        egui::TextEdit::singleline(&mut self.community_filter)
+                            .hint_text("Search name, area, notes, settings")
+                            .vertical_align(egui::Align::Center),
+                    );
+                    let filters_label = if active_filters == 0 {
+                        "Filters".to_string()
+                    } else {
+                        format!("Filters ({active_filters})")
+                    };
+                    ui.menu_button(filters_label, |ui| {
+                        ui.set_min_width(240.0);
+                        ui.spacing_mut().interact_size.y = 28.0;
+                        ui.label(small_label("Game"));
                         let current = if self.community_game.is_empty() {
                             "All".to_string()
                         } else {
@@ -3196,7 +3270,7 @@ impl App {
                         };
                         egui::ComboBox::from_id_salt("community game")
                             .selected_text(current)
-                            .width(150.0)
+                            .width(220.0)
                             .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(self.community_game.is_empty(), "All")
@@ -3213,16 +3287,7 @@ impl App {
                                     }
                                 }
                             });
-                    });
-                    let mut areas: Vec<String> = self
-                        .community
-                        .iter()
-                        .map(|entry| entry.area.clone())
-                        .filter(|area| !area.is_empty())
-                        .collect();
-                    areas.sort();
-                    areas.dedup();
-                    filter_block(ui, 160.0, "Area", |ui| {
+                        ui.label(small_label("Area"));
                         let current = if self.community_area_filter.is_empty() {
                             "All".to_string()
                         } else {
@@ -3230,7 +3295,7 @@ impl App {
                         };
                         egui::ComboBox::from_id_salt("community area")
                             .selected_text(current)
-                            .width(150.0)
+                            .width(220.0)
                             .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(self.community_area_filter.is_empty(), "All")
@@ -3247,13 +3312,7 @@ impl App {
                                     }
                                 }
                             });
-                    });
-                    ui.end_row();
-                    let mut versions: Vec<String> =
-                        self.community.iter().map(|entry| entry.version.clone()).collect();
-                    versions.sort();
-                    versions.dedup();
-                    filter_block(ui, 160.0, "Version", |ui| {
+                        ui.label(small_label("Version"));
                         let current = if self.community_version_filter.is_empty() {
                             "All".to_string()
                         } else {
@@ -3261,7 +3320,7 @@ impl App {
                         };
                         egui::ComboBox::from_id_salt("community version")
                             .selected_text(current)
-                            .width(150.0)
+                            .width(220.0)
                             .show_ui(ui, |ui| {
                                 if ui
                                     .selectable_label(
@@ -3284,39 +3343,34 @@ impl App {
                                     }
                                 }
                             });
+                        ui.add_space(4.0);
+                        ui.checkbox(&mut self.community_notes_only, "Only runs with notes");
+                        if active_filters > 0 && ui.button("Clear filters").clicked() {
+                            self.community_game.clear();
+                            self.community_area_filter.clear();
+                            self.community_version_filter.clear();
+                            self.community_notes_only = false;
+                            ui.close_menu();
+                        }
                     });
-                    filter_block(ui, 160.0, "Options", |ui| {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(150.0, 28.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.checkbox(&mut self.community_notes_only, "Notes only");
-                            },
-                        );
-                    });
-                    filter_block(ui, 160.0, "Sort", |ui| {
-                        egui::ComboBox::from_id_salt("community sort")
-                            .selected_text(if self.community_sort == 1 {
-                                "Fastest"
-                            } else {
-                                "Newest"
-                            })
-                            .width(150.0)
-                            .show_ui(ui, |ui| {
-                                if ui
-                                    .selectable_label(self.community_sort == 0, "Newest")
-                                    .clicked()
-                                {
-                                    self.community_sort = 0;
-                                }
-                                if ui
-                                    .selectable_label(self.community_sort == 1, "Fastest")
-                                    .clicked()
-                                {
-                                    self.community_sort = 1;
-                                }
-                            });
-                    });
+                    let sort_text = if self.community_sort == 1 { "Fastest" } else { "Newest" };
+                    egui::ComboBox::from_id_salt("community sort")
+                        .selected_text(sort_text)
+                        .width(95.0)
+                        .show_ui(ui, |ui| {
+                            if ui
+                                .selectable_label(self.community_sort == 0, "Newest")
+                                .clicked()
+                            {
+                                self.community_sort = 0;
+                            }
+                            if ui
+                                .selectable_label(self.community_sort == 1, "Fastest")
+                                .clicked()
+                            {
+                                self.community_sort = 1;
+                            }
+                        });
                 });
                 ui.add_space(4.0);
                 let needle = self.community_filter.to_lowercase();
@@ -3360,6 +3414,25 @@ impl App {
                         })
                         .color(egui::Color32::GRAY),
                     );
+                } else {
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        ui.add_space(10.0);
+                        ui.add_sized(
+                            [140.0, 16.0],
+                            egui::Label::new(small_label("Name")),
+                        );
+                        ui.add_sized(
+                            [56.0, 16.0],
+                            egui::Label::new(small_label("Version")),
+                        );
+                        ui.add_sized([64.0, 16.0], egui::Label::new(small_label("FPS")));
+                        ui.label(small_label("Where"));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.add_space(50.0);
+                        });
+                    });
+                    ui.separator();
                 }
                 {
                     {
@@ -3370,14 +3443,14 @@ impl App {
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.add_sized(
-                                            [110.0, 20.0],
+                                            [140.0, 20.0],
                                             egui::Label::new(
                                                 egui::RichText::new(&entry.name).strong(),
                                             )
                                             .truncate(),
                                         );
                                         ui.add_sized(
-                                            [48.0, 20.0],
+                                            [56.0, 20.0],
                                             egui::Label::new(
                                                 egui::RichText::new(format!("v{}", entry.version))
                                                     .small()
@@ -3386,7 +3459,7 @@ impl App {
                                             .truncate(),
                                         );
                                         ui.add_sized(
-                                            [62.0, 20.0],
+                                            [64.0, 20.0],
                                             egui::Label::new(
                                                 egui::RichText::new(format!(
                                                     "{:.1} fps",
@@ -3401,12 +3474,19 @@ impl App {
                                         } else {
                                             entry.area.clone()
                                         };
-                                        ui.add_sized(
-                                            [ui.available_width() - 78.0, 20.0],
-                                            egui::Label::new(
-                                                egui::RichText::new(where_at).small(),
-                                            )
-                                            .truncate(),
+                                        let area_width =
+                                            (ui.available_width() - 78.0).max(80.0);
+                                        ui.allocate_ui_with_layout(
+                                            egui::vec2(area_width, 20.0),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |ui| {
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(where_at).small(),
+                                                    )
+                                                    .truncate(),
+                                                );
+                                            },
                                         );
                                         ui.with_layout(
                                             egui::Layout::right_to_left(egui::Align::Center),
@@ -3707,14 +3787,52 @@ impl App {
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.spacing_mut().interact_size.y = 28.0;
             card(ui, |ui| {
-                ui.strong("All settings");
+                ui.horizontal(|ui| {
+                    ui.strong("All settings");
+                    let mut add = None;
+                    ui.menu_button("Add a setting…", |ui| {
+                        let mut any = false;
+                        for (key, value) in KNOWN_SWITCHES {
+                            if self.settings.sets.contains_key(*key) {
+                                continue;
+                            }
+                            any = true;
+                            let label = describe(key).map(|d| d.name).unwrap_or(key);
+                            if ui.button(format!("{label}  ({key})")).clicked() {
+                                add = Some((key.to_string(), value.to_string()));
+                                ui.close_menu();
+                            }
+                        }
+                        if !any {
+                            ui.label(
+                                egui::RichText::new("All known settings are already on.")
+                                    .small()
+                                    .color(egui::Color32::GRAY),
+                            );
+                        }
+                    });
+                    if let Some((key, value)) = add {
+                        self.settings.sets.insert(key, value);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new("Missing a switch? Add it below with a custom KEY=VALUE.")
+                                .small()
+                                .color(egui::Color32::from_rgb(130, 136, 148)),
+                        );
+                    });
+                });
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new("For troubleshooting and experiments. Each line is one setting; removing it turns it off.")
-                            .small()
-                            .color(egui::Color32::GRAY),
-                    ),
+                        egui::RichText::new(
+                            "One line per setting; removing it turns it off. Values are the engine's VICTORY_* variables.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
                 );
+                ui.add_space(4.0);
                 let mut remove = None;
                 let mut info = None;
                 let entries: Vec<(String, String)> = self
@@ -3723,67 +3841,109 @@ impl App {
                     .iter()
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
-                for (key, value) in entries {
-                    ui.horizontal(|ui| {
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(300.0, 28.0),
-                            egui::Layout::left_to_right(egui::Align::Center),
-                            |ui| {
-                                ui.label(egui::RichText::new(&key).monospace());
-                            },
-                        );
-                        if describe(&key).is_some() && help_button(ui).clicked() {
-                            info = Some(key.clone());
-                        }
-                        if chip_button(ui, "×").clicked() {
-                            remove = Some(key.clone());
-                        }
-                        let mut v = value.clone();
-                        let hint = example(&key).unwrap_or("value");
-                        if ui
-                            .add_sized(
-                                [110.0, 28.0],
-                                egui::TextEdit::singleline(&mut v)
-                                    .hint_text(hint)
-                                    .vertical_align(egui::Align::Center),
-                            )
-                            .changed()
-                        {
-                            self.settings.sets.insert(key.clone(), v);
+                egui::Grid::new("advanced settings")
+                    .num_columns(4)
+                    .spacing([10.0, 6.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label(small_label("Setting"));
+                        ui.label("");
+                        ui.label("");
+                        ui.label(small_label("Value"));
+                        ui.end_row();
+                        for (key, value) in entries {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(300.0, 28.0),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.label(egui::RichText::new(&key).monospace());
+                                },
+                            );
+                            if describe(&key).is_some() {
+                                if help_button(ui).clicked() {
+                                    info = Some(key.clone());
+                                }
+                            } else {
+                                ui.label("");
+                            }
+                            if danger_remove(ui).clicked() {
+                                remove = Some(key.clone());
+                            }
+                            let mut v = value.clone();
+                            let hint = example(&key).unwrap_or("value");
+                            if ui
+                                .add_sized(
+                                    [120.0, 28.0],
+                                    egui::TextEdit::singleline(&mut v)
+                                        .hint_text(hint)
+                                        .vertical_align(egui::Align::Center),
+                                )
+                                .changed()
+                            {
+                                self.settings.sets.insert(key.clone(), v);
+                            }
+                            ui.end_row();
                         }
                     });
-                }
                 if let Some(key) = remove {
                     self.settings.sets.remove(&key);
                 }
                 if let Some(key) = info {
                     self.info = Some(key);
                 }
-                ui.horizontal(|ui| {
-                    ui.label("Add");
-                    ui.add(egui::TextEdit::singleline(&mut self.new_key).desired_width(220.0).hint_text("VICTORY_…"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.new_value)
-                            .desired_width(110.0)
-                            .hint_text("e.g. 1 or 2048"),
-                    );
-                    if ui.button("Add").clicked() && !self.new_key.trim().is_empty() {
-                        self.settings
-                            .sets
-                            .insert(self.new_key.trim().into(), self.new_value.trim().into());
-                        self.new_key.clear();
-                        self.new_value.clear();
-                    }
-                });
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(2.0);
+                egui::CollapsingHeader::new("Custom setting (KEY=VALUE)")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.new_key)
+                                    .desired_width(240.0)
+                                    .hint_text("VICTORY_…"),
+                            );
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.new_value)
+                                    .desired_width(120.0)
+                                    .hint_text("e.g. 1 or 2048"),
+                            );
+                            if ui.button("Add").clicked()
+                                && !self.new_key.trim().is_empty()
+                            {
+                                self.settings.sets.insert(
+                                    self.new_key.trim().into(),
+                                    self.new_value.trim().into(),
+                                );
+                                self.new_key.clear();
+                                self.new_value.clear();
+                            }
+                        });
+                    });
             });
 
             ui.add_space(4.0);
             card(ui, |ui| {
-                ui.strong("Environment variables");
+                ui.horizontal(|ui| {
+                    ui.strong("Environment variables");
+                    help_button(ui).on_hover_text(
+                        "Extra KEY=VALUE variables passed to the engine at launch. The launcher already sets the profile; use this only to test an override.",
+                    );
+                });
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(
+                            "One KEY=VALUE per line. The launcher already applies the profile — use this only for a temporary override, for example VICTORY_LOG=debug.",
+                        )
+                        .small()
+                        .color(egui::Color32::GRAY),
+                    )
+                    .wrap(),
+                );
                 ui.add(
                     egui::TextEdit::multiline(&mut self.settings.extra_env)
-                        .desired_rows(4)
-                        .hint_text("VICTORY_EXAMPLE=1"),
+                        .desired_rows(3)
+                        .hint_text("VICTORY_LOG=debug"),
                 );
             });
 
@@ -3792,9 +3952,40 @@ impl App {
                 ui.strong("Profile details");
                 if let Some(profile) = self.profile() {
                     ui.label(format!("{} · {}", profile.name, profile.confidence));
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&profile.note).small().color(egui::Color32::GRAY)),
-                    );
+                    ui.add_space(4.0);
+                    let mut entries: Vec<(&str, &str)> = profile
+                        .sets
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_str()))
+                        .collect();
+                    entries.sort();
+                    egui::Grid::new("profile settings")
+                        .num_columns(2)
+                        .spacing([18.0, 5.0])
+                        .show(ui, |ui| {
+                            for (key, value) in entries {
+                                let name = describe(key).map(|d| d.name).unwrap_or(key);
+                                ui.label(name);
+                                ui.label(
+                                    egui::RichText::new(readable_value(key, value)).color(
+                                        egui::Color32::from_rgb(178, 183, 194),
+                                    ),
+                                );
+                                ui.end_row();
+                            }
+                        });
+                    egui::CollapsingHeader::new("Full note")
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&profile.note)
+                                        .small()
+                                        .color(egui::Color32::GRAY),
+                                )
+                                .wrap(),
+                            );
+                        });
                 }
             });
         });
@@ -3835,61 +4026,6 @@ impl App {
                             ui.monospace(&self.detect_output);
                         }
                     });
-            });
-
-            ui.add_space(4.0);
-            card(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("Shader cache");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let can = !self.settings.game_dir.trim().is_empty()
-                            && self.prep.is_none()
-                            && !self.running();
-                        if ui
-                            .add_enabled(can, primary("Preload now", 140.0, 30.0))
-                            .on_hover_text(
-                                "Runs the game for about two minutes to compile and save the pipelines the opening uses.",
-                            )
-                            .clicked()
-                        {
-                            self.prepare(Prep::Preload);
-                        }
-                    });
-                });
-                match pipeline_cache() {
-                    Some((count, bytes)) if count > 0 => {
-                        ui.label(format!(
-                            "{count} pipelines ready · {:.0} KB",
-                            bytes as f32 / 1024.0
-                        ));
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(
-                                    "Compiled pipelines are kept between runs and loaded while the game loads.",
-                                )
-                                .small()
-                                .color(egui::Color32::GRAY),
-                            )
-                            .wrap(),
-                        );
-                    }
-                    _ => {
-                        ui.label(
-                            egui::RichText::new("No pipelines cached yet.")
-                                .color(egui::Color32::from_rgb(232, 179, 74)),
-                        );
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(
-                                    "The first run compiles them as it goes. Preloading now makes that first session smoother; it is optional.",
-                                )
-                                .small()
-                                .color(egui::Color32::GRAY),
-                            )
-                            .wrap(),
-                        );
-                    }
-                }
             });
 
             ui.add_space(4.0);
@@ -4069,21 +4205,17 @@ impl eframe::App for App {
         }
 
         egui::SidePanel::left("rail")
-            .exact_width(162.0)
+            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(27, 30, 38)).inner_margin(egui::Margin::symmetric(14, 14)).stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(42, 46, 56))))
+            .exact_width(190.0)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new("Nullifier").size(19.0).strong());
-                ui.label(
-                    egui::RichText::new(format!("layer v{LAYER_VERSION}"))
-                        .size(11.0)
-                        .color(egui::Color32::GRAY),
-                );
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(format!("launcher {VERSION}"))
-                            .size(10.0)
-                            .color(egui::Color32::from_rgb(120, 126, 138)),
+                            .size(11.0)
+                            .color(egui::Color32::GRAY),
                     );
                     if let Some(tag) = self.update_tag.clone() {
                         if is_newer(&tag, VERSION) {
@@ -4106,6 +4238,11 @@ impl eframe::App for App {
                         }
                     }
                 });
+                ui.label(
+                    egui::RichText::new(format!("layer v{LAYER_VERSION}"))
+                        .size(10.0)
+                        .color(egui::Color32::from_rgb(120, 126, 138)),
+                );
                 ui.add_space(18.0);
                 if !self.settings.show_advanced
                     && !matches!(
@@ -4164,9 +4301,11 @@ impl eframe::App for App {
                 });
             });
 
-        egui::TopBottomPanel::bottom("log")
-            .resizable(false)
-            .exact_height(if self.log_open { 150.0 } else { 30.0 })
+        let footer = egui::TopBottomPanel::bottom("log")
+            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(27, 30, 38)).inner_margin(egui::Margin::symmetric(16, 8)).stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(42, 46, 56))))
+            .resizable(false);
+        let footer = if self.log_open { footer.exact_height(180.0) } else { footer };
+        footer
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     let live = self.running() || self.bench_running();
@@ -4176,8 +4315,9 @@ impl eframe::App for App {
                             .color(if live { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::GRAY }),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.style_mut().spacing.button_padding = egui::vec2(8.0, 3.0);
-                        ui.style_mut().spacing.interact_size.y = 22.0;
+                        ui.add_space(10.0);
+                        ui.style_mut().spacing.button_padding = egui::vec2(9.0, 4.0);
+                        ui.style_mut().spacing.interact_size.y = 26.0;
                         ui.style_mut().spacing.item_spacing.x = 6.0;
                         ui.style_mut().visuals.widgets.noninteractive.corner_radius = 4.into();
                         ui.style_mut().visuals.widgets.inactive.corner_radius = 4.into();
@@ -4223,9 +4363,12 @@ impl eframe::App for App {
                         ui.monospace(&self.log_shown);
                     });
                 }
+                ui.add_space(4.0);
             });
 
-        egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(23, 25, 31)).inner_margin(egui::Margin::symmetric(22, 18)))
+            .show(ctx, |ui| match self.tab {
             Tab::Play => self.play(ui),
             Tab::Graphics => self.game_page(ui),
             Tab::Controls => self.controls(ui),
@@ -4479,6 +4622,39 @@ fn example(key: &str) -> Option<&'static str> {
     }
 }
 
+const KNOWN_SWITCHES: &[(&str, &str)] = &[
+    ("VICTORY_VSYNC", "0"),
+    ("VICTORY_FPS_CAP", "0"),
+    ("VICTORY_TEXTURE_BUDGET_MB", "4096"),
+    ("VICTORY_CARD_BUFFERS_MB", "1024"),
+    ("VICTORY_CARD_BUFFERS_MIN_MB", "1"),
+    ("VICTORY_TEXTURE_NO_WAIT", "1"),
+    ("VICTORY_CARD_HASH_LANES", "1"),
+    ("VICTORY_WIDE_BACK", "1"),
+    ("VICTORY_CARD_REHASH_RUNS", "1"),
+    ("VICTORY_INDIRECT_WINDOW", "1"),
+    ("VICTORY_INDIRECT_RUNS", "1"),
+    ("VICTORY_JOIN_COPIES", "1"),
+    ("VICTORY_RELAY", "2"),
+    ("VICTORY_LATE_WAIT", "1"),
+    ("VICTORY_LOG", "info"),
+];
+
+fn danger_remove(ui: &mut egui::Ui) -> egui::Response {
+    ui.add(
+        egui::Button::new(
+            egui::RichText::new("Remove")
+                .size(11.0)
+                .color(egui::Color32::from_rgb(240, 126, 126)),
+        )
+        .fill(egui::Color32::from_rgb(43, 27, 29))
+        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(126, 62, 62)))
+        .min_size(egui::vec2(70.0, 28.0))
+        .corner_radius(6),
+    )
+    .on_hover_text("Removing a setting turns it off")
+}
+
 fn describe(key: &str) -> Option<Desc> {
     let d = |name, plain, safe| Some(Desc { name, plain, safe });
     match key {
@@ -4697,14 +4873,18 @@ fn help_button(ui: &mut egui::Ui) -> egui::Response {
 }
 
 fn secondary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
-    egui::Button::new(egui::RichText::new(text).color(egui::Color32::from_rgb(210, 214, 222)))
-        .fill(egui::Color32::from_rgb(40, 43, 50))
+    egui::Button::new(egui::RichText::new(text).color(egui::Color32::from_rgb(220, 224, 233)))
+        .fill(egui::Color32::from_rgb(43, 48, 59))
+        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(57, 64, 78)))
+        .corner_radius(7)
         .min_size(egui::vec2(width, height))
 }
 
 fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(text).strong().color(egui::Color32::WHITE))
         .fill(ACCENT)
+        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(105, 145, 245)))
+        .corner_radius(7)
         .min_size(egui::vec2(width, height))
 }
 
@@ -4721,25 +4901,32 @@ fn nav_group(ui: &mut egui::Ui, label: &str) {
 
 fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
     let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let background = if selected {
-            ACCENT
+            egui::Color32::from_rgb(43, 58, 91)
         } else if response.hovered() {
-            egui::Color32::from_rgb(34, 37, 44)
+            egui::Color32::from_rgb(37, 41, 51)
         } else {
             egui::Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, 6.0, background);
+        ui.painter().rect_filled(rect, 7.0, background);
+        if selected {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(rect.left_top() + egui::vec2(0.0, 7.0), egui::vec2(3.0, rect.height() - 14.0)),
+                2.0,
+                ACCENT,
+            );
+        }
         ui.painter().text(
             rect.left_center() + egui::vec2(12.0, 0.0),
             egui::Align2::LEFT_CENTER,
             label,
             egui::FontId::proportional(14.0),
             if selected {
-                egui::Color32::WHITE
+                egui::Color32::from_rgb(235, 240, 251)
             } else {
-                egui::Color32::from_rgb(178, 183, 194)
+                egui::Color32::from_rgb(178, 184, 197)
             },
         );
     }
@@ -4763,8 +4950,11 @@ fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
 }
 
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::symmetric(16, 14))
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(30, 33, 41))
+        .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(47, 52, 64)))
+        .corner_radius(10)
+        .inner_margin(egui::Margin::symmetric(18, 16))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui);
