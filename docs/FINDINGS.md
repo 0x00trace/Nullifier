@@ -1456,6 +1456,73 @@ performance counter that ticks at the rate of the time-stamp counter, which
 makes its own wait last 100 µs; or answer the title's `Sleep(0)`, after
 many in a row, with a wait of up to 100 µs that ends when a fence moves.
 
+## 2.22 Plain arithmetic in the translated programs: the two heaviest passes do not get faster (2026-11-27)
+
+Issue #51 asks whether the two heaviest compute passes, `5cf00dc39042edaf`
+(`shadowmask:CS_GenerateShadowMasks_Checkerboard_NoHair`) and
+`982f3cccd5c04294` (`scattering_transmittance_system:CS_ReconstructRaymarchClassifiedNoAlpha`),
+are slow because of how the layer emits them. Both are 32-lane programs on the
+console too, so on a 32-lane card they run in their own wave form, without
+the exchanges of 64-lane programs. Their emitted code has 2.2 and 2.7 times
+the console's instructions. Two exact forms are a part of that: a legacy
+multiply (`v_mul_legacy_f32`, 0 × anything = 0) is written as a multiply,
+two compares, an `or` and a select, and a maximum or minimum (which orders
+-0 below +0) as DXIL's plus three integer operations, a compare and a
+select.
+
+**What was measured.** The diagnostics switches `VICTORY_PLAIN_MUL` and
+`VICTORY_PLAIN_MINMAX` (`crates/victory-shader/src/emit/plain.rs`) write
+these as the one DXIL operation in the programs they name (`all`, or
+16-digit shader hashes). That is not exact: 0 × infinity gives NaN, and of a
+-0 and a +0 either can be the result. Offline, the DXIL of the two programs
+shrank from 103,808 to 88,036 bytes and from 80,756 to 70,220 bytes. Timing
+runs (`VICTORY_GPU_TIMING=1`) of 200 s in turn, RTX 5080 16 GB, NVIDIA
+620.73.04, `VICTORY_OUTPUT=2560x1440` and the four switches of the
+`linux-nvidia-16gb` profile; each value is the run's median over its world
+lines:
+
+| | shadow masks | fog reconstruction | all commands of the title, a frame |
+|---|---|---|---|
+| unchanged (4 runs) | 4.54 / 4.67 / 5.28 / 4.61 ms | 3.82 / 3.89 / 3.90 / 3.91 ms | 71.0 / 70.8 / 72.9 / 71.3 ms |
+| plain in the two programs (2 runs) | 4.77 / 4.66 ms | 3.89 / 3.86 ms | 70.3 / 71.0 ms |
+| plain in every program (2 runs) | 5.04 / 4.61 ms | 3.95 / 3.90 ms | 69.8 / 68.6 ms |
+
+No device was removed in these 8 runs and the warm-up run before the last
+row.
+
+**Reading.** The exact forms cost these two passes nothing that a timing run
+shows, so what limits them is not arithmetic. In every program together they
+cost 2 to 3 ms of the timing run's command time (3 to 4 %), spread over many
+passes of under 0.1 ms each. A cheaper exact form could gain only a part of
+that, so on this card it is not the place to start. On AMD the result can
+differ: the host there has a legacy multiply of its own.
+
+**A timestamp does not wait for earlier dispatches.** A timing run charges a
+command with the span from its timestamp to the next one. In these runs
+`indirect_light_probes:CS_Alpha_GenerateArgs` (`5b659025dbf3781d`: one
+thread, 14 console instructions, no loop) is charged 1.8 to 2.0 ms, and
+`CS_Primary_GenerateAllocatorDispatchArgs` (`75b2d419d73bf6e6`, also one
+thread) 1.8 ms. Two trials changed the build, and neither fixed it:
+
+- A global UAV barrier in front of each timestamp (two runs). The indirect
+  draws were charged 50 ms instead of 18 ms, so the barriers did stop draws
+  from running together, but the two one-thread passes kept their 1.8 to
+  2.0 ms.
+- Timestamps of their own for the layer's clamp pass in front of each
+  indirect command (two runs). The time that had been charged to
+  `CS_Alpha_GenerateArgs` moved to the clamp pass behind it: 9.8 ms a frame
+  in 570 clamp passes, the longest 2 to 4 ms. A clamp pass first waits for
+  every earlier shader write, so this is how long the card took to finish
+  the work before it, not what the clamp costs.
+
+So on this host a span measures how long the card took to finish the work
+before the next point where it waits, and the split by command stays
+approximate (2.8, 2.10). To measure what one pass costs, leave it out
+(`VICTORY_SKIP_PIPELINES`; the two passes above together: 6 ms of the
+frame's card time at this output size) or read the card's own counters. Data:
+`~/.cache/victory-captures/88-plain-arith`, `89-plain-all`, `90-serial-timing`
+and `91-clamp-rows` on the machine of these runs.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
@@ -2325,6 +2392,12 @@ Two-run variance of one config is ±30 %. Do not chase 10 %.
 * Changing the title's `settings.xml` to gain frame rate (3.29c): eight groups
   of values, among them `lodScale` 0.05 and `fsrQuality` 3, changed neither the
   frame rate, the draws a frame nor the picture. Only `gamma` is known to apply.
+* Cheaper legacy multiplies and min/max for the heaviest passes (2.22): with
+  plain arithmetic the two heaviest compute passes took as long as before on
+  an RTX 5080, and every program together gained 2 to 3 ms of timing-run
+  command time.
+* Reading a one-thread pass's 2 ms in a timing run as its own cost (2.22):
+  the timestamps do not wait for earlier dispatches, also behind a barrier.
 
 ## 8. Useful internals
 
