@@ -55,18 +55,14 @@ set -m
 RUN=$!
 set +m
 
-# Wait for the world: the first frame line below 10 fps marks entry.
+# Wait for a loaded world: two frame lines of 200 draws or more with the
+# texture slots and heap pass settled. fps alone starts the window during
+# streaming (issue #63: a 0.6 fps streaming line was taken for the world).
 ENTRY=""
 for _ in $(seq 1 "$TOTAL"); do
   sleep 1
-  if grep -qE '[0-9.]+ fps' "$LOG" 2>/dev/null; then
-    # Two samples below 10 fps: menus are 30, and a faster server (the view
-    # tree, docs/FINDINGS.md 2.5) puts the world at 3-5 fps, so a fixed
-    # "below 2" gate would never fire. One sample is a loading dip.
-    if sed 's/\x1b\[[0-9;]*m//g' "$LOG" | grep -oE '[0-9.]+ fps' | tr -d ' fps' \
-        | tail -2 | paste -sd' ' | awk 'NF == 2 && $1 < 10 && $2 < 10 {ok = 1} END {exit !ok}'; then
-      ENTRY=$(date +%s); break
-    fi
+  if python3 "$HERE/tools/frames.py" "$LOG" --ready 2>/dev/null; then
+    ENTRY=$(date +%s); break
   fi
   kill -0 $RUN 2>/dev/null || break
 done
@@ -90,12 +86,8 @@ awk -v start="$START" -v end="$END" 'NR > end { exit } NR > start' "$LOG" > "$WI
   exit 1
 }
 CLEAN=$(sed 's/\x1b\[[0-9;]*m//g' "$WINDOW_LOG")
-STATS=$(echo "$CLEAN" | grep -oE '^[^ ]* +INFO victory_gpu::host: [0-9.]+ fps' \
-  | grep -oE '[0-9.]+ fps' | tr -d ' fps' | awk '$1<10{print}' \
-  | sort -n | awk '{a[NR]=$1;s+=$1} END{if(!NR){print "0 0 0 0";exit}
-      med=(NR%2)?a[int((NR+1)/2)]:(a[NR/2]+a[NR/2+1])/2;
-      p10=a[int(NR*0.1)<1?1:int(NR*0.1)];
-      printf "%.2f %.2f %d %.2f\n", med, p10, NR, s/NR}')
+STATS=$(python3 "$HERE/tools/frames.py" "$WINDOW_LOG" --stat 2>/dev/null)
+[ -n "$STATS" ] || STATS="0 0 0 0"
 
 set -- $STATS
 REM=$(grep -c 'device removed' "$LOG" 2>/dev/null); REM=${REM:-0}
@@ -103,7 +95,7 @@ CR=$(grep -c 'unhandled exception' "$LOG" 2>/dev/null); CR=${CR:-0}
 CL=$(grep -c 'no argument clamp' "$LOG" 2>/dev/null); CL=${CL:-0}
 
 printf '\n  %-30s median %5s fps   p10 %5s   mean %5s   n=%s   removals=%s crashes=%s clamp=%s\n' \
-  "$LABEL" "$1" "$2" "$4" "$3" "$REM" "$CR" "$CL"
+  "$LABEL" "$1" "$2" "$3" "$4" "$REM" "$CR" "$CL"
 echo "  phases:"
 ./tools/frames.py "$WINDOW_LOG" 2>/dev/null | sed -n '/phase/,/^$/p' | sed 's/^/    /'
 BIGGEST=$(ls -S "$CAPDIR"/*.png 2>/dev/null | head -1)

@@ -16,11 +16,11 @@ fail=0
 cat > "$T/stub.sh" <<'SH'
 #!/usr/bin/env bash
 for _ in 1 2 3; do
-  echo "2026-11-27T00:00:00.000000Z  INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (1.0 preparing; 0.0 on the GPU), 13 draws/frame"
+  echo "2026-11-27T00:00:00.000000Z  INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (1.0 preparing: copies 0.1 ms 0.1 MB, textures 0.1 ms 0.1 MB; 0.0 on the GPU; 0.1 copying back), 13 draws/frame"
   sleep 0.2
 done
 for i in $(seq 1 30); do
-  echo "2026-11-27T00:00:00.000000Z  INFO victory_gpu::host: 4.$((i % 10)) fps, 230.0 ms/frame (40.0 preparing; 30.0 on the GPU), 3000 draws/frame"
+  echo "2026-11-27T00:00:00.000000Z  INFO victory_gpu::host: 4.$((i % 10)) fps, 230.0 ms/frame (40.0 preparing: copies 1.0 ms 1.0 MB, textures 1.0 ms 1.0 MB; 30.0 on the GPU; 1.0 copying back), 3000 draws/frame; heap buffers 1.0 passes 10.0 ms; textures picked by index: 1 uploaded so far (1 MB), 0 waiting, 0 passed over unmapped"
   sleep 0.2
 done
 SH

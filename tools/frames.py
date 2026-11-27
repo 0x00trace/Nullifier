@@ -23,6 +23,9 @@ PAT = re.compile(
     r"(?:, bindless plans ([\d.]+) ms)?; "
     r"([\d.]+) on the GPU; ([\d.]+) copying back"
 )
+DRAWS = re.compile(r"(\d+) draws/frame")
+WAITING = re.compile(r"(\d+) waiting,")
+HEAP = re.compile(r"heap buffers .*? passes ([\d.]+) ms")
 
 def parse(path):
     rows = []
@@ -40,8 +43,24 @@ def parse(path):
                 gpu=float(g[8]), back=float(g[9]),
             )
             r["unacc"] = max(0.0, r["frame"] - r["prep"] - r["gpu"] - r["back"])
+            draws = DRAWS.search(line)
+            waiting = WAITING.search(line)
+            heap = HEAP.search(line)
+            r["draws"] = int(draws.group(1)) if draws else None
+            r["waiting"] = int(waiting.group(1)) if waiting else None
+            r["heap_ms"] = float(heap.group(1)) if heap else None
             rows.append(r)
     return rows
+
+def loaded(r, world_fps):
+    """The world rule: 200 draws a frame, and a streamed world settled.
+    Falls back to fps < world_fps for logs without a draw count."""
+    if r["draws"] is None:
+        return r["fps"] < world_fps
+    return (r["draws"] >= 200
+            and (r["waiting"] is None or r["waiting"] < 2000)
+            and (r["heap_ms"] is None or r["heap_ms"] < 200.0))
+
 
 def med(rows, k):
     return st.median([r[k] for r in rows]) if rows else 0.0
@@ -54,7 +73,16 @@ def main():
     ap.add_argument("--world", type=float, default=10.0, help="fps below this counts as the world")
     ap.add_argument("--watch", type=float, default=0, metavar="SECONDS",
                     help="re-read the log every N seconds and repaint (live overlay in the terminal)")
+    ap.add_argument("--stat", action="store_true",
+                    help="print only: median p10 mean n, for scripts")
+    ap.add_argument("--ready", action="store_true",
+                    help="exit 0 when the last two frames are a loaded world")
     a = ap.parse_args()
+
+    if a.ready:
+        rows = parse(a.log)
+        ok = len(rows) >= 2 and loaded(rows[-1], a.world) and loaded(rows[-2], a.world)
+        sys.exit(0 if ok else 1)
 
     if a.watch > 0:
         import time
@@ -68,13 +96,23 @@ def main():
             sys.stdout.flush()
             time.sleep(a.watch)
 
+    if a.stat:
+        rows = parse(a.log)
+        world = [r for r in rows if loaded(r, a.world)]
+        if world:
+            fps = sorted(r["fps"] for r in world)
+            print(f"{st.median(fps):.2f} {fps[max(0, len(fps)//10)]:.2f} {st.mean(fps):.2f} {len(fps)}")
+        else:
+            print("0 0 0 0")
+        return
+
     report(a.log, a.world, a.html, a.csv)
 
 def report(path, world_fps, html_out=None, csv_out=None):
     rows = parse(path)
     if not rows:
         sys.exit("no frame lines found")
-    world = [r for r in rows if r["fps"] < world_fps]
+    world = [r for r in rows if loaded(r, world_fps)]
     print(f"{len(rows)} frames, {len(world)} in the world")
     if csv_out:
         import csv
@@ -105,8 +143,9 @@ def report(path, world_fps, html_out=None, csv_out=None):
             continue
         print(f"{label:<16}{v:>11.1f}{100*v/frame if frame else 0:>7.0f}%")
     print(f"{'frame':<16}{frame:>11.1f}")
-    print(f"\nmedian {med(world,'fps'):.2f} fps   p10 {sorted(r['fps'] for r in world)[max(0,len(world)//10)]:.2f}"
-          f"   n={len(world)}")
+    fps = sorted(r["fps"] for r in world)
+    print(f"\nmedian {med(world,'fps'):.2f} fps   p10 {fps[max(0,len(world)//10)]:.2f}"
+          f"   mean {st.mean(fps):.2f}   n={len(world)}")
     c_mb, t_mb = med(world, "copies_mb"), med(world, "tex_mb")
     print(f"bandwidth/frame: copies {c_mb:.0f} MB, textures {t_mb:.0f} MB"
           f" -> {(c_mb+t_mb)/frame*1000 if frame else 0:.0f} MB/s at {1000/frame if frame else 0:.1f} fps")

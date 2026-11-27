@@ -1621,16 +1621,50 @@ fn megabytes(text: &str) -> Option<f32> {
     first[..at].split_whitespace().last()?.parse().ok()
 }
 
-fn frame_fps(text: &str) -> Vec<f32> {
+/// One of the title's periodic frame lines, with what says whether the world
+/// is loaded: draws, texture slots still waiting and the heap pass.
+struct WorldFrame {
+    fps: f32,
+    draws: u32,
+    waiting: Option<u32>,
+    heap_ms: Option<f32>,
+}
+
+fn world_frames(text: &str) -> Vec<WorldFrame> {
     text.lines()
         .filter_map(|line| {
             let clean = strip_ansi(line);
             let rest = after(&clean, "host: ")?;
-            let value = before(rest, " fps,")?;
-            value.trim().parse::<f32>().ok()
+            let fps = before(rest, " fps,")?.trim().parse::<f32>().ok()?;
+            let draws = before(rest, " draws/frame")
+                .and_then(last_num)
+                .map(|v| v as u32)?;
+            let waiting = before(rest, " waiting,").and_then(last_num).map(|v| v as u32);
+            let heap_ms = rest
+                .split_once("heap buffers ")
+                .and_then(|(_, tail)| tail.split_once(" passes "))
+                .and_then(|(_, tail)| before(tail, " ms"))
+                .and_then(last_num);
+            Some(WorldFrame { fps, draws, waiting, heap_ms })
         })
-        .filter(|v| *v < 10.0)
         .collect()
+}
+
+/// World frames are those with 200 draws or more; menus have 13. Streaming
+/// frames can have more, so the benchmark also waits for the slots waiting
+/// and the heap pass to settle.
+fn world_fps(text: &str) -> Vec<f32> {
+    world_frames(text)
+        .into_iter()
+        .filter(world_loaded)
+        .map(|f| f.fps)
+        .collect()
+}
+
+fn world_loaded(frame: &WorldFrame) -> bool {
+    frame.draws >= 200
+        && frame.waiting.is_none_or(|waiting| waiting < 2_000)
+        && frame.heap_ms.is_none_or(|ms| ms < 200.0)
 }
 
 fn median(values: &mut [f32]) -> f32 {
@@ -2009,9 +2043,12 @@ impl App {
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
             .unwrap_or_default();
-        let seen = frame_fps(&text);
+        let seen = world_frames(&text);
         if self.bench_world.is_none() {
-            if seen.len() >= 2 && seen[seen.len() - 1] < 10.0 && seen[seen.len() - 2] < 10.0 {
+            let loaded = seen.len() >= 2
+                && world_loaded(&seen[seen.len() - 1])
+                && world_loaded(&seen[seen.len() - 2]);
+            if loaded {
                 self.bench_world = Some(std::time::Instant::now());
                 self.bench_phase = "Warming up".into();
                 self.bench_progress = 0.5;
@@ -2038,9 +2075,9 @@ impl App {
             if into >= 20.0 {
                 let from = self.bench_offset.min(text.len());
                 let slice = &text[from..];
-                let mut values = frame_fps(slice);
+                let mut values = world_fps(slice);
                 if values.is_empty() {
-                    values = seen.clone();
+                    values = seen.iter().map(|f| f.fps).collect();
                 }
                 let mut sorted = values.clone();
                 let med = median(&mut sorted);
@@ -6368,6 +6405,21 @@ INFO victory_gpu::host: 4.4 fps, 227.0 ms/frame (90.0 preparing: copies 70.0 ms 
         assert_eq!(world_stats(raw).0, None);
         let mixed = "INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame, 2 draws/frame\n                     INFO victory_gpu::host: 4.4 fps, 227.0 ms/frame, 3000 draws/frame\n";
         assert_eq!(world_stats(mixed).0, Some(4.4));
+    }
+
+    #[test]
+    fn the_benchmark_waits_for_streaming_to_settle() {
+        let line = |fps: f32, draws: u32, waiting: u32, heap: f32| {
+            format!(
+                "INFO victory_gpu::host: {fps} fps, 100.0 ms/frame (1.0 preparing; 1.0 on the GPU), {draws} draws/frame, dropped 0 without a host pipeline (0 being made) and 0 indirect; heap buffers 1.0 passes {heap} ms; textures picked by index: 10 uploaded so far (10 MB), {waiting} waiting, 0 passed over unmapped\n"
+            )
+        };
+        let streaming = line(0.6, 810, 12_599, 2_423.0);
+        let settled = line(10.8, 956, 1_282, 26.0);
+        assert!(!world_loaded(&world_frames(&streaming)[0]), "streaming is not loaded");
+        assert!(world_loaded(&world_frames(&settled)[0]), "settled world is loaded");
+        let menu = "INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (1.0 preparing; 0.0 on the GPU), 13 draws/frame\n";
+        assert_eq!(world_fps(&format!("{menu}{streaming}{settled}")), vec![10.8]);
     }
 
     #[test]
