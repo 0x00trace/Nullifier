@@ -278,6 +278,14 @@ patch and the menus run at 60.0 fps instead of 30.0. The world only gains where
 it can render faster than 33 ms; on this machine it cannot, but on an RTX card
 it is the difference between the title's 30 cap and 26–30 rendered.
 
+## Waiting for a pipeline
+
+`VICTORY_PIPELINE_WAIT_ONCE` (on by default): a host pipeline is waited for at
+most one wait budget over the whole run, not one budget in every frame that
+draws with it. A driver compile of tens of seconds (or one that never ends)
+therefore stalls one frame, not the whole time it is in view; its draws are
+dropped until it is made. `VICTORY_PIPELINE_WAIT_ONCE=0` waits as before.
+
 ## Water light (32-lane hosts)
 
 Two tiled water-light programs (`5dc3b25986622949`, `6f225b641c5b0708`) of the

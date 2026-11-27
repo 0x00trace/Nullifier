@@ -37,6 +37,9 @@ pub(crate) struct Pending {
     left_out: Option<&'static str>,
     /// When a worker began it ([`slow`]).
     begun: OnceLock<Instant>,
+    /// How long draws have waited for it so far, in microseconds
+    /// ([`wait_once`]).
+    waited_us: AtomicU64,
 }
 
 /// The light in water's volume, in tiles (water_shading:CS_TransmissionVolumetrics_Tiled
@@ -130,6 +133,7 @@ impl Pending {
             made: OnceLock::new(),
             key: key.finalize().to_hex()[..32].to_owned(),
             used: AtomicBool::new(false),
+            waited_us: AtomicU64::new(0),
         }
     }
 
@@ -281,6 +285,18 @@ pub(crate) fn early(p: &Arc<Pending>) {
 /// of waiting in every frame in which pipelines were being made (runs
 /// 34-49: "2504 ms waiting for pipelines" in each such frame).
 /// On by default; `VICTORY_PIPELINE_WAIT_SHARED=0` counts as before.
+/// Whether one pipeline is waited for at most one budget over the whole run,
+/// not one budget every frame. A make longer than the budget (a driver
+/// compile of tens of seconds, or one that never ends) otherwise cost the
+/// whole budget in every frame that asked for it; after its budget its draws
+/// are dropped until it is made. On by default;
+/// `VICTORY_PIPELINE_WAIT_ONCE=0` waits as before.
+/// Ported from trustno1-coder/VIctory-NVIDIA (GPL-3.0-or-later).
+fn wait_once() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_WAIT_ONCE").is_none_or(|v| v != "0"))
+}
+
 fn shared_budget() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("VICTORY_PIPELINE_WAIT_SHARED").is_none_or(|v| v != "0"))
@@ -304,12 +320,24 @@ fn wait(p: &Pending, frame: u64) {
     static SPENTS: [Mutex<(u64, Duration)>; 2] = [const { Mutex::new((u64::MAX, Duration::ZERO)) }; 2];
     let frame_spent = &SPENTS[usize::from(compute)];
     let shared = shared_budget();
+    // What is left of this pipeline's own budget ([`wait_once`]).
+    let own = if wait_once() {
+        let own = budget.saturating_sub(Duration::from_micros(
+            p.waited_us.load(Ordering::Relaxed),
+        ));
+        if own.is_zero() {
+            return;
+        }
+        own
+    } else {
+        Duration::MAX
+    };
     let left = {
         let mut spent = frame_spent.lock().unwrap_or_else(|e| e.into_inner());
         if spent.0 != frame {
             *spent = (frame, Duration::ZERO);
         }
-        let left = budget.saturating_sub(spent.1);
+        let left = budget.saturating_sub(spent.1).min(own);
         if shared {
             spent.1 += left;
         }
@@ -332,6 +360,10 @@ fn wait(p: &Pending, frame: u64) {
     }
     drop(held);
     let waited = started.elapsed().min(left);
+    if wait_once() && p.made.get().is_none() {
+        p.waited_us
+            .fetch_add(waited.as_micros() as u64, Ordering::Relaxed);
+    }
     let past = waited.saturating_sub(wait_budget());
     past_total.fetch_add(past.as_millis() as u64, Ordering::Relaxed);
     {

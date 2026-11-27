@@ -5295,6 +5295,7 @@ const KNOWN_SWITCHES: &[(&str, &str)] = &[
     ("VICTORY_LOG", "info"),
     ("VICTORY_WATER_LIGHT", "1"),
     ("VICTORY_FRAME_INTERVAL_MS", "16.667"),
+    ("VICTORY_PIPELINE_WAIT_ONCE", "0"),
 ];
 
 fn danger_remove(ui: &mut egui::Ui) -> egui::Response {
@@ -5324,6 +5325,11 @@ fn describe(key: &str) -> Option<Desc> {
             "World memory kept on the card",
             "The game's working memory mirrored on the card. Too much competes with textures.",
             "512 MB measured best on 16 GB; 256 MB on an 8 GB card.",
+        ),
+        "VICTORY_PIPELINE_WAIT_ONCE" => d(
+            "Wait once for a pipeline",
+            "A host pipeline is waited for at most one budget over the whole run, not one budget every frame. After that its draws are dropped until it is made. Prevents a slow driver compile from stalling every frame it is in view.",
+            "On. Turn it off only if a pipeline must be waited for again and again.",
         ),
         "VICTORY_WATER_LIGHT" => d(
             "Water's tiled light",
