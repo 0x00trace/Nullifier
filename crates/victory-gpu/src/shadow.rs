@@ -1955,8 +1955,7 @@ impl Shadow {
                     *h = merged;
                 }
                 if differs != 0 {
-                    crate::watch::writing(start + at, n);
-                    crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
+                    self.put_back(start + at, &title[..n]);
                     written += n;
                 }
             }
@@ -2044,9 +2043,122 @@ impl Shadow {
         if !merge_piece(now, held, title) {
             return 0;
         }
-        crate::watch::writing(start + at, n);
-        crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
+        self.put_back(start + at, &title[..n]);
         n
+    }
+
+    /// Stores `bytes`, what a merge made of title memory `[at, at +
+    /// bytes.len())` (inside one 64 KiB piece of the copy, as every merged
+    /// stretch is), into title memory: through a view of our own where
+    /// that is on and the memory allows it ([`Shadow::put_back_own`]), else
+    /// at the title's address with its guards opened.
+    fn put_back(&self, at: usize, bytes: &[u8]) {
+        if self.put_back_own(at, bytes) {
+            return;
+        }
+        crate::watch::writing(at, bytes.len());
+        crate::host::write_mapped(at as *mut u8, bytes.as_ptr(), bytes.len());
+    }
+
+    /// With `crate::inplace::back_own` (`VICTORY_BACK_OWN_VIEW=1`): stores
+    /// what a merge made of title memory `[at, at + bytes.len())` through a
+    /// view of our own, tells the journal, and notes the page current for
+    /// this copy if it was current before: the copy holds the same bytes
+    /// (the merge put them into both), so the next refresh need not take
+    /// the page again. The guards are not touched: a title write to the
+    /// page still faults and is reported at a later asking, which every
+    /// copy then takes, this one too. False with nothing done if the switch
+    /// is off or the memory cannot be written that way (the caller writes
+    /// as before).
+    fn put_back_own(&self, at: usize, bytes: &[u8]) -> bool {
+        static CHECK: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if !crate::inplace::back_own() {
+            return false;
+        }
+        let check = *CHECK
+            .get_or_init(|| std::env::var_os("VICTORY_BACK_OWN_CHECK").is_some_and(|v| v == "1"));
+        self.store_own(at, bytes, check)
+    }
+
+    /// [`Shadow::put_back_own`] with the switch on; `check` as
+    /// `VICTORY_BACK_OWN_CHECK=1`.
+    fn store_own(&self, at: usize, bytes: &[u8], check: bool) -> bool {
+        /// Since the start: stretches and bytes stored this way, pages
+        /// noted current for their copy, stretches written the old way;
+        /// and with `check`: stores the title's own address did not show
+        /// afterwards, pages noted current whose CPU side in the copy
+        /// differs from title memory, and those of them whose guard was
+        /// clean (a hole in the rule: a title write on its way leaves the
+        /// guard open).
+        static OWN_WRITES: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
+        let Some(shown) = crate::inplace::write_own(at, bytes) else {
+            OWN_WRITES[3].fetch_add(1, Ordering::Relaxed);
+            return false;
+        };
+        if check {
+            // The title's own address must show what went in through ours.
+            let mut back = vec![0u8; bytes.len()];
+            if crate::host::read_into(at as *const u8, &mut back) && back != bytes {
+                OWN_WRITES[4].fetch_add(1, Ordering::Relaxed);
+            }
+        }
+        let page = at / PAGE;
+        let others: Vec<usize> = shown
+            .iter()
+            .map(|&a| a / PAGE)
+            .filter(|&p| p != page)
+            .collect();
+        let (before, now) = crate::watch::wrote_own(page, &others);
+        // A placed texture there changed with no descriptor written (what
+        // `crate::watch::writing` tells the texture table on the old way).
+        crate::descriptor::host::remapped(at, bytes.len());
+        let base = self.start as usize / PAGE;
+        {
+            let mut copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(taken) = page.checked_sub(base).and_then(|i| copied.get_mut(i))
+                && *taken != 0
+                && *taken >= before
+            {
+                *taken = (*taken).max(now);
+                OWN_WRITES[2].fetch_add(1, Ordering::Relaxed);
+                // A copy in the card's memory only: its CPU side is never
+                // written by the card, so it must equal title memory now.
+                if check && self.card.is_some() {
+                    let (start, end) = (self.start as usize, (self.start + self.len) as usize);
+                    let (lo, hi) = ((page * PAGE).max(start), ((page + 1) * PAGE).min(end));
+                    if lo < hi {
+                        let mut title = vec![0u8; hi - lo];
+                        // SAFETY: inside the copy's mapping; read only.
+                        let held = unsafe {
+                            std::slice::from_raw_parts(
+                                self.data.add(lo - start).cast_const(),
+                                hi - lo,
+                            )
+                        };
+                        if crate::host::read_into(lo as *const u8, &mut title) && title != held {
+                            OWN_WRITES[5].fetch_add(1, Ordering::Relaxed);
+                            if crate::watch::clean(page) {
+                                OWN_WRITES[6].fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        OWN_WRITES[1].fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        let n = OWN_WRITES[0].fetch_add(1, Ordering::Relaxed) + 1;
+        if n.is_multiple_of(16384) {
+            tracing::info!(
+                "what shaders wrote, stored through views of our own (VICTORY_BACK_OWN_VIEW=1), since the start: {n} stretches {} MB, {} pages noted current for the copy that wrote them (not copied in again), {} stretches written the old way; with VICTORY_BACK_OWN_CHECK=1: {} stores the title's address did not show, {} pages noted current whose CPU side differs from title memory, {} of those with the guard clean",
+                OWN_WRITES[1].load(Ordering::Relaxed) >> 20,
+                OWN_WRITES[2].load(Ordering::Relaxed),
+                OWN_WRITES[3].load(Ordering::Relaxed),
+                OWN_WRITES[4].load(Ordering::Relaxed),
+                OWN_WRITES[5].load(Ordering::Relaxed),
+                OWN_WRITES[6].load(Ordering::Relaxed)
+            );
+        }
+        true
     }
 
     /// The 64 KiB pieces (cut at multiples of 64 KiB of title memory) of
@@ -2572,8 +2684,7 @@ impl Shadow {
                 *o = merged;
             }
             if differs != 0 {
-                crate::watch::writing(start + at, n);
-                crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
+                self.put_back(start + at, &title[..n]);
                 written = n;
             }
         } else {
@@ -2647,8 +2758,7 @@ impl Shadow {
         if !mapped || !changed {
             return 0;
         }
-        crate::watch::writing(start + at, n);
-        crate::host::write_mapped((start + at) as *mut u8, title.as_ptr(), n);
+        self.put_back(start + at, &title[..n]);
         n
     }
 }
@@ -3051,6 +3161,104 @@ fn loose(address: u64, end: u64, unsized_ask: bool, any: bool) -> Option<Arc<Sha
     note(&shadow);
     map.insert((start, len), shadow.clone());
     Some(shadow)
+}
+
+#[cfg(test)]
+mod own_view_tests {
+    use super::{PAGE, Shadow};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Memory as mem;
+
+    /// What goes back through a view of our own leaves the title's guard as
+    /// it is and the copy that wrote it current: that copy's next refresh
+    /// takes nothing, and every other copy of the page takes it. The old
+    /// way opens the guard, and the copy that wrote takes the page again.
+    /// A title write after such a store is still seen.
+    #[test]
+    fn what_goes_back_through_our_own_view_is_not_copied_in_again() {
+        let Some(host) = crate::host::host() else {
+            return; // no host GPU
+        };
+        const SIZE: usize = 2 * PAGE;
+        // SAFETY: a section and a view of the test's own, and plain reads
+        // and writes inside the view.
+        unsafe {
+            let section = mem::CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                std::ptr::null(),
+                mem::PAGE_READWRITE | mem::SEC_RESERVE,
+                0,
+                SIZE as u32,
+                std::ptr::null(),
+            );
+            assert!(!section.is_null());
+            let view = mem::MapViewOfFile(section, mem::FILE_MAP_WRITE, 0, 0, SIZE).Value as usize;
+            assert!(view != 0);
+            assert!(
+                !mem::VirtualAlloc(view as *const _, SIZE, mem::MEM_COMMIT, mem::PAGE_READWRITE)
+                    .is_null()
+            );
+            std::ptr::write_bytes(view as *mut u8, 0x11, SIZE);
+            crate::inplace::title_memory_section(section as usize, SIZE as u64, false);
+            crate::inplace::title_memory_view(view, SIZE, section as usize, 0);
+            let copy = || {
+                let (buffer, data) = host.shared_buffer(SIZE as u64).expect("a buffer");
+                let gpu = buffer.GetGPUVirtualAddress();
+                Shadow::new(buffer, data, gpu, view as u64, SIZE as u64)
+            };
+            let (one, other) = (copy(), copy());
+            // Both copies take both pages, which are guarded from then on.
+            assert_eq!(
+                (one.update(view, SIZE), other.update(view, SIZE)),
+                (SIZE, SIZE)
+            );
+            assert_eq!((one.update(view, SIZE), other.update(view, SIZE)), (0, 0));
+            assert!(crate::watch::clean(view / PAGE) && crate::watch::clean(view / PAGE + 1));
+            // Through our own view: the bytes are in title memory, the guard
+            // is as it was, the copy that stored has nothing to take and
+            // the other copy takes the page.
+            let bytes = [0x77u8; 64];
+            assert!(one.store_own(view + 0x100, &bytes, true));
+            assert_eq!(
+                std::slice::from_raw_parts((view + 0x100) as *const u8, 64),
+                &bytes
+            );
+            assert!(crate::watch::clean(view / PAGE));
+            assert_eq!(
+                (one.update(view, SIZE), other.update(view, SIZE)),
+                (0, PAGE)
+            );
+            // The old way, in the second page: the guard is opened, and the
+            // copy that wrote takes the page again, as the other does.
+            crate::watch::writing(view + PAGE + 0x100, bytes.len());
+            crate::host::write_mapped(
+                (view + PAGE + 0x100) as *mut u8,
+                bytes.as_ptr(),
+                bytes.len(),
+            );
+            assert!(!crate::watch::clean(view / PAGE + 1));
+            assert_eq!(
+                (one.update(view, SIZE), other.update(view, SIZE)),
+                (PAGE, PAGE)
+            );
+            // A title write to a page stored through our view faults into
+            // the guard as before, and both copies take the page.
+            assert!(one.store_own(view + 0x300, &bytes, true));
+            assert_eq!(other.update(view, SIZE), PAGE);
+            (view as *mut u8).add(0x200).write_volatile(0x99);
+            assert_eq!(
+                (one.update(view, SIZE), other.update(view, SIZE)),
+                (PAGE, PAGE)
+            );
+            drop((one, other));
+            crate::watch::title_memory_remapped(view, SIZE);
+            crate::inplace::section_gone(section as usize);
+            mem::UnmapViewOfFile(mem::MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: view as *mut _,
+            });
+            CloseHandle(section);
+        }
+    }
 }
 
 #[cfg(test)]
