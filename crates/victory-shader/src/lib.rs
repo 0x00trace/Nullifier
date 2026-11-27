@@ -57,6 +57,7 @@ pub fn sources() -> &'static [&'static str] {
         include_str!("emit/lower.rs"),
         include_str!("emit/mod.rs"),
         include_str!("emit/own_bits.rs"),
+        include_str!("emit/plain.rs"),
         include_str!("emit/rect.rs"),
         include_str!("emit/sampler.rs"),
         include_str!("emit/shader.rs"),

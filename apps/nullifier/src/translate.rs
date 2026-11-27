@@ -452,7 +452,12 @@ fn translate(
     // has them (`.cdxil`), to work on a translator gap offline
     let dump = std::env::var_os("VICTORY_FAIL_DUMP");
     let before: Option<BTreeMap<String, usize>> = dump.as_ref().map(|_| t.failed.iter().map(|(k, v)| (k.clone(), v.0)).collect());
-    translate_programs(&container, programs, &example, t, checks);
+    // Diagnostics: plain arithmetic where `VICTORY_PLAIN_MUL` or `VICTORY_PLAIN_MINMAX` names
+    // this container (`emit::plain`).
+    let plain = emit::plain::for_program(&hash);
+    emit::plain::with(plain, || {
+        translate_programs(&container, programs, &example, t, checks)
+    });
     if let (Some(dir), Some(before)) = (dump, before) {
         for (reason, (n, _)) in &t.failed {
             let was = before.get(reason).copied().unwrap_or(0);

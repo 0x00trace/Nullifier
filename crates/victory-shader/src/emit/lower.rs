@@ -3250,10 +3250,14 @@ impl<'a> Lower<'a> {
 
     /// The hardware's maximum (`max`) or minimum of two floats: as DXIL's
     /// FMax/FMin, but -0 orders below +0 (RDNA2 ISA, `v_max_f32`), where
-    /// the compare and select DXIL specifies gives either zero.
+    /// the compare and select DXIL specifies gives either zero. DXIL's alone
+    /// where [`super::plain`] asks for it (diagnostics).
     fn max_min(&mut self, max: bool, a: V, b: V) -> V {
         let c = self.cur;
         let r = self.binary(if max { 35 } else { 36 }, a, b);
+        if super::plain::on(super::plain::MINMAX) {
+            return r;
+        }
         let (ia, ib) = (self.as_int(a), self.as_int(b));
         let either = self.s.m.bin(c, Bin::Or, ia, ib);
         let magnitude = self.s.m.i32(0x7FFF_FFFF);
@@ -3455,10 +3459,14 @@ impl<'a> Lower<'a> {
         self.s.m.cast(c, Cast::Trunc, hi, self.s.t.i32)
     }
 
-    /// `0 × anything = 0`, as in D3D9.
+    /// `0 × anything = 0`, as in D3D9. A plain multiply where
+    /// [`super::plain`] asks for it (diagnostics).
     fn legacy_mul(&mut self, a: V, b: V) -> V {
         let c = self.cur;
         let m = self.s.m.bin(c, Bin::Mul, a, b);
+        if super::plain::on(super::plain::MUL) {
+            return m;
+        }
         let zero = self.s.m.f32(0);
         let az = self.s.m.cmp(c, pred::OEQ, a, zero);
         let bz = self.s.m.cmp(c, pred::OEQ, b, zero);
