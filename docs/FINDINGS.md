@@ -1071,6 +1071,95 @@ of one run each) is the same at scale 0.5 as at the default. The opening has
 no HUD and no menu in play; docs/LAUNCHER.md reports those wrong at a smaller
 output, and they were not looked at here.
 
+## 2.18 The relay's fetches on a copy queue of their own (2026-11-26)
+
+2.15 found what the thread that copies back waits for with the relay: it
+fetches the pieces that a flight's compare flagged with a list of its own on
+the host's queue, and that list runs behind every submission sent since.
+`VICTORY_RELAY_QUEUE=1` (`8c1774b`, off by default, needs `VICTORY_RELAY`)
+gives that thread a D3D12 copy queue of its own for the fetches. On this
+card under vkd3d-proton the fetches then no longer wait behind the host
+queue's submissions: the wait for them goes from about 85 ms a frame to
+about 16. How vkd3d-proton maps a copy queue to the card's queues was not
+looked up; the wait is what was measured.
+
+**What it changes for the merge.** On the host's queue a fetch ran behind
+every send of title bytes that was on the queue before it, and the merge
+left out the ranges of later sends only. On its own queue a fetch is behind
+the sends ahead of the compares of the flights being copied back (the card
+has run those) and may or may not be behind later ones. The merge is told
+the newest send ahead of those compares, and leaves out the ranges of every
+later send, which is right either way: there the title's bytes are the newer
+ones. A fetch may also bring bytes that a later flight's shaders wrote, some
+of them while the copy ran; that flight's own compare flags the piece again
+and it is fetched again.
+
+**Eighteen runs in turn** (three rounds of six configurations, 200 s a run,
+with captures; build `8c1774b`, which is the stack of 2.11 to 2.17 and this
+change; `VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1` in every row; the
+second, third and fourth row each add to the row above, and the last row
+adds those three switches to the fifth):
+
+| | median fps (lines under 10 fps) | n | median fps (lines of 500 draws or more) | frame at 3,000 draws | presents apart | times a frame what shaders wrote is copied back | the thread that copies back waits for fetches, a frame | the submitting thread waits in settles, a frame |
+|---|---|---|---|---|---|---|---|---|
+| the relay off | 5.40 / 5.70 / 5.50 | 27 / 26 / 28 | 5.50 / 5.90 / 5.55 | 168.1 / 159.7 / 168.9 ms | 122 to 170 / 119 to 170 / 124 to 172 ms | with each settle (17.0 / 16.6 / 16.7) | none: fetched in the settle | 79.5 / 78.5 / 79.2 ms |
+| + `VICTORY_RELAY=2` | 5.50 / 5.90 / 5.90 | 28 / 27 / 26 | 5.65 / 6.00 / 6.25 | 165.9 / 159.2 / 149.4 ms | 133 to 172 / 97 to 185 / 95 to 162 ms | 24.0 / 24.1 / 24.5 | 91.5 / 85.4 / 78.5 ms | 97.3 / 90.9 / 86.5 ms |
+| + `VICTORY_RELAY_QUEUE=1` | 6.20 / 6.40 / 6.70 | 27 / 27 / 27 | 6.20 / 6.45 / 6.75 | 150.9 / 149.4 / 138.0 ms | 70 to 154 / 70 to 150 / 63 to 140 ms | 52.9 / 52.5 / 50.4 | 13.1 / 15.7 / 17.7 ms | 80.2 / 77.4 / 70.5 ms |
+| + `VICTORY_LATE_WAIT_LISTS=512` | 6.30 / 6.30 / 6.75 | 27 / 27 / 28 | 6.40 / 6.35 / 6.80 | 153.5 / 147.8 / 137.9 ms | 69 to 154 / 67 to 148 / 64 to 135 ms | 53.0 / 50.2 / 50.7 | 12.4 / 15.4 / 16.2 ms | 81.6 / 77.1 / 70.7 ms |
+| 2560x1440 output: the relay off | 7.70 / 8.10 / 8.15 | 28 / 27 / 26 | 7.80 / 8.20 / 8.40 | 119.0 / 114.3 / 106.6 ms | 93 to 130 / 91 to 122 / 85 to 124 ms | with each settle (16.8 / 17.1 / 16.4) | none: fetched in the settle | 47.3 / 46.0 / 42.4 ms |
+| 2560x1440 output: the relay, its queue and 512 lists | 8.60 / 8.40 / 9.45 | 22 / 22 / 16 | 9.20 / 8.70 / 9.85 | 102.6 / 105.0 / 93.3 ms | 58 to 116 / 61 to 117 / 54 to 108 ms | 53.2 / 53.4 / 51.6 | 8.6 / 8.1 / 9.3 ms | 46.6 / 48.8 / 43.6 ms |
+
+With the queue the flights are copied back 52 times a frame where they
+were copied back 24 times, the thread that copies back waits 16 ms a frame
+for fetches where it waited 85, and the frame at 3,000 draws is 146 ms
+against 158 with the relay alone and 166 without it. At 2560x1440 output
+the last row is 100 ms against 113. The presents stay evenly spaced: with
+the queue the shortest gap of a second is 54 to 70 ms and the longest 108 to
+154 (medians of each run), unlike the pairs of 2.15, which came where fills
+did not wait. `VICTORY_LATE_WAIT_LISTS=512` on top changes nothing that
+these runs can show at 3840x2160 (the third and the fourth row).
+
+**Without captures** (one run each, 2560x1440 output, a build that also
+holds a change that is not proposed, fills of upload memory that do not
+wait; frame lines of 500 draws or more): the relay off 8.40 fps, presents
+100 to 135 ms apart; the relay with its queue and 512 lists 10.00 fps, 84 to
+120 ms apart; with fills that do not wait 10.90 fps, 23 to 155 ms apart;
+with `VICTORY_RENDER_SCALE=0.5` on top 12.40 fps, 56 to 111 ms apart. The
+profile's 3840x2160 without captures was 5.90 (2.15).
+
+**What is left.** With the relay, its queue and 512 lists the thread that
+submits still waits 76 ms a frame in settles at 3840x2160 (46 at 2560x1440
+output): about three quarters of it where a fill of upload memory reads
+what a flight's shaders may write (58 and 34 ms), the rest at the presents
+that the bench's captures make wait for the card (18 and 11 ms; two
+frames of eight). The thread that copies back waits for the card with
+nothing to copy back for 78 ms a frame (54): the card is what both wait for.
+Fills that do not wait (not proposed) take those settles away and bring
+others, for title memory that changed under shader writes, and the pairs of
+2.15 with them.
+
+**Picture.** Two sheets of captures for each of the eighteen runs, as in
+2.14: the title cards, the street, the car, its interior and the credits
+are drawn in every run, and the measure of the face areas of 2.14 finds no
+black face. That measure takes a fixed area over the first 70 % of a shot's
+captures. A stricter look at the close shot with raised hands, eight
+captures of each run cut to the man, finds more: in the fourth row his face
+is black in the last capture of the second run and in three captures of the
+third, and in the second run his top is grey with dark blocks from that shot
+on (it is black in the other seventeen runs); in the fifth row dark patches
+lie around his eyes in three captures of the third run. The other fifteen
+runs show none of these, the three with the queue alone among them. The
+same look at 18 runs of builds from before 2.11 (the sets of 2.8 and 2.9,
+and `main` @ `b91fd2e`) shows the dark patches around his eyes in three of
+them and the grey top in none.
+
+**Not measured:** Windows, where a profile sets `VICTORY_RELAY=2`; AMD and
+RADV, where a copy queue may not run apart from the host's queue; runs
+longer than 200 s; scenes after the opening. A copy queue reads the buffers
+of copies in the card's memory in whatever state the host's queue left them,
+as the relay's fetch on the host's queue does; vkd3d-proton keeps no state
+for buffers.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
