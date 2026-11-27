@@ -47,8 +47,29 @@ echo 'INFO victory_gpu::host: 4.0 fps, 250.0 ms/frame (40.0 preparing: copies 20
 FRAMES=$("$HERE/tools/frames.py" "$T/frames.log")
 grep -q 'median 4.00 fps .*n=1' <<< "$FRAMES" || { echo "FAIL: the mixed log has the wrong world median or sample count"; fail=1; }
 
+# The clean log again by draws: the ten lines have 3,000 draws each.
+echo "$OUT" | grep -qE 'by draws .*median +3\.[0-9]+ fps +n=10' || { echo "FAIL: the median by draws of the ten world lines is missing"; fail=1; }
+
+# A run over 10 fps: every world line is at 12 fps, with menu lines of 30 fps
+# and 80 draws before it. The count by rate finds no world frame; the count by
+# draws must find the ten, and the run must not be said never to have reached
+# the world.
+{
+  for i in 1 2 3; do
+    echo "INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (1.0 preparing; 0.0 on the GPU), 80 draws/frame"
+  done
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    echo "INFO victory_gpu::host: 12.$i fps, 81.0 ms/frame (40.0 preparing; 30.0 on the GPU), 3300 draws/frame"
+  done
+} > "$T/fast.log"
+OUT3="$("$HERE/tools/bench.sh" --summary "$T/fast.log" 2>&1)"
+echo "$OUT3" | grep -qE 'by draws .*median +12\.[0-9]+ fps +n=10' || { echo "FAIL: a run over 10 fps has no median by draws of its ten world lines"; fail=1; }
+echo "$OUT3" | grep -q 'never reached the world' && { echo "FAIL: a run over 10 fps is said never to have reached the world"; fail=1; }
+echo "$OUT3" | grep -q 'quote the one by draws' || { echo "FAIL: a run over 10 fps gets no note to quote the median by draws"; fail=1; }
+
 if [ "$fail" != 0 ]; then
   echo "--- the report of the clean log:"; echo "$OUT"
+  echo "--- the report of the fast log:"; echo "$OUT3"
   echo "--- the report of the other:"; echo "$OUT2"
   exit 1
 fi

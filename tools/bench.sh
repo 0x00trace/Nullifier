@@ -12,6 +12,10 @@
 # only number comparable between runs: menu/loading frames are 30 fps and
 # would flatter any configuration. Peaks are reported but are scenes, not
 # settings. See docs/FORK.md for the protocol and why it is medians.
+#
+# A second line reports the same median over the frame lines of 500 draws or
+# more, whatever their rate. The first count cuts lines off once a
+# configuration reaches 10 fps; quote the second one there.
 set -uo pipefail
 
 # --summary LOG: report on an existing log and run nothing.
@@ -67,11 +71,31 @@ STATS=$(echo "$CLEAN" | grep -oE '[0-9.]+ fps' | tr -d ' fps' | awk '$1 < 10 {pr
 set -- $STATS
 MED=$1 MIN=$2 MAX=$3 N=$4
 
+# The same, with a world frame told by its draws: a frame line of 500 draws or
+# more, at any rate. A menu or loading frame has a few hundred at most. Under
+# 10 fps the two counts take nearly the same lines. From 10 fps on the count
+# above leaves lines out (a run at 10.0 fps by this count was reported as 9.20
+# with n=13 of 31), and at 12 fps it leaves nearly all of them out.
+DSTATS=$(echo "$CLEAN" | grep -oE '[0-9.]+ fps, .*[^0-9][0-9]+ draws/frame' \
+  | awk '{ n = split($0, f, " "); if (f[n-1] + 0 >= 500) print f[1] }' | sort -n | awk '
+  {a[NR]=$1}
+  END {
+    if (!NR) { print "0 0"; exit }
+    med = (NR%2) ? a[(NR+1)/2] : (a[NR/2]+a[NR/2+1])/2
+    printf "%.2f %d\n", med, NR
+  }')
+set -- $DSTATS
+DMED=$1 DN=$2
+
 printf '\n  %-28s median %5s fps   min %5s   max %5s   n=%s\n' "$LABEL" "$MED" "$MIN" "$MAX" "$N"
+printf '  %-28s by draws (500 or more a frame): median %5s fps   n=%s\n' "" "$DMED" "$DN"
 printf '  %-28s removals %s   faults %s   clamp-fail %s   indirect-dropped %s   exit %s\n' "" "$REMOVALS" "$FAULTS" "$CLAMP" "${INDIRECT:-0}" "$CODE"
 
-if [ "$N" -lt 8 ]; then
+if [ "$N" -lt 8 ] && [ "$DN" -lt 8 ]; then
   echo "  note: fewer than 8 world frames sampled; the run probably never reached the world"
+fi
+if [ "$DN" -gt $((N + N / 4)) ]; then
+  echo "  note: $((DN - N)) world frame lines are at 10 fps or over and not in the first median; quote the one by draws"
 fi
 if [ "$REMOVALS" != "0" ]; then
   echo "  note: the host device was removed - this configuration is not stable"
