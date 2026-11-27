@@ -64,11 +64,14 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   `Space`, `F1`, or one letter). Sticks and triggers stay W/A/S/D, I/J/K/L, Z/C.
   **Test input** shows the last key you pressed and which pad button it fires,
   the live mouse movement and the right-stick values it produces, so bindings
-  can be checked before starting the game. **Mouse look** is opt-in and
-  experimental: while the game has focus and no pad is connected, the cursor is
-  kept in the window and its movement turns the right stick; sensitivity and
-  inversion are on the same page. Menu navigation with the mouse is not
-  included. The mode reaches the engine as `VICTORY_INPUT=auto|controller|keyboard`.
+  can be checked before starting the game. **Mouse look** is opt-in: while the
+  game has focus and no pad is connected, the cursor is hidden and kept in the
+  window, its movement turns the right stick, and (by default) the left button
+  is the right trigger (fire) and the right button the left trigger (aim);
+  sensitivity, inversion and the buttons are on the same page. Menu navigation
+  with the mouse is not included. The mode reaches the engine as
+  `VICTORY_INPUT=auto|controller|keyboard`, the buttons can be turned off with
+  `VICTORY_MOUSE_BUTTONS=0`.
 * **Community** — each run records the **translation layer** version (the
   title window's `v0.004` build string) and the launcher version separately;
   a nickname, **where** in the game the run was and **notes**
@@ -88,8 +91,6 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   frame rate limit), then memory and copies, the draw path, and timing — in
   plain words. Every switch has a small round `?` that explains it, and every
   number shows examples (`2048, 3072 or 4096 (MB)`) under its description.
-  Values that are 0–1 are shown as percentages, LOD scales as `1.00×`, and the
-  quality preset as game default/preset choices.
   **Display output** (experimental) picks a smaller output size and/or a
   native render scale; the active choice is repeated in amber on Play, because
   it is easy to forget and it changes how the picture looks.
@@ -97,14 +98,19 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   yellow panel: a texture budget above the card's VRAM, world memory over half
   of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
 * **Graphics** — the title's own graphics settings, parsed from its
-  `settings.xml` (88
-  values: HDR, gamma, anisotropic filtering, FSR quality/sharpen, LOD scales,
-  shadows, motion blur, water reflections, resolution, frame cap). **Experimental:**
-  only `gamma` is verified; fullscreen resolution, the frame-rate limit, motion
-  blur and ray-traced shadows were tested and are ignored by this build. Apply
-  writes the file with `settings.xml.bak` beside it; the game must be closed.
-  The title writes this file itself on exit, so reload after playing. A modal
-  on first open and a banner on the page repeat the warning.
+  `settings.xml` (88 values: HDR, gamma, anisotropic filtering, FSR
+  quality/sharpen, LOD scales, shadows, motion blur, water reflections,
+  resolution, frame cap). Values with a small named set are drop-downs (V-Sync
+  Off/On/Adaptive, frame cap 30/60/120/144/240/Unlimited, anisotropic 4×/8×/16×,
+  FSR Quality/Balanced/Performance, quality presets, water reflection sizes),
+  whole-number ranges are sliders, 0–1 values show percentages, and the
+  fullscreen width/height pair is one **Resolution** choice (720p, 1080p,
+  1440p, 4K). **Apply** writes the file and keeps `settings.xml.bak` beside it;
+  **Discard edits** rereads the file, **Restore backup** puts the last backup
+  back, and **Reset to defaults** moves the file aside (`settings.xml.reset`
+  keeps a copy) so the game writes fresh defaults the next time it starts. The
+  game must be closed while changing them; it rewrites this file on exit, so
+  discard after playing.
 * **Advanced** — the exact set in an aligned table (setting, help, value,
   red **Remove** on the right); **Add a setting…** is a menu of known
   switches, custom KEY=VALUE is collapsed; environment variables are explained

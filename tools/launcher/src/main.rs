@@ -241,6 +241,9 @@ struct Settings {
     mouse_sensitivity: f32,
     #[serde(default)]
     mouse_invert: bool,
+    /// Left/right buttons act as the right/left trigger.
+    #[serde(default = "default_true")]
+    mouse_buttons: bool,
     /// The name shown next to shared runs.
     #[serde(default)]
     community_name: String,
@@ -256,9 +259,6 @@ struct Settings {
     /// `VICTORY_RENDER_SCALE`: 0.0 leaves the title's own 2/3.
     #[serde(default)]
     render_scale: f32,
-    /// The one-time experimental warning on the Graphics page was acknowledged.
-    #[serde(default)]
-    game_warning_seen: bool,
     #[serde(skip)]
     root: Option<PathBuf>,
     #[serde(skip)]
@@ -304,12 +304,12 @@ impl Default for Settings {
             mouse_look: false,
             mouse_sensitivity: 0.02,
             mouse_invert: false,
+            mouse_buttons: true,
             community_name: String::new(),
             community_area: String::new(),
             community_notes: String::new(),
             output: String::new(),
             render_scale: 0.0,
-            game_warning_seen: false,
             root: None,
             reloaded_profile: false,
         }
@@ -459,6 +459,9 @@ fn settings_summary(settings: &Settings, hardware: &Hardware) -> String {
     }
     if settings.mouse_look {
         parts.push("mouse_look=1".into());
+        if !settings.mouse_buttons {
+            parts.push("mouse_buttons=0".into());
+        }
     }
     parts.push(format!("profile={}", settings.profile));
     format!(
@@ -704,6 +707,10 @@ fn game_label(raw: &str) -> String {
     "unknown".into()
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn default_input_mode() -> String {
     "auto".into()
 }
@@ -857,7 +864,7 @@ fn load_game_settings() -> Option<GameSettings> {
             if !self_closing {
                 stack.push(name);
             }
-        } else if !self_closing {
+        } else if !self_closing && !trimmed.contains(&format!("</{name}>")) {
             stack.push(name);
         }
     }
@@ -1376,6 +1383,9 @@ fn launch_command(root: &Path, settings: &Settings, profile_file: &Path) -> Comm
         if settings.mouse_invert {
             cmd.env("VICTORY_MOUSE_INVERT", "1");
         }
+        if !settings.mouse_buttons {
+            cmd.env("VICTORY_MOUSE_BUTTONS", "0");
+        }
     }
     for (k, v) in extra_env(settings) {
         cmd.env(k, v);
@@ -1443,8 +1453,6 @@ struct App {
     new_value: String,
     info: Option<String>,
     game: Option<GameSettings>,
-    game_warned: bool,
-    game_warning_open: bool,
     log_open: bool,
     bench_start: Option<std::time::Instant>,
     bench_world: Option<std::time::Instant>,
@@ -1461,6 +1469,8 @@ struct App {
     prep_started: Option<std::time::Instant>,
     toast: Option<(String, std::time::Instant)>,
     game_advanced_open: bool,
+    /// The graphics page asked before removing settings.xml.
+    confirm_reset: bool,
     update_tag: Option<String>,
     update_rx: Option<std::sync::mpsc::Receiver<Option<String>>>,
     keyboard_keys: Vec<String>,
@@ -1678,8 +1688,6 @@ impl App {
             new_value: String::new(),
             info: None,
             game: load_game_settings(),
-            game_warned: false,
-            game_warning_open: false,
             log_open: false,
             bench_start: None,
             bench_world: None,
@@ -1696,6 +1704,7 @@ impl App {
             prep_started: None,
             toast: None,
             game_advanced_open: false,
+            confirm_reset: false,
             update_tag,
             update_rx,
             keyboard_keys,
@@ -2669,9 +2678,10 @@ impl App {
             ui.horizontal(|ui| {
                 ui.heading(format!("{:.1}", run.fps.unwrap_or(0.0)));
                 ui.label(if run.in_game { "fps in game" } else { "fps (menu/loading)" });
+            });
+            ui.horizontal_wrapped(|ui| {
                 if run.in_game {
                     if let Some(menu) = run.menu_fps {
-                        ui.add_space(8.0);
                         ui.label(
                             egui::RichText::new(format!("menu {menu:.0} fps"))
                                 .small()
@@ -2680,10 +2690,10 @@ impl App {
                     }
                 }
                 if let Some(draws) = run.draws {
-                    ui.add_space(10.0);
+                    ui.add_space(8.0);
                     ui.label(egui::RichText::new(format!("{draws} draws a frame")).small().color(egui::Color32::GRAY));
                 }
-                ui.add_space(10.0);
+                ui.add_space(8.0);
                 if run.removals == 0 {
                     ui.label(
                         egui::RichText::new("no crashes")
@@ -2725,34 +2735,13 @@ impl App {
             "Graphics",
             "The game's own graphics settings, from its settings.xml. Close the game before changing them.",
         );
-        egui::Frame::group(ui.style())
-            .fill(egui::Color32::from_rgb(45, 38, 24))
-            .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
-            .inner_margin(egui::Margin::symmetric(12, 10))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(
-                    egui::RichText::new("Experimental - most of these do not take effect yet")
-                        .strong()
-                        .color(egui::Color32::from_rgb(240, 200, 120)),
-                );
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(
-                            "Only gamma was verified. Fullscreen resolution, the frame-rate limit, motion blur and ray-traced shadows were tested and are ignored by this build. Apply keeps settings.xml.bak.",
-                        )
-                        .color(egui::Color32::from_rgb(225, 210, 180)),
-                    )
-                    .wrap(),
-                );
-            });
         let running = self.running();
         let mut reload = false;
         let mut advanced_open = self.game_advanced_open;
         let Some(game) = self.game.as_mut() else {
             card(ui, |ui| {
-                ui.label("Not found yet. Start the game once so it writes its settings, then press Reload.");
-                if ui.button("Reload").clicked() {
+                ui.label("Not found yet. Start the game once so it writes its settings, then press Refresh.");
+                if ui.button("Refresh").clicked() {
                     reload = true;
                 }
             });
@@ -2762,6 +2751,10 @@ impl App {
             return;
         };
         let planned = &mut self.settings.planned;
+        let mut reset = false;
+        let mut confirm_reset = self.confirm_reset;
+        let backup = game.path.with_file_name("settings.xml.bak");
+        let has_backup = backup.exists();
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(!running, primary("Apply", 80.0, 30.0))
@@ -2776,8 +2769,60 @@ impl App {
                     Err(e) => game.note = format!("Could not save: {e}"),
                 }
             }
-            if ui.add(secondary("Reload", 84.0, 30.0)).clicked() {
+            if ui
+                .add_enabled(!running, secondary("Discard edits", 110.0, 30.0))
+                .on_hover_text("Read settings.xml again and throw away what was not applied.")
+                .clicked()
+            {
                 reload = true;
+            }
+            if ui
+                .add_enabled(
+                    !running && has_backup,
+                    secondary("Restore backup", 120.0, 30.0),
+                )
+                .on_hover_text(if has_backup {
+                    "Put settings.xml.bak back: the state before the last Apply."
+                } else {
+                    "No backup yet. Apply once to create settings.xml.bak."
+                })
+                .clicked()
+            {
+                if std::fs::copy(&backup, &game.path).is_ok() {
+                    game.note = "Backup restored".into();
+                    reload = true;
+                } else {
+                    game.note = "Could not restore settings.xml.bak".into();
+                }
+            }
+            if confirm_reset {
+                if ui
+                    .add_enabled(!running, primary("Yes, reset", 96.0, 30.0))
+                    .clicked()
+                {
+                    let aside = game.path.with_file_name("settings.xml.reset");
+                    match std::fs::copy(&game.path, &aside)
+                        .and_then(|_| std::fs::remove_file(&game.path))
+                    {
+                        Ok(()) => reset = true,
+                        Err(e) => game.note = format!("Could not reset: {e}"),
+                    }
+                    confirm_reset = false;
+                }
+                if ui
+                    .add(secondary("Cancel", 70.0, 30.0))
+                    .clicked()
+                {
+                    confirm_reset = false;
+                }
+            } else if ui
+                .add_enabled(!running, secondary("Reset to defaults", 140.0, 30.0))
+                .on_hover_text(
+                    "Move settings.xml aside (settings.xml.reset keeps a copy). The game writes fresh defaults the next time it starts.",
+                )
+                .clicked()
+            {
+                confirm_reset = true;
             }
             if game.dirty {
                 ui.label(egui::RichText::new("unsaved changes").small().color(egui::Color32::from_rgb(232, 179, 74)));
@@ -2791,7 +2836,18 @@ impl App {
             ui.spacing_mut().interact_size.y = 28.0;
             card(ui, |ui| {
                 section_header(ui, "Display");
-                render_pairs(ui, game, DISPLAY_KEYS);
+                for (section, key) in DISPLAY_KEYS {
+                    if *section == "video/resolutionFullscreen" {
+                        if *key == "height" {
+                            continue;
+                        }
+                        render_resolution(ui, game);
+                        continue;
+                    }
+                    if let Some(index) = find_index(game, section, key) {
+                        render_index(ui, game, index);
+                    }
+                }
             });
             ui.add_space(6.0);
             card(ui, |ui| {
@@ -2890,7 +2946,12 @@ impl App {
                 });
         });
         self.game_advanced_open = advanced_open;
-        if reload {
+        self.confirm_reset = confirm_reset;
+        if reset {
+            self.game = None;
+            self.status =
+                "graphics reset - the game writes fresh defaults on its next start".into();
+        } else if reload {
             self.game = load_game_settings();
         }
     }
@@ -3098,6 +3159,24 @@ impl App {
                         }
                         ui.end_row();
 
+                        if keys_used && self.settings.mouse_look && self.settings.mouse_buttons {
+                            let (fire, aim) = ui.input(|i| {
+                                (
+                                    i.pointer.button_down(egui::PointerButton::Primary),
+                                    i.pointer.button_down(egui::PointerButton::Secondary),
+                                )
+                            });
+                            ui.label(small_label("Buttons"));
+                            ui.label(format!(
+                                "left {}{} · right {}{}",
+                                if fire { "→ fire" } else { "= fire" },
+                                if fire { " (held)" } else { "" },
+                                if aim { "→ aim" } else { "= aim" },
+                                if aim { " (held)" } else { "" },
+                            ));
+                            ui.end_row();
+                        }
+
                         ui.label(small_label("Sticks"));
                         ui.label(
                             egui::RichText::new(
@@ -3256,6 +3335,18 @@ impl App {
                     {
                         changed = true;
                     }
+                    if ui
+                        .checkbox(
+                            &mut self.settings.mouse_buttons,
+                            "Left button fires, right button aims",
+                        )
+                        .on_hover_text(
+                            "Left is the right trigger (RT), right is the left trigger (LT).",
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
                 });
                 if changed {
                     self.settings.save();
@@ -3263,7 +3354,7 @@ impl App {
                 ui.add(
                     egui::Label::new(
                         egui::RichText::new(
-                            "Experimental. The cursor is held in the game window and its movement turns the right stick. Only active while no controller is connected; menu navigation with the mouse is not included.",
+                            "Experimental. The cursor is hidden and held in the game window; its movement turns the right stick, and the buttons can act as the triggers. Active while no controller is connected, or always in Mouse & keyboard mode. Menu navigation with the mouse is not included.",
                         )
                         .small()
                         .color(egui::Color32::GRAY),
@@ -4510,7 +4601,6 @@ impl eframe::App for App {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape))
             && self.tab != Tab::Play
             && self.info.is_none()
-            && !self.game_warning_open
             && !self.picking
             && self.community_open.is_none()
         {
@@ -4757,78 +4847,6 @@ impl eframe::App for App {
             Tab::Debug => self.debug(ui),
         });
 
-        if self.tab == Tab::Graphics && !self.game_warned {
-            self.game_warned = true;
-            self.game_warning_open = !self.settings.game_warning_seen;
-        }
-        if self.game_warning_open {
-            let mut open = true;
-            egui::Window::new("Game settings are experimental")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .fixed_size([470.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.set_max_width(440.0);
-                    ui.label("Most of the title's own settings do not take effect in this build yet.");
-                    ui.add_space(8.0);
-                    ui.label(
-                        egui::RichText::new("Verified")
-                            .small()
-                            .strong()
-                            .color(egui::Color32::from_rgb(87, 199, 133)),
-                    );
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(
-                                "Gamma. Set to its lowest value, the picture goes fully black.",
-                            )
-                            .small()
-                            .color(egui::Color32::GRAY),
-                        )
-                        .wrap(),
-                    );
-                    ui.add_space(6.0);
-                    ui.label(
-                        egui::RichText::new("Tested and ignored")
-                            .small()
-                            .strong()
-                            .color(egui::Color32::from_rgb(232, 179, 74)),
-                    );
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(
-                                "Fullscreen resolution, frame-rate limit, motion blur, ray-traced shadows.",
-                            )
-                            .small()
-                            .color(egui::Color32::GRAY),
-                        )
-                        .wrap(),
-                    );
-                    ui.add_space(8.0);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(
-                                "Changing values is safe: Apply writes settings.xml and keeps settings.xml.bak. Close the game first; it rewrites the file on exit.",
-                            )
-                            .small(),
-                        )
-                        .wrap(),
-                    );
-                    ui.add_space(4.0);
-                    if ui.button("Understood").clicked() {
-                        self.game_warning_open = false;
-                        self.settings.game_warning_seen = true;
-                        self.settings.save();
-                    }
-                });
-            if !open {
-                self.game_warning_open = false;
-                self.settings.game_warning_seen = true;
-                self.settings.save();
-            }
-        }
-
         if let Some(key) = self.info.clone() {
             let mut open = true;
             let desc = describe(&key);
@@ -4963,12 +4981,15 @@ fn example(key: &str) -> Option<&'static str> {
         "VICTORY_FPS_CAP" => Some("30, 60, 120 or 0 for unlimited"),
         "VICTORY_VSYNC" => Some("1 = on"),
         "gamma" => Some("1-50; 15 is the default"),
+        "graphicsQualityPreset" => {
+            Some("1 low, 2 medium, 3 high, 4 ultra; 0 is custom")
+        }
         "hdrIntensity" => Some("0-100; 50 is the default"),
         "hdrBlackLevels" => Some("0-100; 50 is the default"),
         "hdrPeakBrightness" => Some("600-1600 nits"),
         "anisotropicFiltering" => Some("0, 4, 8 or 16"),
-        "frameRateLimit" => Some("30, 60, 120 or 0 for unlimited"),
-        "desiredFPS" => Some("30 or 60"),
+        "frameRateLimit" => Some("30, 60, 120, 144, 240 or 0 for unlimited"),
+        "desiredFPS" => Some("30, 60 or 120"),
         "vSync" => Some("0 = off, 1 = on, 2 = adaptive"),
         "fsrQuality" => Some("0 = off, 1 = quality, 2 = balanced, 3 = performance"),
         "fsrSharpen" => Some("0.0 to 1.0 (0.2 is the default)"),
@@ -4987,8 +5008,8 @@ fn example(key: &str) -> Option<&'static str> {
         | "texLodScale_OrphanHD" => Some("1.0 is the default"),
         "vehicleLodBias" => Some("0.0 is the default"),
         "manualMipBias" => Some("0.0 is the default; negative is sharper"),
-        "waterReflectionResX" => Some("256, 512 or 1024"),
-        "waterReflectionResY" => Some("128, 256 or 512"),
+        "waterReflectionResX" => Some("128, 256, 512 or 1024"),
+        "waterReflectionResY" => Some("64, 128, 256 or 512"),
         "width" => Some("1920, 2560 or 3840"),
         "height" => Some("1080, 1440 or 2160"),
         "motionBlurLimit" => Some("8, 16 or 32"),
@@ -5544,9 +5565,45 @@ fn label_of(setting: &GameSetting) -> String {
     }
 }
 
+/// Settings the title stores with decimals. Deciding by parsing would turn a
+/// slider at 0 or 1 into an integer text box, because `1` parses as both.
+fn float_key(key: &str) -> bool {
+    matches!(
+        key,
+        "graphicsQualityPreset"
+            | "directionalScreenSpaceShadowQuality"
+            | "fsrSharpen"
+            | "grassLod"
+            | "lodScale"
+            | "texLodScale_Global"
+            | "texLodScale_Mat_High"
+            | "texLodScale_Mat_Med"
+            | "texLodScale_Mat_Low"
+            | "texLodScale_Buildings"
+            | "texLodScale_Objects"
+            | "texLodScale_HD"
+            | "texLodScale_OrphanHD"
+            | "texLodScale_LOD"
+            | "texLodScale_SLOD1"
+            | "texLodScale_SLOD2"
+            | "texLodScale_SLOD3"
+            | "texLodScale_SLOD4"
+            | "smallCullThreshold"
+            | "motionBlurLimit"
+            | "motionBlurScale"
+            | "sharpenIntensity"
+            | "vehicleLodBias"
+            | "worldHeightShadowQuality"
+            | "manualMipBias"
+    )
+}
+
 fn float_range(key: &str) -> (f32, f32, f32) {
     match key {
-        "fsrSharpen" | "sharpenIntensity" | "motionBlurScale" => (0.0, 1.0, 0.01),
+        "fsrSharpen" | "motionBlurScale" => (0.0, 1.0, 0.01),
+        "sharpenIntensity" => (0.0, 2.0, 0.05),
+        "motionBlurLimit" => (0.0, 32.0, 1.0),
+        "smallCullThreshold" => (0.0, 4.0, 0.05),
         "graphicsQualityPreset" => (0.0, 4.0, 1.0),
         "texLodScale_LOD" => (0.0, 4.0, 0.1),
         "texLodScale_SLOD1" => (0.0, 8.0, 0.1),
@@ -5564,8 +5621,139 @@ fn float_range(key: &str) -> (f32, f32, f32) {
         | "texLodScale_OrphanHD"
         | "directionalScreenSpaceShadowQuality"
         | "worldHeightShadowQuality" => (0.0, 2.0, 0.05),
-        _ => (0.0, 1.0, 0.01),
+        _ => limits(key)
+            .map(|(min, max, step)| (min as f32, max as f32, step as f32))
+            .unwrap_or((0.0, 1.0, 0.01)),
     }
+}
+
+/// Settings with a small, named set of values: a drop-down, never a slider.
+fn choices(key: &str) -> Option<&'static [(&'static str, &'static str)]> {
+    match key {
+        "vSync" => Some(&[("Off", "0"), ("On", "1"), ("Adaptive", "2")]),
+        "frameRateLimit" => Some(&[
+            ("Unlimited", "0"),
+            ("30 fps", "30"),
+            ("60 fps", "60"),
+            ("120 fps", "120"),
+            ("144 fps", "144"),
+            ("240 fps", "240"),
+        ]),
+        "desiredFPS" => Some(&[("30 fps", "30"), ("60 fps", "60"), ("120 fps", "120")]),
+        "anisotropicFiltering" => Some(&[("Off", "0"), ("4×", "4"), ("8×", "8"), ("16×", "16")]),
+        "fsrQuality" => Some(&[
+            ("Off", "0"),
+            ("Quality", "1"),
+            ("Balanced", "2"),
+            ("Performance", "3"),
+        ]),
+        "graphicsQualityPreset" => Some(&[
+            ("Custom (0)", "0"),
+            ("Low (1)", "1"),
+            ("Medium (2)", "2"),
+            ("High (3)", "3"),
+            ("Ultra (4)", "4"),
+        ]),
+        "waterReflectionResX" => Some(&[
+            ("128 px", "128"),
+            ("256 px", "256"),
+            ("512 px", "512"),
+            ("1024 px", "1024"),
+        ]),
+        "waterReflectionResY" => Some(&[
+            ("64 px", "64"),
+            ("128 px", "128"),
+            ("256 px", "256"),
+            ("512 px", "512"),
+        ]),
+        _ => None,
+    }
+}
+
+/// Whole-number ranges that read better as a slider than a text box.
+fn int_slider(key: &str) -> Option<(i64, i64, &'static str)> {
+    match key {
+        "gamma" => Some((1, 50, "")),
+        "hdrIntensity" | "hdrBlackLevels" => Some((0, 100, "")),
+        "hdrPeakBrightness"
+        | "hdrPeakBrightnessUIDefaultNits"
+        | "hdrPeakBrightnessGameDefaultNits" => Some((100, 2000, " nits")),
+        "decorationResolutionShift" | "lensFlaresScreenResDivExponent" => Some((0, 4, "")),
+        "maxTexUpgradesPerFrame" => Some((0, 10, "")),
+        "ssroSampleCount" | "vehicleHDCount" => Some((0, 8, "")),
+        "adapterIndex" | "outputIndex" => Some((0, 4, "")),
+        _ => None,
+    }
+}
+
+fn set_value(game: &mut GameSettings, index: usize, value: String) {
+    let setting = &mut game.settings[index];
+    if setting.value == value {
+        return;
+    }
+    setting.value = value;
+    let line = format!(
+        "{}<{} value=\"{}\" />",
+        setting.indent, setting.key, setting.value
+    );
+    game.lines[setting.line] = line;
+    game.dirty = true;
+}
+
+fn find_index(game: &GameSettings, section: &str, key: &str) -> Option<usize> {
+    game.settings
+        .iter()
+        .position(|s| s.section == section && s.key == key)
+}
+
+fn render_resolution(ui: &mut egui::Ui, game: &mut GameSettings) {
+    let Some(wi) = find_index(game, "video/resolutionFullscreen", "width") else {
+        return;
+    };
+    let Some(hi) = find_index(game, "video/resolutionFullscreen", "height") else {
+        return;
+    };
+    let w = game.settings[wi].value.parse::<i64>().unwrap_or(0);
+    let h = game.settings[hi].value.parse::<i64>().unwrap_or(0);
+    let modes = [
+        ("720p", 1280i64, 720i64),
+        ("1080p", 1920, 1080),
+        ("1440p", 2560, 1440),
+        ("4K", 3840, 2160),
+    ];
+    let current = modes
+        .iter()
+        .find(|(_, mw, mh)| *mw == w && *mh == h)
+        .map(|(label, _, _)| label.to_string())
+        .unwrap_or_else(|| format!("Custom ({w}×{h})"));
+    ui.horizontal(|ui| {
+        ui.label("Resolution");
+        ui.label(
+            egui::RichText::new("· 720p, 1080p, 1440p or 4K")
+                .small()
+                .color(egui::Color32::from_rgb(120, 126, 138)),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut chosen: Option<(i64, i64)> = None;
+            egui::ComboBox::from_id_salt("fullscreen resolution")
+                .selected_text(current)
+                .width(150.0)
+                .show_ui(ui, |ui| {
+                    for (label, mw, mh) in modes {
+                        if ui
+                            .selectable_label(mw == w && mh == h, label)
+                            .clicked()
+                        {
+                            chosen = Some((mw, mh));
+                        }
+                    }
+                });
+            if let Some((mw, mh)) = chosen {
+                set_value(game, wi, mw.to_string());
+                set_value(game, hi, mh.to_string());
+            }
+        });
+    });
 }
 
 fn limits(key: &str) -> Option<(f64, f64, f64)> {
@@ -5600,67 +5788,79 @@ fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
             );
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if setting.value == "true" || setting.value == "false" {
+            if let Some(options) = choices(&setting.key) {
+                let number = setting.value.parse::<f32>().ok();
+                let selected = options.iter().find(|(_, value)| {
+                    number.is_some_and(|n| {
+                        (n - value.parse::<f32>().unwrap_or(f32::NAN)).abs() < 0.001
+                    })
+                });
+                let current = selected
+                    .map(|(label, _)| (*label).to_string())
+                    .unwrap_or_else(|| format!("Custom ({})", setting.value));
+                let mut chosen: Option<String> = None;
+                egui::ComboBox::from_id_salt(format!("choice {}", setting.key))
+                    .selected_text(current)
+                    .width(150.0)
+                    .show_ui(ui, |ui| {
+                        for (label, value) in options {
+                            let is = selected.is_some_and(|(_, v)| v == value);
+                            if ui.selectable_label(is, *label).clicked() && !is {
+                                chosen = Some((*value).to_string());
+                            }
+                        }
+                    });
+                if let Some(value) = chosen {
+                    setting.value = value;
+                    changed = true;
+                }
+            } else if setting.value == "true" || setting.value == "false" {
                 let mut on = setting.value == "true";
                 if ui.checkbox(&mut on, "").changed() {
                     setting.value = if on { "true".into() } else { "false".into() };
                     changed = true;
                 }
-            } else if let Ok(mut v) = setting.value.parse::<i64>() {
-                let before = v;
-                let mut drag = egui::DragValue::new(&mut v);
-                if let Some((min, max, _)) = limits(&setting.key) {
-                    drag = drag.range(min as i64..=max as i64);
-                }
-                if ui.add_sized([96.0, 28.0], drag).changed() && v != before {
-                    setting.value = v.to_string();
-                    changed = true;
-                }
-            } else if let Ok(mut v) = setting.value.parse::<f32>() {
-                let before = v;
+            } else if float_key(&setting.key) || setting.value.contains('.') {
+                let before = setting.value.parse::<f32>().unwrap_or(0.0);
+                let mut v = before;
                 let (min, max, step) = float_range(&setting.key);
-                if setting.key == "graphicsQualityPreset" {
-                    let current = format!("Game default ({})", v.round() as i64);
-                    egui::ComboBox::from_id_salt("quality preset")
-                        .selected_text(current)
-                        .width(140.0)
-                        .show_ui(ui, |ui| {
-                            for value in 0..=4 {
-                                let label = if value == 0 {
-                                    "Game default (0)".to_string()
-                                } else {
-                                    format!("Preset {value}")
-                                };
-                                if ui
-                                    .selectable_label(
-                                        (v - value as f32).abs() < 0.5,
-                                        label,
-                                    )
-                                    .clicked()
-                                {
-                                    v = value as f32;
-                                }
-                            }
-                        });
+                let shown = if (min, max) == (0.0, 1.0) {
+                    format!("{:.0}%", v * 100.0)
+                } else if setting.key.contains("lod") || setting.key.contains("Lod") {
+                    format!("{v:.2}×")
                 } else {
-                    let shown = if (min, max) == (0.0, 1.0) {
-                        format!("{:.0}%", v * 100.0)
-                    } else if setting.key.contains("lod") || setting.key.contains("Lod") {
-                        format!("{v:.2}×")
-                    } else {
-                        format!("{v:.2}")
-                    };
-                    ui.label(egui::RichText::new(shown).small());
-                    let slider = egui::Slider::new(&mut v, min..=max)
-                        .step_by(f64::from(step))
-                        .show_value(false);
-                    if ui.add_sized([150.0, 20.0], slider).changed() {
-                        // handled below
-                    }
-                }
+                    format!("{v:.2}")
+                };
+                ui.label(egui::RichText::new(shown).small());
+                let slider = egui::Slider::new(&mut v, min..=max)
+                    .step_by(f64::from(step))
+                    .show_value(false);
+                ui.add_sized([150.0, 20.0], slider);
                 if (v - before).abs() > f32::EPSILON {
-                    setting.value = format!("{v}");
+                    setting.value = format!("{v:.6}");
                     changed = true;
+                }
+            } else if let Ok(mut v) = setting.value.parse::<i64>() {
+                if let Some((min, max, suffix)) = int_slider(&setting.key) {
+                    let before = v;
+                    let slider = egui::Slider::new(&mut v, min..=max)
+                        .step_by(1.0)
+                        .suffix(suffix);
+                    ui.add_sized([170.0, 20.0], slider);
+                    if v != before {
+                        setting.value = v.to_string();
+                        changed = true;
+                    }
+                } else {
+                    let before = v;
+                    let mut drag = egui::DragValue::new(&mut v);
+                    if let Some((min, max, _)) = limits(&setting.key) {
+                        drag = drag.range(min as i64..=max as i64);
+                    }
+                    if ui.add_sized([96.0, 28.0], drag).changed() && v != before {
+                        setting.value = v.to_string();
+                        changed = true;
+                    }
                 }
             } else if ui
                 .add_sized([180.0, 24.0], egui::TextEdit::singleline(&mut setting.value))

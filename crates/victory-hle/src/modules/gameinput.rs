@@ -210,31 +210,31 @@ fn input_mode() -> InputMode {
 
 /// Mouse look: right stick from cursor movement, opt-in (see the host module).
 #[cfg(windows)]
-fn mouse_stick() -> (f32, f32) {
+fn mouse_stick() -> (f32, f32, f32, f32) {
     host::mouse_stick()
 }
 
 #[cfg(not(windows))]
-fn mouse_stick() -> (f32, f32) {
-    (0.0, 0.0)
+fn mouse_stick() -> (f32, f32, f32, f32) {
+    (0.0, 0.0, 0.0, 0.0)
 }
 
 fn fallback(keys: &[KeyState]) -> PadState {
-    let on = |vk: u8| {
+    let on = |vk: u8| -> f32 {
         if keys.iter().any(|k| k.virtual_key == vk) {
             1.0
         } else {
             0.0
         }
     };
-    let (mouse_x, mouse_y) = mouse_stick();
+    let (mouse_x, mouse_y, fire, aim) = mouse_stick();
     PadState {
         buttons: FALLBACK_BUTTONS
             .iter()
             .filter(|(vk, _)| on(*vk) != 0.0)
             .fold(0, |all, (_, bit)| all | bit),
-        left_trigger: on(b'Z'),
-        right_trigger: on(b'C'),
+        left_trigger: on(b'Z').max(aim),
+        right_trigger: on(b'C').max(fire),
         left_x: on(b'D') - on(b'A'),
         left_y: on(b'W') - on(b'S'),
         right_x: (on(b'L') - on(b'J') + mouse_x).clamp(-1.0, 1.0),
@@ -1197,6 +1197,7 @@ mod host {
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetClientRect, GetCursorPos, GetForegroundWindow, GetWindowThreadProcessId, SetCursorPos,
+        ShowCursor,
     };
 
     use super::*;
@@ -1372,19 +1373,56 @@ mod host {
         Some((sens, invert))
     });
 
-    /// The cursor's offset from the window's centre, then recentred. A pad
-    /// connected takes over: the stand-in pad (and this) is only read when no
-    /// host pad exists.
-    pub(super) fn mouse_stick() -> (f32, f32) {
+    /// `VICTORY_MOUSE_BUTTONS=0` leaves the mouse buttons to the title; by
+    /// default the left button is the right trigger (fire) and the right
+    /// button the left trigger (aim).
+    static MOUSE_BUTTONS: LazyLock<bool> = LazyLock::new(|| {
+        std::env::var("VICTORY_MOUSE_BUTTONS")
+            .map(|value| !(value == "0" || value.eq_ignore_ascii_case("false")))
+            .unwrap_or(true)
+    });
+
+    static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
+
+    fn hide_cursor() {
+        if !CURSOR_HIDDEN.swap(true, Ordering::Relaxed) {
+            // SAFETY: a plain call; hide once and show once (see restore).
+            unsafe {
+                ShowCursor(0);
+            }
+        }
+    }
+
+    fn restore_cursor() {
+        if CURSOR_HIDDEN.swap(false, Ordering::Relaxed) {
+            // SAFETY: balances the hide above.
+            unsafe {
+                ShowCursor(1);
+            }
+        }
+    }
+
+    /// The cursor's offset from the window's centre, then recentred, plus the
+    /// mouse buttons as triggers. A pad connected takes over: the stand-in pad
+    /// (and this) is only read when no host pad exists.
+    pub(super) fn mouse_stick() -> (f32, f32, f32, f32) {
         let Some((sens, invert)) = *MOUSE_LOOK else {
-            return (0.0, 0.0);
+            restore_cursor();
+            return (0.0, 0.0, 0.0, 0.0);
         };
-        if super::input_mode() == super::InputMode::Controller {
-            return (0.0, 0.0);
+        if super::input_mode() == super::InputMode::Controller || !focused() {
+            restore_cursor();
+            return (0.0, 0.0, 0.0, 0.0);
         }
-        if !focused() {
-            return (0.0, 0.0);
-        }
+        hide_cursor();
+        // SAFETY: plain key-state queries.
+        let down = |vk: i32| unsafe { GetAsyncKeyState(vk) as u16 & 0x8000 != 0 };
+        let trigger = |vk: i32| if down(vk) { 1.0 } else { 0.0 };
+        let (fire, aim) = if *MOUSE_BUTTONS {
+            (trigger(0x01), trigger(0x02)) // VK_LBUTTON, VK_RBUTTON
+        } else {
+            (0.0, 0.0)
+        };
         static LAST_LOG: std::sync::Mutex<Option<std::time::Instant>> =
             std::sync::Mutex::new(None);
         /// The centre the cursor was last put on. A changed centre (a new
@@ -1401,14 +1439,14 @@ mod host {
         unsafe {
             let window = GetForegroundWindow();
             if window.is_null() || GetClientRect(window, &mut rect) == 0 {
-                return (0.0, 0.0);
+                return (0.0, 0.0, fire, aim);
             }
             let mut centre = POINT {
                 x: rect.left + (rect.right - rect.left) / 2,
                 y: rect.top + (rect.bottom - rect.top) / 2,
             };
             if ClientToScreen(window, &mut centre) == 0 {
-                return (0.0, 0.0);
+                return (0.0, 0.0, fire, aim);
             }
             let centre_xy = (centre.x, centre.y);
             if let Ok(mut last) = LAST_CENTRE.lock() {
@@ -1416,14 +1454,14 @@ mod host {
                     SetCursorPos(centre.x, centre.y);
                     *last = Some(centre_xy);
                     SUPPRESS.store(true, Ordering::Relaxed);
-                    return (0.0, 0.0);
+                    return (0.0, 0.0, fire, aim);
                 }
             }
             if SUPPRESS.swap(false, Ordering::Relaxed) {
-                return (0.0, 0.0);
+                return (0.0, 0.0, fire, aim);
             }
             if GetCursorPos(&mut point) == 0 {
-                return (0.0, 0.0);
+                return (0.0, 0.0, fire, aim);
             }
             // A jump this large is a warp (the window moved, the title hid
             // the cursor), not a hand: recentre without turning the view.
@@ -1432,7 +1470,7 @@ mod host {
             if raw_x.abs() > 150 || raw_y.abs() > 150 {
                 SetCursorPos(centre.x, centre.y);
                 SUPPRESS.store(true, Ordering::Relaxed);
-                return (0.0, 0.0);
+                return (0.0, 0.0, fire, aim);
             }
             let dx = raw_x.clamp(-80, 80);
             let dy = raw_y.clamp(-80, 80);
@@ -1443,15 +1481,15 @@ mod host {
             let x = (dx as f32 * sens).clamp(-1.0, 1.0);
             let dy = if invert { dy } else { -dy };
             let y = (dy as f32 * sens).clamp(-1.0, 1.0);
-            if (dx != 0 || dy != 0) && (x != 0.0 || y != 0.0) {
+            if (dx != 0 || dy != 0) && (x != 0.0 || y != 0.0 || fire > 0.0 || aim > 0.0) {
                 if let Ok(mut last) = LAST_LOG.lock() {
                     if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
-                        tracing::info!(dx, dy, x, y, "mouse look stick");
+                        tracing::info!(dx, dy, x, y, fire, aim, "mouse look stick");
                         *last = Some(std::time::Instant::now());
                     }
                 }
             }
-            (x, y)
+            (x, y, fire, aim)
         }
     }
 
