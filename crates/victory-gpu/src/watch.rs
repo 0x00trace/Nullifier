@@ -54,9 +54,9 @@ struct Journal {
     kept: bool,
     /// Page ranges the kernel refused an asking for ([`ask_kernel`]): not
     /// write-watched memory of one reservation. They are not asked about
-    /// again until [`REFUSED_FOR`] askings have gone by.
+    /// again until [`REFUSED_FOR_US`] have gone by.
     refused: Option<std::collections::HashSet<(usize, usize)>>,
-    /// The asking at which `refused` was last emptied.
+    /// When `refused` was last emptied (`crate::host::now_us`).
     refused_at: u64,
 }
 
@@ -71,15 +71,24 @@ static JOURNAL: Mutex<Journal> = Mutex::new(Journal {
     refused_at: 0,
 });
 
-/// How many askings a range the kernel refused is left unasked for
-/// ([`Journal::refused`]): a submission's ranges are asked about together,
-/// by halves where the kernel refuses a run, and a view among them (never
-/// write-watched) was refused again at every level, in every submission:
-/// about 4,400 of a frame's 7,300 askings in the world. Memory that turns
-/// from a view into write-watched memory without a mapping told to us is
-/// asked about again after this many askings at the latest; until then its
-/// writes are found by [`writes`], which asks the kernel itself.
-const REFUSED_FOR: u64 = 4096;
+/// How long a range the kernel refused is left unasked for
+/// ([`Journal::refused`]), in microseconds: a submission's ranges are asked
+/// about together, by halves where the kernel refuses a run, and a view
+/// among them (never write-watched) was refused again at every level, in
+/// every submission: about 4,400 of a frame's 7,300 askings in the world.
+///
+/// The ranges were left unasked for 4,096 askings, and a world frame makes
+/// about that many: the memo was emptied 0.8 times a frame, and each time
+/// the next submission made 1,300 to 1,700 askings in a row that the kernel
+/// refused again (docs/FINDINGS.md 2.25). By time, an emptying costs the
+/// same at every frame rate.
+///
+/// Only speed depends on this. A range kept here is left to [`writes`],
+/// which asks the kernel itself and so finds its writes; a range that has
+/// become write-watched memory (the title freed a view's addresses and
+/// reserved them anew, which nothing tells us) leaves the memo at the first
+/// such asking that the kernel answers.
+const REFUSED_FOR_US: u64 = 30_000_000;
 
 /// Ranges of one submission closer than this are asked about together:
 /// walking the pages between them costs less than another kernel call (a
@@ -299,9 +308,11 @@ fn ask_run(j: &mut Journal, pieces: &[(usize, usize)]) {
 fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
     use windows_sys::Win32::System::Memory::GetWriteWatch;
     const WRITE_WATCH_FLAG_RESET: u32 = 1;
-    if j.asked.saturating_sub(j.refused_at) >= REFUSED_FOR {
-        j.refused_at = j.asked;
+    let clock = crate::host::now_us();
+    if j.refused.is_some() && clock.wrapping_sub(j.refused_at) >= REFUSED_FOR_US {
         j.refused = None;
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::WatchMemos, 1);
     }
     if j.refused
         .as_ref()
@@ -314,6 +325,8 @@ fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
     let mut granularity = 0;
     #[cfg(feature = "diagnostics")]
     let started = crate::clock::Stamp::now();
+    #[cfg(test)]
+    tests::ASKED_AHEAD.with(|n| n.set(n.get() + 1));
     // SAFETY: the answer buffer holds `count` entries.
     let mut failed = unsafe {
         GetWriteWatch(
@@ -333,9 +346,15 @@ fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
         failed = true;
     }
     if failed {
+        // The memo's time runs from its first range.
+        if j.refused.is_none() {
+            j.refused_at = clock;
+        }
         j.refused
             .get_or_insert_with(Default::default)
             .insert((first, last));
+        #[cfg(feature = "diagnostics")]
+        crate::copystat::add(crate::copystat::C::WatchRefused, 1);
         return false;
     }
     #[cfg(feature = "diagnostics")]
@@ -489,6 +508,11 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Pa
         crate::copystat::add(crate::copystat::C::GuardUs, guarding.elapsed().as_micros() as u64);
         written?
     } else {
+        // The kernel answered: write-watched memory, whatever an asking
+        // ahead was told of this range before ([`REFUSED_FOR_US`]).
+        if let Some(refused) = &mut j.refused {
+            refused.remove(&(first, last));
+        }
         Vec::new()
     };
     #[cfg(feature = "diagnostics")]
@@ -1096,6 +1120,127 @@ mod tests {
         MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAlloc, VirtualFree,
     };
     const MEM_WRITE_WATCH: u32 = 0x20_0000;
+
+    thread_local! {
+        /// The kernel askings this thread made ahead ([`ask_kernel`]).
+        pub(super) static ASKED_AHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// [`ASKED_AHEAD`], taken.
+    fn asked_ahead() -> u64 {
+        ASKED_AHEAD.with(|n| n.replace(0))
+    }
+
+    /// Held by the tests of the memo of refused ranges, which empty it.
+    static MEMO: Mutex<()> = Mutex::new(());
+
+    /// Two ranges of four blocks of memory that is not write-watched (the
+    /// kernel refuses an asking about it), with the memo of refused ranges
+    /// empty; the memory's address.
+    fn refused_ranges() -> (usize, [(usize, usize); 2]) {
+        // SAFETY: a fresh allocation, freed by the caller.
+        let p = unsafe {
+            VirtualAlloc(
+                std::ptr::null(),
+                4 * PAGE,
+                MEM_RESERVE | MEM_COMMIT,
+                PAGE_READWRITE,
+            )
+        } as usize;
+        assert_ne!(p, 0);
+        JOURNAL.lock().unwrap_or_else(|e| e.into_inner()).refused = None;
+        asked_ahead();
+        (p, [(p, p + PAGE), (p + 2 * PAGE, p + 3 * PAGE)])
+    }
+
+    /// A range the kernel refused is not asked about again while the memo
+    /// stands, however many askings go by; when the memo's time is over it
+    /// is.
+    #[test]
+    fn a_refused_range_is_not_asked_again_while_the_memo_stands() {
+        if !once() {
+            return;
+        }
+        let _alone = MEMO.lock().unwrap_or_else(|e| e.into_inner());
+        let (p, ranges) = refused_ranges();
+        ask_once(&ranges);
+        ask_once_end();
+        assert_eq!(asked_ahead(), 3, "the two together, then each alone");
+        // More askings than a world frame makes.
+        JOURNAL.lock().unwrap_or_else(|e| e.into_inner()).asked += 3 * 4096;
+        ask_once(&ranges);
+        ask_once_end();
+        assert_eq!(asked_ahead(), 0, "asked again while the memo stands");
+        {
+            let mut j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
+            j.refused_at = crate::host::now_us().wrapping_sub(REFUSED_FOR_US);
+        }
+        ask_once(&ranges);
+        ask_once_end();
+        assert_eq!(asked_ahead(), 3, "asked again when the memo's time is over");
+        // SAFETY: our allocation.
+        unsafe { VirtualFree(p as *mut _, 0, MEM_RELEASE) };
+    }
+
+    /// Memory that was refused and is write-watched now (freed and reserved
+    /// anew at the same addresses): its writes are reported while the memo
+    /// still holds the range, and the kernel's answer takes the range out
+    /// of the memo.
+    #[test]
+    fn writes_in_a_range_refused_earlier_are_reported() {
+        if !once() {
+            return;
+        }
+        let _alone = MEMO.lock().unwrap_or_else(|e| e.into_inner());
+        let (p, ranges) = refused_ranges();
+        ask_once(&ranges);
+        ask_once_end();
+        assert_eq!(asked_ahead(), 3);
+        // SAFETY: our allocation, then a new one asked for at its address.
+        let q = unsafe {
+            VirtualFree(p as *mut _, 0, MEM_RELEASE);
+            VirtualAlloc(
+                p as *const _,
+                4 * PAGE,
+                MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH,
+                PAGE_READWRITE,
+            )
+        } as usize;
+        if q != p {
+            // Another thread's allocation took the address meanwhile.
+            if q != 0 {
+                // SAFETY: our allocation.
+                unsafe { VirtualFree(q as *mut _, 0, MEM_RELEASE) };
+            }
+            return;
+        }
+        forget(p, p + 4 * PAGE);
+        // SAFETY: committed pages of ours.
+        unsafe { ((p + 8) as *mut u8).write(1) };
+        // The submission's asking leaves the range out; `writes` asks.
+        ask_once(&ranges);
+        assert_eq!(asked_ahead(), 0);
+        assert!(asked(p, p + PAGE).is_none());
+        let (now, written) = writes(p, p + PAGE, false).expect("watched");
+        assert_eq!(written, [(p / PAGE, now)]);
+        drop(written);
+        ask_once_end();
+        // The next submission's asking holds the range again.
+        // SAFETY: committed pages of ours.
+        unsafe { ((p + 16) as *mut u8).write(1) };
+        ask_once(&ranges);
+        assert_eq!(
+            asked_ahead(),
+            1,
+            "the first range, which the kernel answered for"
+        );
+        let (asking, written) = asked(p, p + PAGE).expect("asked ahead");
+        assert_eq!(written, [(p / PAGE, asking)]);
+        drop(written);
+        ask_once_end();
+        // SAFETY: our allocation.
+        unsafe { VirtualFree(p as *mut _, 0, MEM_RELEASE) };
+    }
 
     /// Takes `[start, end)` out of the journal. The journal keeps a page's
     /// last asking for as long as the process lives, and Windows gives the
