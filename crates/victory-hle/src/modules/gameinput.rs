@@ -208,6 +208,16 @@ fn input_mode() -> InputMode {
     })
 }
 
+/// The title read the input; the gap tells the host how long a stick value
+/// has to last if the title runs slowly.
+#[cfg(windows)]
+fn mark_read() {
+    host::mark_read();
+}
+
+#[cfg(not(windows))]
+fn mark_read() {}
+
 /// Mouse look: right stick from cursor movement, opt-in (see the host module).
 #[cfg(windows)]
 fn mouse_stick() -> (f32, f32, f32, f32) {
@@ -699,6 +709,9 @@ extern "system" fn current_reading(
     out: Out,
 ) -> HRESULT {
     let hub = hub(this);
+    if device.is_null() || std::ptr::eq(device, &hub.devices[FALLBACK]) {
+        mark_read();
+    }
     let state = hub.state();
     let newest = |i: usize| {
         state.slots[i]
@@ -1384,6 +1397,32 @@ mod host {
 
     static CURSOR_HIDDEN: AtomicBool = AtomicBool::new(false);
     static CURSOR_CLIPPED: AtomicBool = AtomicBool::new(false);
+    /// The recent hand speed in pixels per second.
+    static SMOOTH: std::sync::Mutex<(f32, f32)> = std::sync::Mutex::new((0.0, 0.0));
+    /// The last two times the title read the fallback pad, to learn how long
+    /// one reading has to last.
+    static READS: std::sync::Mutex<(Option<Instant>, Option<Instant>)> =
+        std::sync::Mutex::new((None, None));
+
+    pub(super) fn mark_read() {
+        if let Ok(mut reads) = READS.lock() {
+            reads.0 = reads.1;
+            reads.1 = Some(Instant::now());
+        }
+    }
+
+    /// How long a stick value should be held: the title's own read interval,
+    /// at least 100 ms and at most 450 ms. This is what makes a fast flick
+    /// reach the title at 3 fps instead of being one 8 ms slice it never sees.
+    fn hold_time() -> f32 {
+        let gap = READS.lock().ok().and_then(|reads| match *reads {
+            (Some(prev), Some(last)) if last > prev => Some(last - prev),
+            _ => None,
+        });
+        gap.map(|gap| gap.as_secs_f32())
+            .unwrap_or(0.15)
+            .clamp(0.10, 0.45)
+    }
 
     fn hide_cursor() {
         if !CURSOR_HIDDEN.swap(true, Ordering::Relaxed) {
@@ -1395,6 +1434,9 @@ mod host {
     }
 
     fn restore_cursor() {
+        if let Ok(mut smooth) = SMOOTH.lock() {
+            *smooth = (0.0, 0.0);
+        }
         if CURSOR_CLIPPED.swap(false, Ordering::Relaxed) {
             // SAFETY: balances the clip below.
             unsafe {
@@ -1518,21 +1560,36 @@ mod host {
                 .ok()
                 .and_then(|last| *last)
                 .map(|last| now.duration_since(last).as_secs_f32())
-                .unwrap_or(1.0 / 30.0)
-                .clamp(0.008, 0.5);
+                .unwrap_or(1.0 / 125.0)
+                .clamp(0.004, 0.25);
             if let Ok(mut last) = LAST_POLL.lock() {
                 *last = Some(now);
             }
-            // The title multiplies the stick by its frame time. Without this,
-            // the same hand movement turns 10x further at 3 fps than at 30.
-            let scale = (1.0 / 30.0 / dt).clamp(0.15, 1.0);
-            let x = (dx as f32 * sens * scale).clamp(-1.0, 1.0);
-            let dy = if invert { dy } else { -dy };
-            let y = (dy as f32 * sens * scale).clamp(-1.0, 1.0);
+            // The host is read every 8 ms, the title at its own (here very
+            // low) frame rate. Reading the last 8 ms of movement gave the
+            // title one small slice at random, so a fast hand barely turned
+            // the view. Keep a short average of the hand's speed instead:
+            // the title samples that, and applies it for the frame time.
+            let hold = hold_time();
+            let alpha = 1.0 - (-dt / hold).exp();
+            let instant_x = dx as f32 / dt;
+            let instant_y = dy as f32 / dt;
+            let (smooth_x, smooth_y) = {
+                let mut smooth = SMOOTH.lock().unwrap_or_else(|e| e.into_inner());
+                smooth.0 += (instant_x - smooth.0) * alpha;
+                smooth.1 += (instant_y - smooth.1) * alpha;
+                *smooth
+            };
+            let x = (smooth_x * sens / 60.0).clamp(-1.0, 1.0);
+            let dir = if invert { -1.0 } else { 1.0 };
+            let y = (smooth_y * sens / 60.0 * dir).clamp(-1.0, 1.0) * -1.0;
             if dx != 0 || dy != 0 {
                 if let Ok(mut last) = LAST_LOG.lock() {
                     if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
-                        tracing::info!(dx, dy, x, y, dt, scale, fire, aim, "mouse look stick");
+                        tracing::info!(
+                            dx, dy, x, y, dt, hold, instant_x, instant_y, fire, aim,
+                            "mouse look stick"
+                        );
                         *last = Some(now);
                     }
                 }

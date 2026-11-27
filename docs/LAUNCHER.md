@@ -68,9 +68,11 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   game has focus and no pad is connected, the pointer is locked to the game
   window and hidden, its movement turns the right stick, and (by default) the
   left button is the right trigger (fire) and the right button the left trigger
-  (aim); sensitivity, inversion and the buttons are on the same page. The stick
-  is scaled by the time since the previous read, so a slow frame rate does not
-  turn further for the same hand movement. Menu navigation with the mouse is
+  (aim); sensitivity, inversion and the buttons are on the same page. The host
+  is read every 8 ms, so the stick is a short average of the hand's speed
+  rather than one 8 ms slice; the average is held for as long as the title
+  takes between reads (100–450 ms), so a fast flick still reaches a title that
+  renders at 3 fps. Menu navigation with the mouse is
   not included. The mode reaches the engine as
   `VICTORY_INPUT=auto|controller|keyboard`, the buttons can be turned off with
   `VICTORY_MOUSE_BUTTONS=0`. If it does nothing, the game log says why every
