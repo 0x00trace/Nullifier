@@ -579,8 +579,9 @@ fn create() -> windows::core::Result<Host> {
         {
             // `VICTORY_HOST_WAVE=32|64`: run at that width if the card allows it.
             // 32 on a 64-lane card runs every console wave64 program in two
-            // host halves, the exact form the face network needs; it costs
-            // frames. Default: the card's own maximum.
+            // host halves, which is the comparison for a picture that is wrong
+            // on 64-lane cards only; it costs frames. Default: the card's own
+            // maximum.
             let chosen = std::env::var("VICTORY_HOST_WAVE")
                 .ok()
                 .and_then(|v| v.trim().parse::<u32>().ok())

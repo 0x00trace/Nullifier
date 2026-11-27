@@ -266,11 +266,13 @@ built server, 0.60 / 0.65 / 0.70 with Proton's own.
 
 `VICTORY_HOST_WAVE=32` runs every shader at 32 lanes even on a card that allows
 64; unset uses the card's maximum. On a 64-lane card this puts the console's
-wave64 compute programs in two host halves, the exact form the face network's
-16-bit sums need, and it costs frame rate. It is the comparison to make when
-mouths or teeth look wrong on AMD: `32` should be exact, `64` is the default and
-uses a single-precision shortcut in `CS_TransposeVecMatMul*` that only lanes
-inside the matrix reach.
+wave64 compute programs in two host halves, and it costs frame rate. It is the
+comparison to make when mouths or teeth look wrong on AMD: a picture that is
+right at `32` and wrong at `64` points at the 64-lane form of a program. Both
+forms add the face network's sums of 16-bit floats in the console's order
+(`CS_TransposeVecMatMul*`). Before issue #61's fix for 64-lane cards, the
+64-lane form added such a sum in single precision and rounded it once, where
+only the lanes inside the matrix reach it.
 
 ## The title's own 30 fps cap
 
