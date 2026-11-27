@@ -33,6 +33,9 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          # GitHub runs this script with -e; a failing test must still reach
+          # the summary and annotation block below.
+          set +e
           cargo test --workspace --locked 2>&1 | tee test.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
