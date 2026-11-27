@@ -353,18 +353,81 @@ fn ask_kernel(j: &mut Journal, first: usize, last: usize) -> bool {
     true
 }
 
+/// An answer of the journal ([`writes`], [`asked`]): `(page number,
+/// asking)` in page order, read as a slice.
+///
+/// The journal never forgets a page, so an answer for a big range is long:
+/// up to 2,784 pairs for the title's 174 MiB heap, which the world asks
+/// about whole some 40 times a frame. As a new vector each time that was
+/// about eleven growths with a copy each, 2 ms a frame of the thread that
+/// submits (docs/FINDINGS.md 2.25). The room of an answer is kept by the
+/// thread that asked instead ([`ROOM`]): it goes back there when the
+/// answer is dropped, and the thread's next answer uses it.
+#[derive(Debug)]
+pub(crate) struct Pages(Vec<(usize, u64)>);
+
+thread_local! {
+    /// The room of this thread's last answer, empty ([`Pages`]).
+    static ROOM: std::cell::Cell<Vec<(usize, u64)>> = const { std::cell::Cell::new(Vec::new()) };
+}
+
+impl Pages {
+    /// The pairs of `pages`, in the room this thread kept. (A thread that
+    /// holds one answer while it asks for another gets new room for the
+    /// second; a thread that is ending, too.)
+    fn of(pages: impl Iterator<Item = (usize, u64)>) -> Pages {
+        let mut room = ROOM.try_with(std::cell::Cell::take).unwrap_or_default();
+        room.extend(pages);
+        Pages(room)
+    }
+}
+
+impl Drop for Pages {
+    fn drop(&mut self) {
+        let mut room = std::mem::take(&mut self.0);
+        room.clear();
+        // The larger of this room and the one kept meanwhile stays.
+        let _ = ROOM.try_with(|kept| {
+            let other = kept.take();
+            kept.set(if other.capacity() > room.capacity() {
+                other
+            } else {
+                room
+            });
+        });
+    }
+}
+
+impl std::ops::Deref for Pages {
+    type Target = [(usize, u64)];
+    fn deref(&self) -> &[(usize, u64)] {
+        &self.0
+    }
+}
+
+impl<const N: usize> PartialEq<[(usize, u64); N]> for Pages {
+    fn eq(&self, other: &[(usize, u64); N]) -> bool {
+        self.0 == other
+    }
+}
+
 /// What [`writes`] would say of `[start, end)` from the journal alone, if
 /// the range lies in one asked ahead ([`ask_ahead`], [`ask_once`]): the
 /// pages written since tracking began and the asking that last found each
 /// written, with the number of the asking that stands (as [`writes`] gives
 /// it). `None` if the kernel would have to be asked.
-pub(crate) fn asked(start: usize, end: usize) -> Option<(u64, Vec<(usize, u64)>)> {
+pub(crate) fn asked(start: usize, end: usize) -> Option<(u64, Pages)> {
     let (first, last) = (start / PAGE, end.div_ceil(PAGE));
     let j = JOURNAL.lock().unwrap_or_else(|e| e.into_inner());
     j.ahead
         .iter()
         .any(|&(a, b)| a <= first && last <= b)
-        .then(|| (j.ahead_asked, j.written.range(first..last).map(|(&p, &w)| (p, w)).collect()))
+        .then(|| {
+            (
+                j.ahead_asked,
+                Pages::of(j.written.range(first..last).map(|(&p, &w)| (p, w))),
+            )
+        })
 }
 
 /// The pages of `[start, end)` (whole pages) as last written, for pages
@@ -372,7 +435,7 @@ pub(crate) fn asked(start: usize, end: usize) -> Option<(u64, Vec<(usize, u64)>)
 /// this asking's number, which is higher than any in the list but those the
 /// kernel just reported. `None` if the memory is not write-watched (nor,
 /// with `guarded`, view memory, which is then guarded).
-pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Vec<(usize, u64)>)> {
+pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Pages)> {
     use windows_sys::Win32::System::Memory::GetWriteWatch;
     const WRITE_WATCH_FLAG_RESET: u32 = 1;
     let (first, last) = (start / PAGE, end.div_ceil(PAGE));
@@ -382,10 +445,7 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
     if j.ahead.iter().any(|&(a, b)| a <= first && last <= b) {
         return Some((
             j.ahead_asked,
-            j.written
-                .range(first..last)
-                .map(|(&p, &w)| (p, w))
-                .collect(),
+            Pages::of(j.written.range(first..last).map(|(&p, &w)| (p, w))),
         ));
     }
     let mut count = (last - first) * PAGE / KERNEL_PAGE;
@@ -440,16 +500,15 @@ pub(crate) fn writes(start: usize, end: usize, guarded: bool) -> Option<(u64, Ve
     }
     j.asked += 1;
     let now = j.asked;
-    let pages = j.found[..count].iter().map(|&at| at / PAGE).chain(guarded);
-    for page in pages.collect::<Vec<_>>() {
+    for &at in &j.found[..count] {
+        j.written.insert(at / PAGE, now);
+    }
+    for page in guarded {
         j.written.insert(page, now);
     }
     Some((
         now,
-        j.written
-            .range(first..last)
-            .map(|(&p, &w)| (p, w))
-            .collect(),
+        Pages::of(j.written.range(first..last).map(|(&p, &w)| (p, w))),
     ))
 }
 
@@ -1102,6 +1161,58 @@ mod tests {
             // SAFETY: our allocation.
             unsafe { VirtualFree(p as *mut _, 0, MEM_RELEASE) };
         }
+    }
+
+    /// An answer is in the room of the thread's last answer, and an answer
+    /// asked for while another is held has room of its own.
+    #[test]
+    fn an_answer_uses_the_room_of_the_threads_last_answer() {
+        // SAFETY: a fresh write-watched allocation, freed at the end.
+        let p = unsafe {
+            VirtualAlloc(
+                std::ptr::null(),
+                8 * PAGE,
+                MEM_RESERVE | MEM_COMMIT | MEM_WRITE_WATCH,
+                PAGE_READWRITE,
+            )
+        } as usize;
+        assert_ne!(p, 0);
+        let (start, end) = (p, p + 8 * PAGE);
+        forget(start, end);
+        for page in 0..8 {
+            // SAFETY: committed pages of ours.
+            unsafe { ((p + page * PAGE) as *mut u8).write(1) };
+        }
+        let (now, first) = writes(start, end, false).expect("watched");
+        assert_eq!(first.len(), 8);
+        let room = first.as_ptr();
+        let (_, second) = writes(start, start + 4 * PAGE, false).expect("watched");
+        assert_eq!(second.len(), 4);
+        assert_ne!(
+            second.as_ptr(),
+            room,
+            "two answers held at once share no room"
+        );
+        drop(second);
+        drop(first);
+        // The larger room was kept, and the answer in it is the journal's.
+        let (_, again) = writes(start, end, false).expect("watched");
+        assert_eq!(again.as_ptr(), room, "the next answer is in the room kept");
+        let pages: Vec<(usize, u64)> = (0..8).map(|page| (p / PAGE + page, now)).collect();
+        assert_eq!(&*again, &pages[..]);
+        drop(again);
+        let (_, part) = asked_or_written(start + PAGE, start + 3 * PAGE);
+        assert_eq!(part.as_ptr(), room);
+        assert_eq!(&*part, &pages[1..3]);
+        drop(part);
+        // SAFETY: our allocation.
+        unsafe { VirtualFree(p as *mut _, 0, MEM_RELEASE) };
+    }
+
+    /// The journal's answer for a range by either way: without the kernel
+    /// if an asking ahead holds the range, else as [`writes`] gives it.
+    fn asked_or_written(start: usize, end: usize) -> (u64, Pages) {
+        asked(start, end).unwrap_or_else(|| writes(start, end, false).expect("watched"))
     }
 
     /// A kernel read into a guarded view block fails; opened first, it
