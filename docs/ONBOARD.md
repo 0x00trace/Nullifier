@@ -197,8 +197,10 @@ cd ../Nullifier-offline-tooling
 ```
 
 Choose the checks that cover your change. The checks below run with synthetic
-inputs and can run while a benchmark is active in another checkout. A build or
-a test suite changes the measured run's result; run those after it has ended:
+inputs. Two of them, `./tools/check-bench.sh` and `./tools/check-detect.sh`,
+are short enough to run while a benchmark is active in another checkout.
+Builds and test suites change the measured run's result: they wait until the
+measured run has ended.
 
 ```bash
 ./tools/check-bench.sh    # summarize generated log lines
