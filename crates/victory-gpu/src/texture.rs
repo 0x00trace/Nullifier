@@ -346,7 +346,7 @@ pub(crate) static REFRESH_WAITS: [std::sync::atomic::AtomicU64; 4] = [const { st
 
 /// `f`'s result, its time added to [`REFRESH_WAITS`]' place `slot`.
 fn waited<T>(slot: usize, f: impl FnOnce() -> T) -> T {
-    let started = std::time::Instant::now();
+    let started = crate::clock::Stamp::now();
     let out = f();
     REFRESH_WAITS[slot].fetch_add(started.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
     out
@@ -641,7 +641,7 @@ impl Staging {
     /// since the last time (and is mapped at all).
     pub(crate) fn refresh(&self) {
         use std::sync::atomic::Ordering::Relaxed;
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         let read = self.refresh_now();
         let preparing = &crate::host::PREPARING;
         preparing[2].fetch_add(started.elapsed().as_micros() as u64, Relaxed);
@@ -650,7 +650,7 @@ impl Staging {
 
     /// Returns the bytes of title memory read.
     fn refresh_now(&self) -> usize {
-        let whole = std::time::Instant::now();
+        let whole = crate::clock::Stamp::now();
         let read = self.refresh_timed();
         REFRESH_WAITS[3].fetch_add(whole.elapsed().as_micros() as u64, std::sync::atomic::Ordering::Relaxed);
         read

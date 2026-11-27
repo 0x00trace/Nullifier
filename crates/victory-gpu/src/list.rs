@@ -145,7 +145,7 @@ const _: () = assert!(offset_of!(List, pipeline_shadow) + 32 == 0x560);
 fn with_state(this: This, f: impl FnOnce(&crate::host::HostList, &mut crate::draw::State)) {
     let Some(list) = host_list(this) else { return };
     #[cfg(feature = "diagnostics")]
-    let started = std::time::Instant::now();
+    let started = crate::clock::Stamp::now();
     // SAFETY: the title passes one of our lists.
     let state = unsafe { &(*this.cast::<List>()).state };
     f(list, &mut state.lock().unwrap_or_else(|e| e.into_inner()));
@@ -1782,7 +1782,7 @@ impl ValueWait {
     /// `VICTORY_WAIT_ASK=1` asks first, as before.
     pub(crate) fn met(&self) -> bool {
         #[cfg(all(windows, feature = "diagnostics"))]
-        let started = std::time::Instant::now();
+        let started = crate::clock::Stamp::now();
         let met = self.holds();
         #[cfg(all(windows, feature = "diagnostics"))]
         {
