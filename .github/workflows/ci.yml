@@ -40,7 +40,8 @@ jobs:
           # runs in this step, and it refuses a file in the tree whose type is
           # not on the allowlist.
           log="${RUNNER_TEMP//\\//}/test.log"
-          cargo test --workspace --locked 2>&1 | tee "$log"
+          # victory-gpu is left out here and runs in the next step.
+          cargo test --workspace --exclude victory-gpu --locked 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             {
@@ -55,15 +56,16 @@ jobs:
               done
           fi
           exit "$status"
-      # victory-gpu's tests share the write tracker's state and use real
-      # memory, whose addresses Windows gives out again. One at a time, a
-      # test meets what the ones before it left behind (issue #49).
-      # It runs after a failed Tests step too: one at a time the harness
-      # prints a test's name before it runs it, so a test that ends the
-      # process is named here.
+      # victory-gpu's tests run one at a time. Many of them submit work on
+      # the one host device and queue, which the layer drives from a single
+      # thread: side by side they ended the process with an access violation
+      # in three runs out of three on the software adapter here, and one at a
+      # time they pass (issue #49). One at a time the harness also prints a
+      # test's name before it runs it, so a test that ends the process is
+      # named. The step runs after a failed Tests step too.
       - name: Tests of victory-gpu, one at a time
         if: ${{ !cancelled() }}
-        run: cargo test -p victory-gpu --lib --locked -- --test-threads=1
+        run: cargo test -p victory-gpu --locked -- --test-threads=1
 
   launcher:
     # The GUI is its own workspace; the job above never compiles it.
