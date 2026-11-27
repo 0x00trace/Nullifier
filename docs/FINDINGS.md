@@ -723,6 +723,354 @@ recording is not: a build in which the recording threads spend 105 ms a
 frame in list calls, where they spent 170, gives the same frame rate. No
 single item is larger than 20 ms.
 
+## 2.11 The accounting's clock reads were system calls: a stopwatch on the time-stamp counter (2026-11-26)
+
+Same machine and scene as 2.10. The diagnostics build reads the clock around
+nearly everything it does, and under Wine here each read
+(`QueryPerformanceCounter`) is a system call: 140,000 a frame on the thread
+that submits and 62,000 on each recording thread (2.10).
+
+**The change.** `crate::clock::Stamp` takes the place of `std::time::Instant`
+for those reads. It reads the processor's time-stamp counter, with a rate
+measured once against the system's clock, where the processor says the
+counter runs at a constant rate; elsewhere, and with
+`VICTORY_STOPWATCH=system`, it reads the system's clock as before. The
+frame-rate cap and the coarse clock keep the system's clock.
+
+**Six runs in turn** (200 s each, one build of this change):
+
+| | median fps | n | frame at 3,000 draws | the submitting thread in submissions, user time | removals |
+|---|---|---|---|---|---|
+| `VICTORY_STOPWATCH=system` | 5.10 / 5.00 / 4.90 | 29 / 29 / 29 | 184.5 / 188.0 / 189.5 ms | 57.0 / 57.2 / 58.1 ms | 0 |
+| the counter (the default) | 5.40 / 5.00 / 5.30 | 29 / 28 / 28 | 182.5 / 182.4 / 183.6 ms | 49.3 / 53.7 / 52.3 ms | 0 |
+
+About 5 ms a frame of the submitting thread's time, and 2 to 6 ms of the
+frame. The frame-rate medians of the two rows are within the spread of runs
+of one setting.
+
+## 2.12 What shaders wrote goes back through a view of our own (2026-11-26)
+
+Ported by hand from fxceless/victory-fork `3973179` (`VICTORY_BACK_OWN_VIEW=1`,
+off by default).
+
+**What it was.** What a submission's shaders wrote is put back into title
+memory at the title's own address. For view memory the write opens the guard
+on the 64 KiB block, and on every other view of the page. The block then
+counts as written by the title, so the host copy that has just put the bytes
+there copies all 64 KiB of it in again at its next refresh, guards it again,
+and sends it up to the card again. The memory line counted 3,586 "views
+opened by a write through another": 3,720 to 3,790 a frame (the increase
+between two memory lines over the frames between them), and nearly all of
+them were this.
+
+**The change.** The bytes are stored through a view of the layer's own on the
+same section, which no guard covers. The title's views stay read-only (a
+write of the title's still faults and is seen), the write-watch journal is
+told that the page was written, so that every other copy of it takes it
+again, and the copy that wrote it notes the page current.
+
+**Six runs in turn** (200 s each, one build of this change):
+
+| | median fps | n | frame at 3,000 draws | copies, a frame | sent up to the card, a frame | copying back, a frame | views opened by a write through another, a frame | kernel time of the submitting thread in submissions | removals |
+|---|---|---|---|---|---|---|---|---|---|
+| off | 4.70 / 5.10 / 4.80 | 28 / 29 / 29 | 191.4 / 182.7 / 192.5 ms | 42.3 / 41.9 / 43.6 ms | 192 / 184 / 184 MB | 26.7 / 25.2 / 27.9 ms | 3,789 / 3,724 / 3,739 | 17.6 / 15.7 / 17.9 ms | 0 |
+| `VICTORY_BACK_OWN_VIEW=1` | 5.50 / 5.60 / 4.90 | 29 / 28 / 29 | 177.4 / 173.7 / 185.1 ms | 32.0 / 30.6 / 33.9 ms | 141 / 151 / 151 MB | 19.6 / 19.1 / 19.9 ms | 425 / 416 / 444 | 9.7 / 9.8 / 10.0 ms | 0 |
+
+A run with `VICTORY_BACK_OWN_CHECK=1` compared each
+store with what the title's address then showed: 540,672 stretches, 24,205
+MB, no store that the title's address did not show, and no page noted
+current whose copy differed from title memory. In the same run 475,866
+stretches went the old way: what is put back into the title's private memory
+(its heaps) is not in a section, and is still copied in again (2.16 counts
+it).
+
+## 2.13 The recording threads' locks: 170 ms of list calls became 105, and the frame rate did not move (2026-11-26)
+
+A draw brings the descriptor slots of its tables up to date, and the five
+threads the title records with each took the same locks for every slot. The
+profile (2.10) showed each of them asleep for about 14 ms a frame, woken by
+another of them, and a third of their processor time in mutexes and shared
+counters.
+
+**The change** (`1dc0143`): a slot keeps the resource it views in
+an atomic pointer; a slot made from the record it already holds is answered
+from an atomic word, and only a slot that changes takes a lock; the views
+table, the buffer tables and a texture's host side are read under read-write
+locks; a lookup of a texture's host side clones nothing unless the caller
+keeps it; what is retired while a submission runs goes to a list per thread;
+the use stamp of host copies reads the tick count.
+
+**Runs in turn** (300 s each; a third run with the change is void: a
+controller button was pressed and the opening was skipped):
+
+| | median fps | n | frame at 3,000 draws | time in list calls, all recording threads | the process, user time a frame |
+|---|---|---|---|---|---|
+| before | 5.80 / 5.60 / 5.70 | 47 / 47 / 47 | 177.3 / 175.1 / 177.7 ms | 171.1 / 169.5 / 169.5 ms | 365 / 372 / 374 ms |
+| after | 5.60 / 5.80 | 47 / 47 | 172.7 / 174.6 ms | 105.8 / 102.8 ms | 340 / 330 ms |
+
+The frame rate is the same within the runs' spread: recording is not what the
+frame waits for on this machine (2.10). The change frees about a third of a
+processor.
+
+## 2.14 Tracking the title's writes: other views stay read-only, block sets as bits, refused askings not repeated (2026-11-26)
+
+After 2.12 the thread that submits still spent about 19 ms a frame in the
+guards (the frame line's "guards") and 24 ms in all in the questions about
+written pages ("watches"). Three changes:
+
+- **`VICTORY_ALIAS_LAZY=1`** (off by default). The views of a guarded page are
+  guarded together, and a write through one of them opened them all: a change
+  of protection for each view, and another for each when the page was next
+  taken. Only the view that is written through has to be open. With the
+  switch the other views stay read-only and are noted not clean; the next
+  check at such a view reports the block written, as before, and makes the
+  page's open views read-only again before it notes the block clean, so that
+  a later write through any view still faults and is noted at every view.
+- **The guards' sets of blocks are bit sets** (65,536 blocks to a chunk). A
+  frame asks about some 13 GB of view memory, 200,000 blocks, nearly all
+  clean; as ordered sets those questions were 6 ms a frame in lookups (2.10).
+  A range that is all clean is now a count over a few words.
+- **A range the kernel refused a write-watch asking for is not asked about
+  again for 4,096 askings**, and a range whose first block the guards hold is
+  not asked about at all. A submission's ranges are asked about together, and
+  by halves where the kernel refuses; a view among them was refused at every
+  level, in every submission: about 4,400 of a frame's 7,300
+  `GetWriteWatch` calls (2.10).
+
+The census for the memory line also worked out the console layout of every
+title texture without a host copy, on the thread that submits, with every
+memory line (about 90 ms each, 3 ms a frame in the profile); it now works a
+layout out once per description.
+
+**Every step in turn.** Three rounds of six configurations, 200 s a run, with
+captures, each row adding to the one above (the wineserver of 2.5; no run
+lost the device, and none logged an unhandled exception or a failed clamp;
+three more runs, made between the first round and the second, are not
+counted: another program started the title on the machine during them):
+
+| | median fps | n | frame at 3,000 draws | the submitting thread in submissions, user + kernel | guards | list calls, all recording threads | views opened by a write through another, a frame | removals |
+|---|---|---|---|---|---|---|---|---|
+| `main` @ `a0cb06a` | 5.05 / 5.20 / 5.25 | 28 / 29 / 30 | 179.7 / 188.9 / 186.0 ms | 59.3 + 16.4 / 61.5 + 17.9 / 58.2 + 16.4 ms | 25.4 / 27.5 / 26.1 ms | 192.6 / 194.6 / 190.4 ms | 3867 / 3540 / 3780 | 0 |
+| + the stopwatch (`8b1b582`, 2.11) | 5.10 / 4.90 / 4.85 | 28 / 28 / 28 | 182.3 / 184.1 / 182.2 ms | 52.3 + 16.5 / 51.5 + 17.0 / 50.7 + 15.8 ms | 26.1 / 25.9 / 25.1 ms | 190.8 / 191.4 / 191.3 ms | 3795 / 3819 / 3819 | 0 |
+| + `VICTORY_BACK_OWN_VIEW=1` (`fdd5d3f`, 2.12) | 5.50 / 5.40 / 5.40 | 29 / 27 / 29 | 172.6 / 171.0 / 174.5 ms | 48.3 + 10.3 / 48.1 + 10.6 / 47.2 + 10.3 ms | 19.2 / 19.4 / 18.0 ms | 183.8 / 190.8 / 188.1 ms | 413 / 427 / 443 | 0 |
+| + the recording threads' locks (`1dc0143`, 2.13) | 5.30 / 5.60 / 5.40 | 29 / 29 / 29 | 178.4 / 173.8 / 170.6 ms | 45.8 + 10.6 / 46.0 + 9.8 / 45.4 + 10.3 ms | 19.9 / 18.8 / 19.5 ms | 109.5 / 109.4 / 107.3 ms | 415 / 409 / 396 | 0 |
+| + block sets as bits, refused askings, the census (`ed2c469`) | 5.50 / 5.40 / 5.65 | 27 / 26 / 28 | 167.7 / 166.1 / 164.5 ms | 39.7 + 9.0 / 39.5 + 9.1 / 40.0 + 9.4 ms | 10.3 / 10.8 / 10.9 ms | 106.4 / 110.8 / 107.6 ms | 441 / 432 / 442 | 0 |
+| + `VICTORY_ALIAS_LAZY=1` | 5.60 / 5.70 / 5.55 | 28 / 28 / 28 | 167.7 / 165.9 / 163.5 ms | 39.2 + 7.7 / 40.8 + 8.2 / 39.4 + 7.8 ms | 9.4 / 9.1 / 9.4 ms | 106.0 / 108.2 / 105.4 ms | 187 / 177 / 189 | 0 |
+
+The guards take 10.3 to 10.9 ms a frame with the bit sets against 18.8 to 19.9
+before them, and 9.1 to 9.4 with `VICTORY_ALIAS_LAZY=1`, which also takes the
+views opened by a write through another from between 432 and 442 a frame to
+between 177 and 189.
+From `main` to the last row the thread that submits runs 29 ms less a
+frame in submissions (59.7 + 16.9 ms of user and kernel time, then 39.8 + 7.9),
+and the frame at 3,000 draws is 19 ms shorter (184.9 against 165.7 ms,
+means of three).
+
+**Picture.** For each of the 18 runs, a sheet of 20 captures spread over the
+world and a sheet of 24 captures of the shots where a face fills the picture:
+the title cards, the street, the car, its interior and the credits are drawn
+in every run. A black face in some shots of some runs is on record for
+builds of `main` (docs/FORK.md, rows of `a0d014d` and `6f3375d`). To count it,
+the brightness of the face areas was measured over every capture of two
+shots, both faces in the close shot with raised hands and the man's in his
+close shot in the car. Runs with a black face, of three each: `main` 0, the stopwatch 1, own view 1, the locks 2, bit sets and refused askings 0, alias lazy 0.
+The last two rows are the build that holds every change, and the three
+configurations of 2.17 are that build too: 1 of their 15 runs has a black
+face (seen on a sheet, in a shot the measure does not cover), and 4 of the 12
+runs of the rows above them. Single captures of one
+shot differ in how complete the characters' textures are in every row (the
+woman's top white or grey, grey patches on the man's top).
+
+## 2.15 Sending more ahead makes the title present in pairs, and two ways to hand shader writes back sooner did not help (2026-11-26)
+
+**A frame rate does not say how evenly the frames come.** The frame-rate
+lines now give the shortest and the longest time between two presents in
+each second (a frame that was read back first, to be saved, is left out).
+Medians of the world lines of 200 s runs, each row adding to the one above
+(two runs a row with captures, in turn, then one run a row without them):
+
+| | median fps | presents, shortest to longest gap | time waited for the card in settles |
+|---|---|---|---|
+| the profile | 5.00 / 5.20 | 140 to 193 ms / 143 to 180 ms | 76 ms |
+| + `VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1` | 5.80 / 5.00 | 118 to 174 ms / 144 to 188 ms | 78 to 88 ms |
+| + fills of upload memory that do not wait for the submissions in the air (a change that is not proposed) | 5.80 / 5.25 | 74 to 215 ms / 95 to 224 ms | 77 to 90 ms |
+| + `VICTORY_LATE_WAIT_LISTS=512` | 5.70 / 5.15 | 24 to 289 ms / 25 to 345 ms | 22 to 25 ms |
+| + `VICTORY_RELAY=2`, no captures | 6.20 | 24 to 307 ms | 19 ms |
+| the profile, no captures | 5.90 | 153 to 201 ms | 73 ms |
+| + `VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1`, no captures | 6.20 | 144 to 184 ms | 77 ms |
+
+With fills not waiting, more lists allowed in the air, or the relay, the
+median goes up a little and the presents come in pairs: two of them 20 to
+45 ms apart, then none for 230 to 440 ms. They are not in the
+`linux-nvidia-16gb` profile for that reason. A Windows profile sets
+`VICTORY_RELAY=2`; how its presents are spaced was not measured.
+
+**Why pairs.** A profile of the relay configuration, taken as in 2.10, shows
+it. The title lets two frames be under way: its main
+render thread waits, in the loop of 2.10, until the card has finished the
+frame before the last one, and then records. With the relay the thread that
+copies back takes a submission when the card has run it, and fetches the
+pieces its compare flagged with a list of its own. That list waits on the
+queue behind every submission sent since. The title sends a frame's
+submissions in one burst of about 60 ms, so the fetch stands behind all of
+them: the thread that copies back waited 52 to 86 ms a frame for fetches,
+about 8 ms each, and the results of two frames reached the title together.
+It then recorded two frames one after the other and waited again. Without
+the relay the same happens whenever nothing settles the submissions in the
+middle of a frame: they are all settled when the card has run every one of
+them.
+
+**The bench's own captures cost a seventh of the frame rate.** With
+`VICTORY_CAPTURE_WORLD=1` two frames of every eight are saved, each presented
+with a wait for the card, a read-back and a picture file to write. The
+profile's median is 5.0 to 5.2 fps with captures and 5.90 without; what a
+player sees is the second number. Rows are still compared
+with captures, as before, but a configuration that works ahead loses more to
+them.
+
+**Tried: the compare hands the bytes down itself** (not proposed). A thread
+of the compare whose
+hash differs copied its bytes to a twin of the copy in the PC's memory and
+stored a stamp; the thread that copies back merged them with no fetch. The
+fetch waits went to zero, and the card became the limit: its shader stores
+into the PC's memory, 1,210 pieces and 54 MB a frame, cost it more than the
+fetches had. In three runs in turn, with captures, the
+thread that copies back waited 163 ms a frame for the card where it had
+waited 94 ms for fetches, and the median was 4.10 fps (frame 244 ms) against
+5.70 (175 ms) with fetches and 4.90 with no relay. It is the same driver
+behaviour as 2.7 found for a word that every thread stores to.
+
+**Tried: the compare's list copies down the pieces it is expected to flag**
+(not proposed). The pieces that the
+same compare of a copy flagged in the last three frames were copied to the
+PC's memory by plain copies at the end of the compare's list, 120 to 140 MB
+a frame. The expectation covered 87 to 98 % of the 1,150 to 1,550 pieces
+flagged a frame; 25 to 200 a frame were not expected, and one of those is
+enough for a fetch. Fetch waits stayed at about 100 ms a frame, the presents
+stayed in pairs, and the median was 5.45 fps against 6.20.
+
+**Also tried on top of the even configuration, without captures:**
+`VICTORY_WIDE_REFRESH=1` with a submission's texture refreshes on several
+threads and a guarded texture hashed every 64th frame instead of every 8th
+(two changes that are not proposed): 6.10 fps against 6.20, the copies no
+shorter (31 ms against 25). `VICTORY_DISPLAY_MODE=2560x1440` changes the
+mode reported to the title and not the size it renders at (5.90 fps against
+5.80 for the run before it); `VICTORY_OUTPUT` and
+`VICTORY_RENDER_SCALE` (docs/LAUNCHER.md) do change it.
+
+**What the numbers of 2.11 to 2.14 come to.** In the table of 2.14 the
+thread that submits does 29 ms less work a frame in submissions than at `main`,
+and the frame at 3,000 draws is 19 ms shorter. Where that thread now arrives
+sooner at a point where the submissions are settled, it waits longer there
+for the card: 65 ms a frame in settles at `main`, 79 in the last row. The
+frame is a chain of the two, and what shortens it from here is not more of
+either alone but letting the card run one frame while the next is prepared,
+with the title told of each submission when the card has run it. 2.16 says
+what stands in the way, and 2.17 what a smaller rendered size does to the
+card's part.
+
+## 2.16 The title does not touch 98 % of what is copied back to it (2026-11-26)
+
+What a submission's shaders wrote to host copies is put back into title
+memory after it: 65 MB a frame in the opening (the frame line's "copying
+back"), because on the console the card writes the title's memory itself and
+the title may read it. Every way of settling submissions, and both attempts
+of 2.15, are about getting those bytes to the title in time.
+
+**A probe** (`VICTORY_BACK_PROBE=N`, diagnostics, off by default) asks whether
+the title reads them. One in N of the 4 KiB pages that a put-back has just
+written whole is made inaccessible (the title's private memory only: the
+write guards own the protection of views). The first access to such a page
+faults into a handler that opens the page and counts who it was. A copy of
+the layer's own opens the page for the length of the copy and closes it
+again. A page that is still closed when the next put-back writes it was not
+touched in between.
+
+**One run** (N=16, with `VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1`,
+no captures; 5.70 fps, n=27, no unhandled fault). The probe's lines give
+counts per frame for each second; multiplied by that second's presents and
+summed over the 870 frames of the world:
+
+| per frame | |
+|---|---|
+| pages closed after a put-back | 380 |
+| put back again while still closed | 373, after 1.9 frames on average |
+| first touched by a read that is not the layer's | 2.7 |
+| first touched by a write that is not the layer's | 3.5 |
+| first touched by code of the layer's outside its copies | 0 |
+| opened for a copy of the layer's own and closed again | 799 |
+
+Of the 330,076 sampled pages whose fate is known, 98.36 % were written again
+by the next put-back without having been touched, 0.71 % were first read and
+0.92 % first written by code that is not the layer's. Each closed page was
+read 2.1 times by the layer itself in between: the put-back marks the page
+written, and the copy that wrote it copies it in again (2.12 took that away
+for views, not for private memory).
+
+**What follows.** Nearly all of the copy-back, the fetches behind it, the
+second copy in and the second send up serve bytes the title does not look
+at. Leaving what shaders wrote on the card, with the title's pages closed,
+and fetching a piece when the title first touches it would take those away
+and with them the reason to settle submissions at all. Not built. What it
+needs, as far as this run shows: a fetch from a fault handler on any title
+thread; the same for views, whose protection the guards own; the runtime's
+system calls on title memory told to it first (a call that is handed a
+closed page fails); and the title's own buffer copies, which read title
+memory on the processor.
+
+## 2.17 The size the title renders at: 2560x1440 output on an RTX 5080 (2026-11-26)
+
+`0c4c2e3` gave the loader `VICTORY_OUTPUT` and `VICTORY_RENDER_SCALE`
+(docs/LAUNCHER.md): the title's output size, and the scale of its own
+upscaler. By default the output is 3840x2160 and the scale 2/3, so the title
+renders 2560x1440. docs/LAUNCHER.md has the numbers of the machine the switches
+were written on. These are from the RTX 5080 of 2.6 to 2.16. Its monitor is
+2560x1440, so a 3840x2160 output is scaled down again on the way to it.
+
+**Twelve runs in turn** (three rounds, 200 s a run, with captures, build
+`ed2c469` with `VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1`; the first row
+is the last row of 2.14's table):
+
+| output | render scale | rendered | median fps (frame lines of 500 draws or more) | n | frame at 3,000 draws | wait for the card at 3,000 draws | copying back, a frame | removals |
+|---|---|---|---|---|---|---|---|---|
+| 3840x2160 (default) | 2/3 (default) | 2560x1440 | 5.65 / 5.75 / 5.60 | 30 / 30 / 30 | 167.7 / 165.9 / 163.5 ms | 73.8 / 72.5 / 67.5 ms | 18.5 / 19.5 / 19.4 ms, 63 / 64 / 63 MB | 0 |
+| 2560x1440 | 1.0 | 2560x1440 | 5.95 / 6.00 / 6.15 | 30 / 30 / 30 | 159.8 / 158.6 / 152.8 ms | 72.4 / 73.3 / 70.7 ms | 19.6 / 19.8 / 19.2 ms, 63 / 64 / 65 MB | 0 |
+| 2560x1440 | 2/3 (default) | 1707x960 | 8.20 / 8.10 / 8.00 | 30 / 31 / 31 | 113.9 / 118.4 / 120.6 ms | 42.3 / 41.1 / 44.9 ms | 14.3 / 13.5 / 14.3 ms, 42 / 39 / 41 MB | 0 |
+| 2560x1440 | 0.5 | 1280x720 | 8.80 / 8.60 / 8.70 | 31 / 31 / 31 | 109.1 / 108.1 / 99.0 ms | 34.2 / 36.0 / 36.1 ms | 12.5 / 12.3 / 13.2 ms, 32 / 31 / 33 MB | 0 |
+
+A frame line counts here when it has 500 draws or more. `tools/bench.sh`
+counts a line as world when it is under 10 fps, which cuts lines off where a
+setting reaches 10 fps: its medians for the four rows are 5.60 / 5.70 / 5.55;
+5.90 / 5.80 / 5.85; 8.05 / 7.75 / 7.90; and 8.70 / 8.40 / 8.70 (n = 26 / 26 / 27 in the last row).
+
+**What changes with the size.** At the same rendered size the smaller output
+shortens the frame at 3,000 draws by 9 ms (157.1 against 165.7 ms); the
+wait for the card is 72.1 against 71.3 ms there. With two thirds of the
+pixels in each direction (1707x960) the wait for the card at 3,000 draws is
+42.8 ms, and what shaders write back is 40 MB a frame where it was 63. At
+1280x720 the frame is 105.4 ms at 3,000 draws, 35.4 of them waiting for the
+card. Preparing the submissions takes 43.8 ms a frame there and 48.4 in the
+first row: the work of the thread that submits (2.10) is what is left, and
+it changes little with the size.
+
+One run each on the build of 2.15 and 2.16, which logs the presents (the
+first under load from other programs on the card, the second partly):
+141 to 193 ms apart by default, 107 to 145 ms at 2560x1440 output, 82 to
+117 ms at scale 0.5 there, and 80 to 114 ms at 1920x1080 output (1280x720
+rendered, 9.80 fps by draws). The presents stay evenly spaced, as nothing is sent further ahead.
+
+**Picture.** Two sheets of captures for each of the twelve runs, as in 2.14:
+the title cards, the street, the car, its interior and the credits are drawn
+at every size. On the sheets a face is black in one of the twelve runs (the
+woman's, in the last capture of one run at 1280x720 rendered); the measure of
+2.14 finds none in its two shots.
+Captures are saved at half the output's size (1280x720 for a 2560x1440
+output), so they do not show how sharp the output is. A measure of a regular
+pattern (the autocorrelation of the picture's gradients, 37 to 39 captures
+of one run each) is the same at scale 0.5 as at the default. The opening has
+no HUD and no menu in play; docs/LAUNCHER.md reports those wrong at a smaller
+output, and they were not looked at here.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask

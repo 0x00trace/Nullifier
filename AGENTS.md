@@ -336,9 +336,36 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   profile is taken: `perf` with a uprobe at each present, the scheduler's
   wake-ups, and stacks unwound with the PE images' unwind tables.
 
-The next wins are on the copy lane — copy-back through the layer's own view,
-joined submission parts — measured in fxceless/victory-fork and not yet ported
-here; the draw lane's barrier and runs are in (2.6, 2.7). See
+* **Less work on the thread that submits shortens the frame by less than
+  the work saved (2.11 to 2.15).** The accounting's stopwatch (2.11), the
+  copy-back through a view of the layer's own (`VICTORY_BACK_OWN_VIEW=1`,
+  2.12), the recording threads' locks (2.13) and the tracking of title
+  writes (`VICTORY_ALIAS_LAZY=1`, 2.14) take 29 ms a frame off that thread in
+  submissions, and the frame at 3,000 draws is 19 ms shorter (5.60 / 5.70 / 5.55
+  fps against 5.05 / 5.20 / 5.25 in 200 s runs): the thread then waits longer for the
+  card at each settle. Settings that send more ahead
+  (`VICTORY_LATE_WAIT_LISTS=512`, `VICTORY_RELAY=2`) raise the median and make
+  the title present in pairs, 20 to 45 ms and then 230 to 440 ms apart
+  (2.15): read the "presents since the last line" lines, not the median
+  alone. The bench's own captures cost about a seventh of the frame rate
+  (2.15).
+* **The title does not touch 98 % of what is copied back to it (2.16).**
+  `VICTORY_BACK_PROBE=16` closes one in 16 of the pages a put-back wrote
+  (private memory only) and counts the first access: 98.4 % were written
+  again by the next put-back untouched. Leaving what shaders wrote on the
+  card until the title asks for it is the lead that follows; it is not built.
+* **The rendered size is the largest lever measured on this machine (2.17).**
+  `VICTORY_OUTPUT=2560x1440` (1707x960 rendered) gives 8.20 / 8.10 / 8.00 fps and
+  `VICTORY_RENDER_SCALE=0.5` with it (1280x720) 8.80 / 8.60 / 8.70, against 5.65 / 5.75 / 5.60
+  at the default, with evenly spaced presents. Count world lines by draws
+  there: `tools/bench.sh` counts lines under 10 fps, and cuts lines off
+  from 10 fps on. docs/LAUNCHER.md says what is not checked about the
+  picture at a smaller output.
+
+The next wins are on the copy lane — joined submission parts, measured in
+fxceless/victory-fork and not yet ported here, and what 2.16 leads to. The
+copy-back through the layer's own view is in (2.12), as are the draw lane's
+barrier and runs (2.6, 2.7). See
 `docs/FINDINGS.md` and `docs/ROADMAP.md`. With the built server the order
 changes: waits for the card are then half the frame (157-163 of 285-292 ms),
 and copies 43-46 ms.
