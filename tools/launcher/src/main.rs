@@ -1537,6 +1537,7 @@ enum Preset {
 
 fn current_preset(sets: &BTreeMap<String, String>, shipped: &BTreeMap<String, String>) -> Option<Preset> {
     let safe = sets.get("VICTORY_LATE_WAIT").map(String::as_str) == Some("0")
+        && sets.get("VICTORY_TEXTURE_NO_WAIT").map(String::as_str) == Some("0")
         && !sets.contains_key("VICTORY_JOIN_COPIES")
         && !sets.contains_key("VICTORY_RELAY");
     if safe {
@@ -2723,7 +2724,11 @@ impl App {
             for (preset, title, desc) in [
                 (Preset::Recommended, "Recommended", "Measured for your graphics card."),
                 (Preset::LowMemory, "Low memory", "For an 8 GB card or a busy desktop."),
-                (Preset::Safe, "Safe", "If it crashes or loses the device."),
+                (
+                    Preset::Safe,
+                    "Safe",
+                    "Waits for textures and turns send-ahead off. Slower; no black pop-in.",
+                ),
             ] {
                 if preset_card(ui, current == Some(preset), title, desc).clicked() {
                     chosen = Some(preset);
@@ -2739,6 +2744,7 @@ impl App {
                     }
                     Preset::Safe => {
                         sets.insert("VICTORY_LATE_WAIT".into(), "0".into());
+                        sets.insert("VICTORY_TEXTURE_NO_WAIT".into(), "0".into());
                         sets.remove("VICTORY_JOIN_COPIES");
                         sets.remove("VICTORY_RELAY");
                     }
@@ -5396,7 +5402,7 @@ fn describe(key: &str) -> Option<Desc> {
         ),
         "VICTORY_TEXTURE_NO_WAIT" => d(
             "Do not wait for textures",
-            "Show a frame without waiting for a texture upload. Faster; textures can pop in late.",
+            "Show a frame without waiting for a texture upload. Faster; a texture can be black until it arrives. Off waits, which is slower but has no black pop-in.",
             "On. Turn it off only if textures look wrong.",
         ),
         "VICTORY_CARD_HASH_LANES" => d(
