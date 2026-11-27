@@ -2014,7 +2014,40 @@ struct CardRange {
     at: u32,
     /// Whether the card compares it; else every piece is fetched.
     compared: bool,
+    /// With [`card_audit`]: not a declared range but the whole copy,
+    /// compared to find pieces that changed on the card with nothing
+    /// declared and nothing sent. Its pieces are looked at, never merged.
+    audit: bool,
 }
+
+/// Diagnostics: every how many submissions sent ahead the whole of each
+/// copy in the card's memory that the submission declares is compared with
+/// the hashes stored for it (`VICTORY_CARD_AUDIT=N`; 0 or unset: never).
+///
+/// A piece's stored hash is the hash of what the card's side held when the
+/// piece was last sent up, or when a compare last found it changed. A piece
+/// whose hash is another, in no range this submission declared, was
+/// changed on the card by something that declared nothing: the audit
+/// fetches up to [`CARD_AUDIT_PIECES`] such pieces and says how they
+/// differ from the CPU's side (`crate::shadow::Shadow::card_audit`). The
+/// same switch has every piece that a declared range's compare flagged
+/// fetched whole, and the bytes outside the range looked at the same way.
+/// Not with the relay.
+fn card_audit() -> u64 {
+    static N: OnceLock<u64> = OnceLock::new();
+    *N.get_or_init(|| {
+        if relay() {
+            return 0;
+        }
+        std::env::var("VICTORY_CARD_AUDIT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0)
+    })
+}
+
+/// The most pieces an audit fetches for one submission ([`card_audit`]).
+const CARD_AUDIT_PIECES: usize = 64;
 
 /// What a submission does for copies in the card's memory.
 struct CardPlan {
@@ -3650,10 +3683,51 @@ impl Host {
                     span,
                     at,
                     compared,
+                    audit: false,
                 });
                 if compared {
                     at += span.pieces;
                 }
+            }
+        }
+        // The audit: after the declared ranges, so that its pass runs
+        // behind their compares in the list.
+        static AUDIT_TURN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        if card_audit() != 0
+            && flown
+            && AUDIT_TURN
+                .fetch_add(1, Ordering::Relaxed)
+                .is_multiple_of(card_audit())
+        {
+            for (shadow, _) in &declared {
+                if !shadow
+                    .card_sides()
+                    .is_some_and(|(_, before, _)| before.is_some())
+                {
+                    continue;
+                }
+                let span = shadow.card_run(0, usize::MAX);
+                if u64::from(at + span.pieces) * 4 > work.differs.2 {
+                    continue;
+                }
+                // SAFETY: inside the mapped results (checked above); no
+                // plan in the air has these dwords.
+                unsafe {
+                    std::ptr::write_bytes(
+                        (work.differs.1 as *mut u32).add(at as usize),
+                        0,
+                        span.pieces as usize,
+                    )
+                };
+                plan.ranges.push(CardRange {
+                    shadow: shadow.clone(),
+                    declared: (0, 0),
+                    span,
+                    at,
+                    compared: true,
+                    audit: true,
+                });
+                at += span.pieces;
             }
         }
         work.taken = at;
@@ -3686,7 +3760,28 @@ impl Host {
                         let Some((_, Some(before), size)) = r.shadow.card_sides() else {
                             continue;
                         };
-                        let constants = [r.span.first, r.span.skew, size as u32, r.span.pieces, r.at * 4, if flown { 2 } else { 1 }];
+                        if r.audit {
+                            // Behind the hashes that the compares before
+                            // it stored.
+                            list.ResourceBarrier(&[D3D12_RESOURCE_BARRIER {
+                                Type: D3D12_RESOURCE_BARRIER_TYPE_UAV,
+                                Flags: D3D12_RESOURCE_BARRIER_FLAG_NONE,
+                                Anonymous: D3D12_RESOURCE_BARRIER_0 {
+                                    UAV: std::mem::ManuallyDrop::new(D3D12_RESOURCE_UAV_BARRIER {
+                                        pResource: std::mem::ManuallyDrop::new(None),
+                                    }),
+                                },
+                            }]);
+                        }
+                        // An audit only compares: the hashes stay.
+                        let constants = [
+                            r.span.first,
+                            r.span.skew,
+                            size as u32,
+                            r.span.pieces,
+                            r.at * 4,
+                            if flown && !r.audit { 2 } else { 1 },
+                        ];
                         list.SetComputeRoot32BitConstants(0, 6, constants.as_ptr().cast(), 0);
                         list.SetComputeRootShaderResourceView(1, r.shadow.buffer.GetGPUVirtualAddress());
                         list.SetComputeRootUnorderedAccessView(2, before.GetGPUVirtualAddress());
@@ -4024,18 +4119,44 @@ impl Host {
         // where the bytes come down.
         let mut pieces: Vec<(usize, usize, usize, u64)> = Vec::new();
         let mut total = 0u64;
+        // With [`card_audit`]: the whole pieces that hold flagged pieces of
+        // declared ranges, fetched beside them (the range, the piece, where
+        // its bytes come down, the declared part of it), and how many
+        // pieces of audit ranges are fetched.
+        let audit = card_audit() != 0;
+        let mut outside: Vec<(usize, usize, usize, u64, usize, usize)> = Vec::new();
+        let mut audited = 0;
         for (i, r) in plan.ranges.iter().enumerate() {
             for p in 0..r.span.pieces {
                 if r.compared && differs[(r.at + p) as usize] == 0 {
                     continue;
                 }
                 let (lo, hi) = r.shadow.card_piece(&r.span, p);
+                if r.audit {
+                    if lo < hi && audited < CARD_AUDIT_PIECES {
+                        audited += 1;
+                        pieces.push((i, lo, hi, total));
+                        total += (hi - lo) as u64;
+                    } else if lo < hi {
+                        crate::shadow::CARD_AUDITED[3].fetch_add(1, Ordering::Relaxed);
+                    }
+                    continue;
+                }
                 if lo < hi && seen.insert((std::sync::Arc::as_ptr(&r.shadow) as usize, lo, hi)) {
                     pieces.push((i, lo, hi, total));
                     total += (hi - lo) as u64;
+                    if audit && outside.len() < CARD_AUDIT_PIECES {
+                        let (whole_lo, whole_hi) = r.shadow.card_whole_piece(lo);
+                        if whole_lo < lo || whole_hi > hi {
+                            outside.push((i, whole_lo, whole_hi, total, lo, hi));
+                            total += (whole_hi - whole_lo) as u64;
+                        }
+                    }
                 }
             }
-            crate::shadow::CARD_STATS[2].fetch_add(u64::from(r.span.pieces), Ordering::Relaxed);
+            if !r.audit {
+                crate::shadow::CARD_STATS[2].fetch_add(u64::from(r.span.pieces), Ordering::Relaxed);
+            }
         }
         let mut written = vec![0usize; plan.ranges.len()];
         if !pieces.is_empty() {
@@ -4056,6 +4177,15 @@ impl Host {
                     list.Reset(allocator, None)?;
                     for &(i, lo, hi, at) in &pieces {
                         list.CopyBufferRegion(fetched, at, &plan.ranges[i].shadow.buffer, lo as u64, (hi - lo) as u64);
+                    }
+                    for &(i, lo, hi, at, _, _) in &outside {
+                        list.CopyBufferRegion(
+                            fetched,
+                            at,
+                            &plan.ranges[i].shadow.buffer,
+                            lo as u64,
+                            (hi - lo) as u64,
+                        );
                     }
                     list.Close()?;
                     self.queue.ExecuteCommandLists(&[Some(list.cast()?)]);
@@ -4079,6 +4209,48 @@ impl Host {
                 CARD_STATS[4].fetch_add(total, Ordering::Relaxed);
                 CARD_STATS[5].fetch_add(1, Ordering::Relaxed);
                 CARD_STATS[6].fetch_add(waiting.elapsed().as_micros() as u64, Ordering::Relaxed);
+            }
+            if audit {
+                // Before the merges: they write the CPU's side.
+                for &(i, lo, hi, at) in &pieces {
+                    if plan.ranges[i].audit {
+                        // SAFETY: the mapping of the fetched bytes; the
+                        // copy into it has run.
+                        let gpu = unsafe {
+                            std::slice::from_raw_parts((*data + at as usize) as *const u8, hi - lo)
+                        };
+                        plan.ranges[i].shadow.card_audit(
+                            lo,
+                            gpu,
+                            "in no range the submission declared",
+                        );
+                    }
+                }
+                for &(i, whole_lo, whole_hi, at, lo, hi) in &outside {
+                    // SAFETY: as above.
+                    let gpu = unsafe {
+                        std::slice::from_raw_parts(
+                            (*data + at as usize) as *const u8,
+                            whole_hi - whole_lo,
+                        )
+                    };
+                    let shadow = &plan.ranges[i].shadow;
+                    if whole_lo < lo {
+                        shadow.card_audit(
+                            whole_lo,
+                            &gpu[..lo - whole_lo],
+                            "below a declared range, in a piece its compare flagged",
+                        );
+                    }
+                    if whole_hi > hi {
+                        shadow.card_audit(
+                            hi,
+                            &gpu[hi - whole_lo..],
+                            "above a declared range, in a piece its compare flagged",
+                        );
+                    }
+                }
+                pieces.retain(|p| !plan.ranges[p.0].audit);
             }
             if wide_merge() && pieces.len() >= 8 {
                 // The pieces are apart from one another (each its own bytes
@@ -4120,6 +4292,9 @@ impl Host {
             }
         }
         for (r, written) in plan.ranges.iter().zip(written) {
+            if r.audit {
+                continue;
+            }
             COPY_BACK[1].fetch_add(written as u64, Ordering::Relaxed);
             let (from, to) = r.declared;
             #[cfg(feature = "diagnostics")]

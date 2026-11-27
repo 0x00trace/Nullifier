@@ -568,6 +568,12 @@ fn own_audit() -> u8 {
     })
 }
 
+/// With `crate::host`'s `card_audit` (`VICTORY_CARD_AUDIT`), since the
+/// start: stretches of the card's side looked at; those that held what the
+/// CPU's side holds; those that differed; pieces an audit left unfetched
+/// (more than it takes for a submission).
+pub(crate) static CARD_AUDITED: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
 /// For the question [`own_audit`] asks: whether a store through our own
 /// view notes the page current for its copy. With
 /// `VICTORY_BACK_OWN_NOTE=0` it does not: the journal says the page was
@@ -2851,6 +2857,83 @@ impl Shadow {
     /// The offsets of piece `i` of `span` that lie in the span.
     pub(crate) fn card_piece(&self, span: &CardSpan, i: u32) -> (usize, usize) {
         card_piece_of(self.start as usize, self.len as usize, span, i)
+    }
+
+    /// The offsets of the whole 64 KiB piece (cut at multiples of 64 KiB of
+    /// title memory, and to the copy) that holds offset `at`.
+    pub(crate) fn card_whole_piece(&self, at: usize) -> (usize, usize) {
+        let (start, end) = (self.start as usize, (self.start + self.len) as usize);
+        let page = (start + at) / PAGE;
+        (
+            (page * PAGE).max(start) - start,
+            ((page + 1) * PAGE).min(end) - start,
+        )
+    }
+
+    /// With `crate::host`'s `card_audit`: `gpu` is what the card's side
+    /// holds at offset `at` on, in bytes no merge takes (`what` says
+    /// which). Says how they differ from the CPU's side, and whether the
+    /// difference lies in bytes still to be sent up. Nothing is changed.
+    pub(crate) fn card_audit(&self, at: usize, gpu: &[u8], what: &'static str) {
+        let Some(card) = &self.card else {
+            return;
+        };
+        if gpu.is_empty() || at + gpu.len() > self.len as usize {
+            return;
+        }
+        let looked = CARD_AUDITED[0].fetch_add(1, Ordering::Relaxed) + 1;
+        // SAFETY: inside the mapping (checked above); only the submitting
+        // thread writes it, and this is that thread.
+        let held = unsafe { std::slice::from_raw_parts(self.data.add(at).cast_const(), gpu.len()) };
+        match first_difference(gpu, held) {
+            None => {
+                CARD_AUDITED[1].fetch_add(1, Ordering::Relaxed);
+            }
+            Some(first) => {
+                let last = last_difference(gpu, held).unwrap_or(first);
+                let differing = gpu[first..=last]
+                    .iter()
+                    .zip(&held[first..=last])
+                    .filter(|(g, h)| g != h)
+                    .count();
+                let to_send = card
+                    .dirty
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .any(|&(a, b)| a <= at + last && b > at + first);
+                let n = CARD_AUDITED[2].fetch_add(1, Ordering::Relaxed) + 1;
+                if n <= 96 || n.is_power_of_two() {
+                    let shown = (first + 24).min(gpu.len());
+                    tracing::warn!(
+                        copy = self.id,
+                        start = format_args!("{:#x}", self.start),
+                        len = self.len,
+                        address = format_args!("{:#x}", self.start as usize + at + first),
+                        stretch = gpu.len(),
+                        first,
+                        last,
+                        differing,
+                        to_send,
+                        card = format_args!("{:02x?}", &gpu[first..shown]),
+                        cpu = format_args!("{:02x?}", &held[first..shown]),
+                        what,
+                        n,
+                        "the card's side of a copy differs from its CPU side where nothing was declared (VICTORY_CARD_AUDIT)"
+                    );
+                }
+            }
+        }
+        if looked.is_multiple_of(256) {
+            let a = |i: usize| CARD_AUDITED[i].load(Ordering::Relaxed);
+            tracing::info!(
+                "the card's side of copies, looked at where nothing was declared (VICTORY_CARD_AUDIT), since the start: {} stretches, {} the same as the CPU's side, {} that differed; {} pieces left unfetched",
+                a(0),
+                a(1),
+                a(2),
+                a(3)
+            );
+        }
     }
 
     /// After a submission, for a copy in the card's memory: `gpu` is what
