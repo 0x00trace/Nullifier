@@ -259,6 +259,8 @@ cargo build --profile diag -p victory --features diagnostics   # target\diag\vic
 | `VICTORY_TEXTURE_NO_WAIT=0` | wait for title memory remapping before reading textures. By default, remaps use a kernel read and unreadable textures are retried on the next refresh |
 | `VICTORY_D3D12_WARP=1` | host device on the software adapter (slow; cannot reset the driver) |
 | `VICTORY_SHADER_LOOP_LIMIT=<n>` | translated shader loops stop after `n` iterations per lane instead of 2^20 (own shader cache entries); if a lower `n` makes world frames much faster, loops hitting the limit are what makes them slow |
+| `VICTORY_PLAIN_MUL=all` or `<hash>,...` | legacy multiplies (0 × anything = 0) translated as plain multiplies in those programs (own shader cache entries); not exact, for timing what the exact form costs (`docs/FINDINGS.md` 2.22) |
+| `VICTORY_PLAIN_MINMAX=all` or `<hash>,...` | maxima and minima translated as DXIL's, without ordering -0 below +0, in those programs (own shader cache entries); not exact, for timing only (2.22) |
 | `VICTORY_AUDIO_CAPTURE=<file.wav>` | records what the title plays (our process only) |
 | `VICTORY_XMA_DUMP=<dir>` | saves the first 32 XMA voices' context and input |
 
