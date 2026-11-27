@@ -34,6 +34,19 @@ impl<'a> Lower<'a> {
                     if !i.reads.iter().any(|r| r.1 == value) {
                         continue;
                     }
+                    // A write may preserve inactive lanes or untouched bits,
+                    // even when the same register is also an explicit half
+                    // operand. Without proof of a complete overwrite, follow
+                    // its new value. (LinVxtory eb8d790; the later #927
+                    // coherent-use rule.)
+                    for &(reg, next) in &i.writes {
+                        if matches!(reg, Reg::V(_))
+                            && i.read(reg) == Some(value)
+                            && seen.insert(next)
+                        {
+                            todo.push(next);
+                        }
+                    }
                     let operands = crate::ir::operand_reads(p, i);
                     let regs: Vec<Reg> = i
                         .reads
