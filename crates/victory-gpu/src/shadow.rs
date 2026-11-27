@@ -547,6 +547,40 @@ impl Flights {
     }
 }
 
+/// Whether pages that a store through a view of our own noted current for
+/// their copy are compared with title memory at the copy's next refresh
+/// (`VICTORY_BACK_OWN_AUDIT=1`; `2` also copies a page that differs).
+///
+/// A store written at the title's address opens the page's guard, so the
+/// copy that wrote takes the whole page again at its next refresh. A store
+/// through our own view leaves the guard as it is and notes the page
+/// current for that copy ([`Shadow::put_back_own`]), so that refresh takes
+/// nothing. The audit says whether the page then holds what title memory
+/// holds: a difference in a page whose guard is clean is a title write that
+/// the store's way of noting does not see.
+fn own_audit() -> u8 {
+    static ON: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("VICTORY_BACK_OWN_AUDIT")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0)
+    })
+}
+
+/// With [`own_audit`]: the pages noted current by a store through our own
+/// view and not looked at since, by copy and page number: the asking of
+/// the store, and the first and last offset in the page that stores wrote.
+static OWN_NOTED: Mutex<std::collections::BTreeMap<(u64, usize), (u64, u32, u32)>> =
+    Mutex::new(std::collections::BTreeMap::new());
+
+/// With [`own_audit`], since the start: noted pages looked at; those a
+/// refresh took anyway (written since); those title memory did not show;
+/// those that held what title memory holds; those that differed with the
+/// guard clean; those that differed with the guard open (a title write on
+/// its way); bytes that differed with the guard clean.
+static OWN_AUDITED: [AtomicU64; 7] = [const { AtomicU64::new(0) }; 7];
+
 /// The relay's merge of a stretch of a copy ([`relay`]). `now` is what the
 /// card's memory holds, read once; `held` is the copy's reference for the
 /// stretch (its snapshot, or the CPU's side of a copy in the card's
@@ -2126,6 +2160,15 @@ impl Shadow {
             {
                 *taken = (*taken).max(now);
                 OWN_WRITES[2].fetch_add(1, Ordering::Relaxed);
+                if own_audit() != 0 {
+                    let (lo, hi) = ((at % PAGE) as u32, (at % PAGE + bytes.len() - 1) as u32);
+                    OWN_NOTED
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .entry((self.id, page))
+                        .and_modify(|n| *n = (now, n.1.min(lo), n.2.max(hi)))
+                        .or_insert((now, lo, hi));
+                }
                 // A copy in the card's memory only: its CPU side is never
                 // written by the card, so it must equal title memory now.
                 if check && self.card.is_some() {
@@ -2512,6 +2555,9 @@ impl Shadow {
         if self.watched.load(Ordering::Relaxed) != NOT_WATCHED {
             if let Some((now, written)) = crate::watch::writes(from, to, true) {
                 self.watched.store(1, Ordering::Relaxed);
+                if own_audit() != 0 {
+                    self.audit_own(from, to, now, &written);
+                }
                 let copied = self.copy_stale(from, to, now, &written);
                 #[cfg(feature = "diagnostics")]
                 {
@@ -2531,6 +2577,128 @@ impl Shadow {
         #[cfg(feature = "diagnostics")]
         crate::copystat::whole(from, to - from, started.elapsed().as_micros() as u64);
         to - from
+    }
+
+    /// With [`own_audit`]: the pages of `[from, to)` that a store through
+    /// our own view noted current for this copy, compared with title
+    /// memory. The range is one no shader writes, just asked about
+    /// (`written` and `now` as [`crate::watch::writes`] gave them), and
+    /// nothing of it has been copied yet. A page the refresh is about to
+    /// take (written since) is only counted.
+    fn audit_own(&self, from: usize, to: usize, now: u64, written: &[(usize, u64)]) {
+        static SAID: AtomicU64 = AtomicU64::new(0);
+        let (start, end) = (self.start as usize, (self.start + self.len) as usize);
+        let base = start / PAGE;
+        let noted: Vec<(usize, (u64, u32, u32))> = {
+            let all = OWN_NOTED.lock().unwrap_or_else(|e| e.into_inner());
+            all.range((self.id, from / PAGE)..=(self.id, (to - 1) / PAGE))
+                .map(|(key, stored)| (key.1, *stored))
+                .collect()
+        };
+        if noted.is_empty() {
+            return;
+        }
+        let taken: Vec<u64> = {
+            let copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
+            noted
+                .iter()
+                .map(|(page, _)| {
+                    page.checked_sub(base)
+                        .and_then(|i| copied.get(i))
+                        .copied()
+                        .unwrap_or(0)
+                })
+                .collect()
+        };
+        let mut scratch = vec![0u8; PAGE];
+        for ((page, (stored, stored_first, stored_last)), taken) in noted.into_iter().zip(taken) {
+            let (lo, hi) = (
+                (page * PAGE).max(start).max(from),
+                ((page + 1) * PAGE).min(end).min(to),
+            );
+            // A page only partly in this range stays noted for the refresh
+            // that holds the rest of it.
+            if lo > (page * PAGE).max(start) || hi < ((page + 1) * PAGE).min(end) || lo >= hi {
+                continue;
+            }
+            OWN_NOTED
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&(self.id, page));
+            OWN_AUDITED[0].fetch_add(1, Ordering::Relaxed);
+            let write = written
+                .binary_search_by_key(&page, |w| w.0)
+                .map_or(0, |i| written[i].1);
+            if taken == 0 || write > taken {
+                OWN_AUDITED[1].fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            let title = &mut scratch[..hi - lo];
+            if !crate::host::read_into(lo as *const u8, title) {
+                OWN_AUDITED[2].fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+            // SAFETY: inside the copy's mapping; no shader writes this range.
+            let held = unsafe {
+                std::slice::from_raw_parts(self.data.add(lo - start).cast_const(), hi - lo)
+            };
+            let Some(a) = first_difference(held, title) else {
+                OWN_AUDITED[3].fetch_add(1, Ordering::Relaxed);
+                continue;
+            };
+            let b = last_difference(held, title).unwrap_or(a);
+            let differing = held[a..=b]
+                .iter()
+                .zip(&title[a..=b])
+                .filter(|(h, t)| h != t)
+                .count();
+            let clean = crate::watch::clean(page);
+            let n = OWN_AUDITED[if clean { 4 } else { 5 }].fetch_add(1, Ordering::Relaxed) + 1;
+            if clean {
+                OWN_AUDITED[6].fetch_add(differing as u64, Ordering::Relaxed);
+            }
+            if n <= 48 || n.is_power_of_two() {
+                let within = lo - page * PAGE;
+                tracing::warn!(
+                    copy = self.id,
+                    start = format_args!("{start:#x}"),
+                    len = self.len,
+                    card = self.card.is_some(),
+                    window = self.window,
+                    page = format_args!("{:#x}", page * PAGE),
+                    first = within + a,
+                    last = within + b,
+                    differing,
+                    stored_first,
+                    stored_last,
+                    stored,
+                    taken,
+                    write,
+                    now,
+                    clean,
+                    n,
+                    "a page that a store through our own view noted current differs from title memory at the copy's next refresh (VICTORY_BACK_OWN_AUDIT)"
+                );
+            }
+            if own_audit() >= 2 {
+                self.copy(lo, hi);
+            }
+        }
+        let looked = OWN_AUDITED[0].load(Ordering::Relaxed) / 8192;
+        if looked > SAID.swap(looked, Ordering::Relaxed) {
+            let a = |i: usize| OWN_AUDITED[i].load(Ordering::Relaxed);
+            tracing::info!(
+                "pages noted current by a store through our own view, looked at when their copy was next refreshed (VICTORY_BACK_OWN_AUDIT), since the start: {} pages, {} taken by that refresh anyway, {} that title memory did not show, {} the same as title memory, {} that differed with the guard clean ({} bytes), {} that differed with the guard open; {} noted and not looked at yet",
+                a(0),
+                a(1),
+                a(2),
+                a(3),
+                a(4),
+                a(6),
+                a(5),
+                OWN_NOTED.lock().unwrap_or_else(|e| e.into_inner()).len()
+            );
+        }
     }
 
     /// Copies the pages of `[from, to)` written after their last copy
