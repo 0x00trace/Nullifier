@@ -1176,6 +1176,26 @@ device. In these twelve runs the man's top is grey with dark blocks in three
 face is black in the car in one, and dark patches lie around his eyes in
 two; `docs/FORK.md` names the runs.
 
+**On top of the revert of 2.13** (twelve more runs in turn, three rounds,
+the merge `5aa7b69`: `main` @ `25f6ae1`, the revert `dede94c` and this
+change; no other switch). A browser playing video and a music player ran
+beside this set, and its level is about 5 % under the sets before it: the
+frame at 3,000 draws with the profile alone is 175 ms here, and 166 ms for
+the same code an hour earlier (2.13). So compare inside the set only:
+
+| | median fps (lines under 10 fps) | n | median fps (lines of 500 draws or more) | frame at 3,000 draws | presents apart | the thread that copies back waits for fetches, a frame |
+|---|---|---|---|---|---|---|
+| the profile | 5.10 / 5.40 / 5.35 | 27 / 28 / 28 | 5.20 / 5.45 / 5.50 | 175.3 / 170.6 / 178.7 ms | 139 to 181 / 133 to 178 / 136 to 178 ms | none: fetched in the settle |
+| + `VICTORY_RELAY=2 VICTORY_RELAY_QUEUE=1` | 6.00 / 5.90 / 5.70 | 27 / 27 / 27 | 6.10 / 6.05 / 5.85 | 156.1 / 157.6 / 157.5 ms | 88 to 158 / 97 to 153 / 90 to 157 ms | 16.1 / 17.6 / 16.3 ms |
+| 2560x1440 output | 7.40 / 7.40 / 7.45 | 28 / 28 / 28 | 7.60 / 7.60 / 7.60 | 124.0 / 123.3 / 123.8 ms | 104 to 131 / 102 to 135 / 102 to 138 ms | none: fetched in the settle |
+| 2560x1440 output + `VICTORY_RELAY=2 VICTORY_RELAY_QUEUE=1` | 8.40 / 8.60 / 8.00 | 27 / 27 / 27 | 8.50 / 8.75 / 8.10 | 80.6 / 108.3 / 114.5 ms | 69 to 119 / 72 to 125 / 72 to 123 ms | 9.2 / 9.4 / 9.5 ms |
+
+The queue's part is the same with 2.13 reverted: the frame at 3,000 draws is
+157 ms against 175 at 3840x2160, and the median by draws 8.45 fps against
+7.60 at 2560x1440 output (the fit of the last row spreads from 81 to 115 ms,
+so its medians are the better number). No run lost the device, and the man's
+top is black in all twelve runs.
+
 **Without captures** (one run each, 2560x1440 output, a build that also
 holds a change that is not proposed, fills of upload memory that do not
 wait; frame lines of 500 draws or more): the relay off 8.40 fps, presents
