@@ -283,8 +283,10 @@ mod tests {
     #[test]
     fn a_shared_log_has_no_home_paths_addresses_or_mail() {
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/tester".into());
-        let mut settings = Settings::default();
-        settings.game_dir = "/games/title".into();
+        let settings = Settings {
+            game_dir: "/games/title".into(),
+            ..Settings::default()
+        };
         let raw = format!(
             "6.7 fps, 150.0 ms/frame at {home}/secret/file and /games/title/x\n\
              contact bob@example.com from 192.168.1.42 and 10.0.0.7\n"
