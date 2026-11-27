@@ -117,6 +117,9 @@ and passes it with `VICTORY_PROFILES`, forcing it by name. That is why the
 launchers honour `VICTORY_PROFILES` at all: it lets a front end pass a set,
 including switching an opt-in off by omission.
 
+`Esc` returns to Play from any page. `--tab
+play|graphics|controls|community|rendering|advanced|tools` starts on that page.
+
 `--check` prints the resolved profile, the exact environment and the command
 it would run, without launching. `--tab play|game|graphics|advanced|debug`
 opens on that tab. The game settings also work headless:

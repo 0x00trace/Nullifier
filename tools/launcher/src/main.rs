@@ -32,10 +32,10 @@ const LAYER_VERSION: &str = "0.004";
 fn apply_theme(ctx: &egui::Context) {
     use egui::{Color32, FontFamily, FontId, Stroke, TextStyle};
     let mut style = (*ctx.style()).clone();
-    style.spacing.item_spacing = egui::vec2(10.0, 9.0);
-    style.spacing.button_padding = egui::vec2(14.0, 8.0);
-    style.spacing.interact_size.y = 30.0;
-    style.spacing.indent = 18.0;
+    style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+    style.spacing.button_padding = egui::vec2(12.0, 6.0);
+    style.spacing.interact_size = egui::vec2(40.0, 30.0);
+    style.spacing.indent = 16.0;
     style.text_styles = [
         (TextStyle::Heading, FontId::new(21.0, FontFamily::Proportional)),
         (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
@@ -52,7 +52,7 @@ fn apply_theme(ctx: &egui::Context) {
     v.panel_fill = Color32::from_rgb(17, 18, 21);
     v.window_fill = panel;
     v.faint_bg_color = card;
-    v.extreme_bg_color = Color32::from_rgb(15, 16, 19);
+    v.extreme_bg_color = Color32::from_rgb(25, 28, 33);
     v.override_text_color = Some(ink);
     v.hyperlink_color = ACCENT;
     v.selection.bg_fill = ACCENT;
@@ -68,6 +68,9 @@ fn apply_theme(ctx: &egui::Context) {
     }
     v.widgets.noninteractive.bg_fill = card;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, line);
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(52, 57, 67));
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, Color32::from_rgb(72, 80, 94));
+    v.widgets.active.bg_stroke = Stroke::new(1.0_f32, ACCENT);
     v.widgets.inactive.bg_fill = Color32::from_rgb(40, 43, 50);
     v.widgets.inactive.weak_bg_fill = Color32::from_rgb(36, 39, 45);
     v.widgets.hovered.bg_fill = Color32::from_rgb(45, 49, 58);
@@ -172,7 +175,7 @@ fn main() -> eframe::Result<()> {
                 Some("community") => Tab::Community,
                 Some("rendering") => Tab::Rendering,
                 Some("advanced") => Tab::Advanced,
-                Some("debug") => Tab::Debug,
+                Some("debug") | Some("tools") => Tab::Debug,
                 _ => Tab::Play,
             };
             if matches!(app.tab, Tab::Rendering | Tab::Advanced | Tab::Debug) {
@@ -2052,7 +2055,7 @@ impl App {
     }
 
     fn play(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Play");
+        page_header(ui, "Play", "");
         let warn = warnings(&self.settings, &self.hardware);
         warnings_card(ui, &warn);
         if let Some((text, at)) = &self.toast {
@@ -2442,20 +2445,20 @@ impl App {
                     ui.label(egui::RichText::new("Game data").small());
                     ui.label(egui::RichText::new(prefix.display().to_string()).small().color(egui::Color32::GRAY));
                 });
-                if chip_button(ui, "Open game data").clicked() {
-                    open_path(&prefix);
-                }
-            }
-            ui.horizontal(|ui| {
-                if chip_button(ui, "Open cache").clicked() {
-                    open_path(&cache);
-                }
-                if chip_button(ui, "Open log").clicked() {
-                    if let Some(path) = &self.log_path {
-                        open_path(path);
+                ui.horizontal(|ui| {
+                    if chip_button(ui, "Open game data").clicked() {
+                        open_path(&prefix);
                     }
-                }
-            });
+                    if chip_button(ui, "Open cache").clicked() {
+                        open_path(&cache);
+                    }
+                    if chip_button(ui, "Open log").clicked() {
+                        if let Some(path) = &self.log_path {
+                            open_path(path);
+                        }
+                    }
+                });
+            }
         });
     }
 
@@ -2590,7 +2593,11 @@ impl App {
     }
 
     fn game_page(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Graphics");
+        page_header(
+            ui,
+            "Graphics",
+            "The game's own graphics settings, from its settings.xml. Close the game before changing them.",
+        );
         egui::Frame::group(ui.style())
             .fill(egui::Color32::from_rgb(45, 38, 24))
             .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
@@ -2612,14 +2619,6 @@ impl App {
                     .wrap(),
                 );
             });
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new("The game's own graphics settings, from its settings.xml. Close the game before changing them.")
-                    .small()
-                    .color(egui::Color32::GRAY),
-            )
-            .wrap(),
-        );
         let running = self.running();
         let mut reload = false;
         let mut advanced_open = self.game_advanced_open;
@@ -2638,7 +2637,7 @@ impl App {
         let planned = &mut self.settings.planned;
         ui.horizontal(|ui| {
             if ui
-                .add_enabled(!running, egui::Button::new("Apply"))
+                .add_enabled(!running, primary("Apply", 80.0, 30.0))
                 .on_hover_text("Write settings.xml, keeping settings.xml.bak")
                 .clicked()
             {
@@ -2650,7 +2649,7 @@ impl App {
                     Err(e) => game.note = format!("Could not save: {e}"),
                 }
             }
-            if ui.button("Reload").clicked() {
+            if ui.add(secondary("Reload", 84.0, 30.0)).clicked() {
                 reload = true;
             }
             if game.dirty {
@@ -2662,6 +2661,7 @@ impl App {
         });
         ui.label(egui::RichText::new(&game.note).small().color(egui::Color32::GRAY));
         egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.spacing_mut().interact_size.y = 28.0;
             section_header(ui, "Display");
             render_pairs(ui, game, DISPLAY_KEYS);
 
@@ -2760,22 +2760,17 @@ impl App {
     }
 
     fn controls(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Controls");
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(
-                    "Xbox and DualSense pads work through the system's own controller support. While no pad is connected, the keyboard stands in for one.",
-                )
-                .small()
-                .color(egui::Color32::GRAY),
-            )
-            .wrap(),
+        page_header(
+            ui,
+            "Controls",
+            "Xbox and DualSense pads work through the system's own controller support. While no pad is connected, the keyboard stands in for one.",
         );
         if !self.controllers_checked {
             self.controllers = scan_controllers();
             self.controllers_checked = true;
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.spacing_mut().interact_size.y = 28.0;
             card(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.strong("Controllers");
@@ -2841,8 +2836,9 @@ impl App {
                                 {
                                     ui.label(*action);
                                     ui.add_sized(
-                                        [88.0, 24.0],
-                                        egui::TextEdit::singleline(&mut self.keyboard_keys[index]),
+                                        [92.0, 28.0],
+                                        egui::TextEdit::singleline(&mut self.keyboard_keys[index])
+                                            .vertical_align(egui::Align::Center),
                                     );
                                     ui.end_row();
                                 }
@@ -2858,12 +2854,12 @@ impl App {
                 }
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    if ui.add(primary("Apply", 90.0, 30.0)).clicked() {
+                    if ui.add(primary("Apply", 80.0, 30.0)).clicked() {
                         self.settings.keyboard = keys_to_text(&self.keyboard_keys);
                         self.settings.save();
                         self.status = "keyboard bindings saved".into();
                     }
-                    if chip_button(ui, "Reset to defaults").clicked() {
+                    if ui.add(secondary("Reset to defaults", 130.0, 30.0)).clicked() {
                         self.keyboard_keys = load_keys("");
                         self.settings.keyboard.clear();
                         self.settings.save();
@@ -2966,7 +2962,7 @@ impl App {
             self.community_status = "Choose a name first (a nickname is fine).".into();
             return None;
         }
-        let (world_fps, frame, gpu, draws) = world_stats(&raw);
+        let (world_fps, _, _, _) = world_stats(&raw);
         if world_fps.is_none() {
             self.community_status =
                 "The last log has no in-game frames (menus run at 30). Play or measure in the world first.".into();
@@ -3050,16 +3046,10 @@ impl App {
             self.community_checked = true;
             self.start_community_fetch();
         }
-        ui.heading("Community");
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new(
-                    "Share how it runs. Nothing leaves this PC unless you paste the copied block.",
-                )
-                .small()
-                .color(egui::Color32::GRAY),
-            )
-            .wrap(),
+        page_header(
+            ui,
+            "Community",
+            "Share how it runs. Nothing leaves this PC unless you paste the copied block.",
         );
         // Fields need to read as fields on this dark page.
         ui.visuals_mut().extreme_bg_color = egui::Color32::from_rgb(30, 33, 40);
@@ -3562,13 +3552,10 @@ impl App {
     }
 
     fn rendering(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Rendering");
-        ui.add(
-            egui::Label::new(
-                egui::RichText::new("Nullifier's own rendering settings: speed, memory and stability. A ? explains any of them.")
-                    .small()
-                    .color(egui::Color32::GRAY),
-            ),
+        page_header(
+            ui,
+            "Rendering",
+            "Nullifier's own rendering settings: speed, memory and stability. A ? explains any of them.",
         );
         let warn = warnings(&self.settings, &self.hardware);
         warnings_card(ui, &warn);
@@ -3577,6 +3564,7 @@ impl App {
         let mut render_scale = self.settings.render_scale;
         let mut display_changed = false;
         egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.spacing_mut().interact_size.y = 28.0;
             let sets = &mut self.settings.sets;
             card(ui, |ui| {
                 ui.strong("Display");
@@ -3715,8 +3703,9 @@ impl App {
     }
 
     fn advanced(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Advanced");
+        page_header(ui, "Advanced", "Exact settings and environment, for troubleshooting.");
         egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.spacing_mut().interact_size.y = 28.0;
             card(ui, |ui| {
                 ui.strong("All settings");
                 ui.add(
@@ -3736,9 +3725,12 @@ impl App {
                     .collect();
                 for (key, value) in entries {
                     ui.horizontal(|ui| {
-                        ui.add_sized(
-                            [300.0, 22.0],
-                            egui::Label::new(egui::RichText::new(&key).monospace()),
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(300.0, 28.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.label(egui::RichText::new(&key).monospace());
+                            },
                         );
                         if describe(&key).is_some() && help_button(ui).clicked() {
                             info = Some(key.clone());
@@ -3750,7 +3742,7 @@ impl App {
                         let hint = example(&key).unwrap_or("value");
                         if ui
                             .add_sized(
-                                [100.0, 22.0],
+                                [110.0, 28.0],
                                 egui::TextEdit::singleline(&mut v)
                                     .hint_text(hint)
                                     .vertical_align(egui::Align::Center),
@@ -3809,8 +3801,9 @@ impl App {
     }
 
     fn debug(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Tools");
+        page_header(ui, "Tools", "Hardware, benchmark, installation and screenshots.");
         egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.spacing_mut().interact_size.y = 28.0;
             card(ui, |ui| {
                 ui.strong("This computer");
                 ui.horizontal(|ui| {
@@ -3999,6 +3992,15 @@ impl App {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape))
+            && self.tab != Tab::Play
+            && self.info.is_none()
+            && !self.game_warning_open
+            && !self.picking
+            && self.community_open.is_none()
+        {
+            self.tab = Tab::Play;
+        }
         if let Some(rx) = &self.community_rx {
             if let Ok(board) = rx.try_recv() {
                 self.community_rx = None;
@@ -4067,7 +4069,7 @@ impl eframe::App for App {
         }
 
         egui::SidePanel::left("rail")
-            .exact_width(150.0)
+            .exact_width(162.0)
             .resizable(false)
             .show(ctx, |ui| {
                 ui.add_space(12.0);
@@ -4104,37 +4106,36 @@ impl eframe::App for App {
                         }
                     }
                 });
-                ui.add_space(16.0);
-                let mut tabs = vec![
+                ui.add_space(18.0);
+                if !self.settings.show_advanced
+                    && !matches!(
+                        self.tab,
+                        Tab::Play | Tab::Graphics | Tab::Controls | Tab::Community
+                    )
+                {
+                    self.tab = Tab::Play;
+                }
+                nav_group(ui, "GAME");
+                for (tab, label) in [
                     (Tab::Play, "Play"),
                     (Tab::Graphics, "Graphics"),
                     (Tab::Controls, "Controls"),
                     (Tab::Community, "Community"),
-                ];
+                ] {
+                    if nav_item(ui, label, self.tab == tab).clicked() {
+                        self.tab = tab;
+                    }
+                }
                 if self.settings.show_advanced {
-                    tabs.extend([
+                    nav_group(ui, "DEVELOPER");
+                    for (tab, label) in [
                         (Tab::Rendering, "Rendering"),
                         (Tab::Advanced, "Advanced"),
                         (Tab::Debug, "Tools"),
-                    ]);
-                } else if !matches!(
-                    self.tab,
-                    Tab::Play | Tab::Graphics | Tab::Controls | Tab::Community
-                ) {
-                    self.tab = Tab::Play;
-                }
-                for (tab, label) in tabs {
-                    let selected = self.tab == tab;
-                    let text = egui::RichText::new(label).size(14.0).color(if selected {
-                        egui::Color32::WHITE
-                    } else {
-                        egui::Color32::from_rgb(178, 183, 194)
-                    });
-                    let button = egui::Button::new(text)
-                        .fill(if selected { ACCENT } else { egui::Color32::TRANSPARENT })
-                        .stroke(egui::Stroke::NONE);
-                    if ui.add_sized([ui.available_width(), 34.0], button).clicked() {
-                        self.tab = tab;
+                    ] {
+                        if nav_item(ui, label, self.tab == tab).clicked() {
+                            self.tab = tab;
+                        }
                     }
                 }
                 ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
@@ -4671,8 +4672,8 @@ fn stat(ui: &mut egui::Ui, label: &str, value: Option<String>) {
 fn chip_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(
         egui::Button::new(egui::RichText::new(text).small())
-            .corner_radius(3)
-            .min_size(egui::vec2(0.0, 22.0)),
+            .corner_radius(4)
+            .min_size(egui::vec2(0.0, 26.0)),
     )
 }
 
@@ -4707,9 +4708,63 @@ fn primary(text: &str, width: f32, height: f32) -> egui::Button<'static> {
         .min_size(egui::vec2(width, height))
 }
 
+fn nav_group(ui: &mut egui::Ui, label: &str) {
+    ui.add_space(10.0);
+    ui.label(
+        egui::RichText::new(label)
+            .size(9.5)
+            .strong()
+            .color(egui::Color32::from_rgb(112, 118, 130)),
+    );
+    ui.add_space(2.0);
+}
+
+fn nav_item(ui: &mut egui::Ui, label: &str, selected: bool) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 32.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let background = if selected {
+            ACCENT
+        } else if response.hovered() {
+            egui::Color32::from_rgb(34, 37, 44)
+        } else {
+            egui::Color32::TRANSPARENT
+        };
+        ui.painter().rect_filled(rect, 6.0, background);
+        ui.painter().text(
+            rect.left_center() + egui::vec2(12.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(14.0),
+            if selected {
+                egui::Color32::WHITE
+            } else {
+                egui::Color32::from_rgb(178, 183, 194)
+            },
+        );
+    }
+    response
+}
+
+fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str) {
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(title).size(23.0).strong());
+    if !subtitle.is_empty() {
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(subtitle)
+                    .small()
+                    .color(egui::Color32::from_rgb(150, 156, 168)),
+            )
+            .wrap(),
+        );
+    }
+    ui.add_space(6.0);
+}
+
 fn card(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::symmetric(14, 12))
+        .inner_margin(egui::Margin::symmetric(16, 14))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui);
@@ -4760,7 +4815,7 @@ fn number_info(
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .add_sized(
-                        [92.0, 26.0],
+                        [96.0, 28.0],
                         egui::DragValue::new(&mut value)
                             .range(range.clone())
                             .speed(step as f64)
@@ -4964,7 +5019,7 @@ fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
                 if let Some((min, max, _)) = limits(&setting.key) {
                     drag = drag.range(min as i64..=max as i64);
                 }
-                if ui.add_sized([92.0, 24.0], drag).changed() && v != before {
+                if ui.add_sized([96.0, 28.0], drag).changed() && v != before {
                     setting.value = v.to_string();
                     changed = true;
                 }
@@ -4974,7 +5029,7 @@ fn game_row(ui: &mut egui::Ui, setting: &mut GameSetting) -> bool {
                 if let Some((min, max, speed)) = limits(&setting.key) {
                     drag = drag.range(min..=max).speed(speed);
                 }
-                if ui.add_sized([92.0, 24.0], drag).changed() && (v - before).abs() > f32::EPSILON {
+                if ui.add_sized([96.0, 28.0], drag).changed() && (v - before).abs() > f32::EPSILON {
                     setting.value = format!("{v}");
                     changed = true;
                 }
