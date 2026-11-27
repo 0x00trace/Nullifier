@@ -74,8 +74,27 @@ def report(path, world_fps, html_out=None, csv_out=None):
     rows = parse(path)
     if not rows:
         sys.exit("no frame lines found")
-    world = [r for r in rows if r["fps"] < world_fps] or rows
+    world = [r for r in rows if r["fps"] < world_fps]
     print(f"{len(rows)} frames, {len(world)} in the world")
+    if csv_out:
+        import csv
+        with open(csv_out, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(rows[0]))
+            w.writeheader()
+            w.writerows(rows)
+        print(f"csv: {csv_out}")
+
+    if not world:
+        message = f"No world frames below {world_fps:g} fps."
+        print(message)
+        if html_out:
+            with open(html_out, "w") as f:
+                f.write(f"<!doctype html><meta charset=utf-8>\n"
+                        f"<title>victory frame breakdown</title>\n"
+                        f"<p>{message}</p>\n")
+            print(f"html: {html_out}")
+        return
+
     print(f"\n{'phase':<16}{'median ms':>11}{'share':>8}")
     order = [("copies", "copies"), ("tex", "textures"), ("plans", "bindless plans"),
              ("gpu", "GPU"), ("back", "copy-back"), ("unacc", "unaccounted")]
@@ -91,13 +110,6 @@ def report(path, world_fps, html_out=None, csv_out=None):
     c_mb, t_mb = med(world, "copies_mb"), med(world, "tex_mb")
     print(f"bandwidth/frame: copies {c_mb:.0f} MB, textures {t_mb:.0f} MB"
           f" -> {(c_mb+t_mb)/frame*1000 if frame else 0:.0f} MB/s at {1000/frame if frame else 0:.1f} fps")
-
-    if csv_out:
-        import csv
-        with open(csv_out, "w", newline="") as f:
-            w = csv.DictWriter(f, fieldnames=list(rows[0]))
-            w.writeheader(); w.writerows(rows)
-        print(f"csv: {csv_out}")
 
     if html_out:
         W, H, PAD = 1100, 320, 28
