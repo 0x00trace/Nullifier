@@ -5,8 +5,9 @@
 #
 # Runs `launcher/nullifier-launch.sh --detect` with an `lspci` and an
 # `nvidia-smi` of its own in front of the real ones: two NVIDIA cards, of
-# 8188 and 24564 MB, and an integrated AMD card behind them. The launcher
-# must name the vendor nvidia and the larger card's 24564 MB.
+# 8188 MB and a configurable size, and an integrated AMD card behind them.
+# Check that the largest card selects the expected profile and that a user
+# setting takes precedence over the profile.
 #
 # Why this exists: the NVIDIA driver has no mem_info_vram_total file, so the
 # launcher took the video memory from whichever other card had one (512 MB
@@ -26,17 +27,27 @@ EOF
 cat > "$T/nvidia-smi" <<'EOF'
 #!/bin/sh
 echo 8188
-echo 24564
+echo "$FAKE_NVIDIA_VRAM"
 EOF
 chmod +x "$T/lspci" "$T/nvidia-smi"
 
-OUT="$(PATH="$T:$PATH" "$HERE/launcher/nullifier-launch.sh" --detect 2>&1)"
-fail=0
-echo "$OUT" | grep -qE '^GPU vendor +nvidia$' || { echo "FAIL: vendor is not nvidia"; fail=1; }
-echo "$OUT" | grep -qE '^VRAM +24564 MB$' || { echo "FAIL: video memory is not the larger NVIDIA card's 24564 MB"; fail=1; }
-if [ "$fail" != 0 ]; then
-  echo "--- the launcher said:"
-  echo "$OUT" | sed -n '1,6p'
-  exit 1
-fi
-echo "check-detect: ok (nvidia, 24564 MB)"
+check_detect() {
+  local vram="$1" profile="$2" late_wait="$3" out
+  shift 3
+  if ! out=$(env -i PATH="$T:$PATH" STEAM_ROOT="$T" VICTORY_WINESERVER_DIR="$T" \
+      FAKE_NVIDIA_VRAM="$vram" "$@" "$HERE/launcher/nullifier-launch.sh" --detect 2>&1) ||
+      ! grep -qE '^GPU vendor +nvidia$' <<< "$out" ||
+      ! grep -qE "^VRAM +$vram MB$" <<< "$out" ||
+      ! grep -qE "^profile +$profile " <<< "$out" ||
+      ! grep -qxF "  VICTORY_LATE_WAIT=$late_wait" <<< "$out"; then
+    echo "FAIL: expected nvidia, $vram MB, $profile, VICTORY_LATE_WAIT=$late_wait"
+    echo "$out"
+    exit 1
+  fi
+}
+
+check_detect 24564 linux-nvidia-16gb 3
+check_detect 12999 linux-nvidia 1
+check_detect 13000 linux-nvidia-16gb 3
+check_detect 13000 linux-nvidia-16gb 1 VICTORY_LATE_WAIT=1
+echo "check-detect: ok (NVIDIA VRAM, profile boundary, user override)"
