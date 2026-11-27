@@ -132,15 +132,19 @@
         "os": "windows",
         "vendor": "nvidia"
       },
-      "confidence": "reported",
+      "confidence": "ported",
       "sets": {
         "VICTORY_RELAY": "2",
         "VICTORY_LATE_WAIT": "3",
         "VICTORY_WIDE_BACK": "1",
         "VICTORY_CARD_BUFFERS_MIN_MB": "1",
-        "VICTORY_CARD_BUFFERS_MB": "1024"
+        "VICTORY_CARD_BUFFERS_MB": "1024",
+        "VICTORY_TEXTURE_NO_WAIT": "1",
+        "VICTORY_INDIRECT_RUNS": "1",
+        "VICTORY_CARD_HASH_LANES": "1",
+        "VICTORY_FRAME_INTERVAL_MS": "16.667"
       },
-      "note": "Fork README: RELAY=2 or the late-wait combo. Issue #417 (RTX 5070 Ti) reports 3.9-4.2 fps."
+      "note": "Windows + NVIDIA. Ported from the measured linux-nvidia-16gb set (INDIRECT_RUNS 4.30 -> 5.20 fps, CARD_HASH_LANES 4.40 -> 5.25, both RTX 5080; TEXTURE_NO_WAIT from every measured NVIDIA profile) and the Windows set from trustno1-coder/VIctory-NVIDIA. The title's own 30 fps cap is lifted to 60 (VICTORY_FRAME_INTERVAL_MS=16.667); it only shows where the card renders faster than 33 ms. Not yet measured on Windows: report the fps and any device removal. If a session loses the device, set VICTORY_RELAY=0, then VICTORY_LATE_WAIT=1."
     },
     {
       "name": "windows-other",
