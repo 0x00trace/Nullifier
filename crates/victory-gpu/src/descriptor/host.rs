@@ -364,6 +364,37 @@ pub(crate) struct Recheck {
 /// memory is looked at again, each counted from the look before.
 const RECHECK_FRAMES: [u64; 5] = [4, 12, 40, 120, 400];
 
+/// Frames between looks at an uploaded texture picked by index once
+/// [`RECHECK_FRAMES`] is through (`VICTORY_HEAP_RECHECK_EVERY=<frames>`;
+/// unset or 0: it is not looked at again, as before). The title streams a
+/// texture's memory in and rewrites it long after its view was written;
+/// what changes after the schedule's last look stays as it was on the card
+/// for the rest of the run (black skin, a poster that never comes back).
+/// After fxceless e4245f3c (VICTORY_HEAP_RECHECK_EVERY, after RyanCase94's
+/// 920423a9).
+fn recheck_every() -> u64 {
+    static EVERY: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *EVERY.get_or_init(|| {
+        let every = std::env::var("VICTORY_HEAP_RECHECK_EVERY")
+            .ok()
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        if every > 0 {
+            tracing::info!("uploaded textures picked by index are looked at again every {every} frames (VICTORY_HEAP_RECHECK_EVERY)");
+        }
+        every
+    })
+}
+
+/// The look after one that found `looks` earlier looks, with `every` the
+/// period once [`RECHECK_FRAMES`] is through (0: none).
+fn recheck_gap(looks: u8, every: u64) -> Option<u64> {
+    RECHECK_FRAMES
+        .get(usize::from(looks) + 1)
+        .copied()
+        .or((every > 0).then_some(every))
+}
+
 /// The queue of title slots whose texture view waits to be brought up to
 /// date for shaders that pick textures by index: which are due, and in
 /// which order (no host heap needed, so it is tested without one).
@@ -433,9 +464,12 @@ impl TextureQueue {
             self.changed(index, frame, frame);
             return;
         }
-        match RECHECK_FRAMES.get(usize::from(seen.looks) + 1) {
+        match recheck_gap(seen.looks, recheck_every()) {
             Some(wait) => {
-                let next = Recheck { due: frame + wait, looks: seen.looks + 1, ..*seen };
+                // Past the schedule, `looks` stays at its last step: the
+                // period repeats rather than growing.
+                let looks = (seen.looks + 1).min(RECHECK_FRAMES.len() as u8);
+                let next = Recheck { due: frame + wait, looks, ..*seen };
                 self.rechecks.insert(index, next);
             }
             None => {
@@ -3277,6 +3311,21 @@ void BY_FLOATS_OR_NOT(uint3 id : SV_DispatchThreadID) {
         assert!(q.due(2, 9).iter().any(|d| d.0 == 8));
         q.rechecked(8, &seen[0].1, false, 5);
         assert!(q.rechecks_due(u64::MAX, 9).is_empty());
+    }
+
+    /// After the schedule's last look, an uploaded texture is looked at
+    /// again every `VICTORY_HEAP_RECHECK_EVERY` frames when that is set,
+    /// and not at all when it is not.
+    #[test]
+    fn uploaded_textures_keep_taking_turns_after_the_schedule() {
+        assert_eq!(recheck_gap(0, 0), Some(12));
+        assert_eq!(recheck_gap(3, 0), Some(400));
+        assert_eq!(recheck_gap(4, 0), None);
+        assert_eq!(recheck_gap(4, 600), Some(600));
+        assert_eq!(recheck_gap(5, 600), Some(600));
+        assert_eq!(recheck_gap(5, 0), None);
+        assert_eq!(recheck_gap(255, 600), Some(600));
+        assert_eq!(recheck_gap(255, 0), None);
     }
 
     /// The fingerprint of a texture's memory sees a change at its start, in
