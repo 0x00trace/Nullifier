@@ -17,8 +17,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Enforce the asset policy: the repository holds only small text files
-    /// we wrote. Checks tracked and untracked-but-not-ignored files.
+    /// Check tracked and non-ignored untracked files against the asset policy.
     Policy {
         /// Check only what is staged for commit (used by the pre-commit hook).
         #[arg(long)]

@@ -1,9 +1,7 @@
-//! Rule #1, statically: the repository only ever contains small text files
-//! that we wrote. See docs/asset-policy.md.
+//! Static checks for the repository's asset policy. See docs/asset-policy.md.
 //!
-//! This is an allowlist, not a blocklist: a file passes only if its name is
-//! on the list, it is not too big, it is text, and it does not smuggle data
-//! inside text (long hex/base64 runs).
+//! The allowlist admits small text files and the PNGs used to document the
+//! launcher. Text files are also checked for embedded data.
 
 use std::path::Path;
 use std::process::Command;
@@ -30,6 +28,21 @@ const ALLOWED_NAMES: &[&str] = &[
     "LICENSE-MIT",
     "LICENSE-APACHE",
 ];
+const ALLOWED_TEXT_PATHS: &[&str] = &[
+    ".cursor/rules/nullifier.mdc",
+    ".cursorrules",
+    "Nullifier.bat",
+    "site/app.js",
+    "site/index.html",
+    "site/style.css",
+];
+const LAUNCHER_SCREENSHOTS: &[&str] = &[
+    "docs/screenshots/community.png",
+    "docs/screenshots/controls.png",
+    "docs/screenshots/graphics.png",
+    "docs/screenshots/play.png",
+];
+const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
 /// Paths explicitly exempted, with a reason. Keep this empty if at all possible.
 const EXCEPTIONS: &[(&str, &str)] = &[(
@@ -149,6 +162,7 @@ fn list_files(root: &Path, staged: bool) -> Result<Vec<String>> {
 /// All problems with one file. Pure, for testing.
 pub fn check(path: &str, content: &[u8]) -> Vec<String> {
     let mut problems = Vec::new();
+    let is_launcher_screenshot = LAUNCHER_SCREENSHOTS.contains(&path);
     let name = path.rsplit('/').next().unwrap_or(path);
     let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase());
     // The repository's frame-log reporter is Python source.
@@ -156,7 +170,9 @@ pub fn check(path: &str, content: &[u8]) -> Vec<String> {
         || ALLOWED_NAMES.contains(&name)
         || ext
             .as_deref()
-            .is_some_and(|e| ALLOWED_EXTENSIONS.contains(&e));
+            .is_some_and(|e| ALLOWED_EXTENSIONS.contains(&e))
+        || ALLOWED_TEXT_PATHS.contains(&path)
+        || is_launcher_screenshot;
     if !allowed {
         problems.push("file type not on the allowlist".to_owned());
     }
@@ -171,7 +187,11 @@ pub fn check(path: &str, content: &[u8]) -> Vec<String> {
             problems.push(format!("looks like a {what}"));
         }
     }
-    if content.contains(&0) {
+    if is_launcher_screenshot {
+        if !content.starts_with(PNG_SIGNATURE) {
+            problems.push("launcher screenshot lacks a PNG signature".to_owned());
+        }
+    } else if content.contains(&0) {
         problems.push("binary content (NUL bytes)".to_owned());
     } else if let Some(run) = longest_encoded_run(content)
         && run > MAX_ENCODED_RUN
@@ -203,6 +223,30 @@ mod tests {
         assert!(check(".gitignore", b"/target/\n").is_empty());
         assert!(check(".githooks/pre-commit", b"#!/bin/sh\n").is_empty());
         assert!(check("tools/wine/x.patch", b"--- a/x.c\n+++ b/x.c\n").is_empty());
+    }
+
+    #[test]
+    fn checks_documented_text_paths_as_source() {
+        assert!(check("site/index.html", b"<!doctype html>\n").is_empty());
+        assert!(check("tools/frames.py", b"print('frame')\n").is_empty());
+        assert!(!check("docs/index.html", b"<!doctype html>\n").is_empty());
+        assert!(!check("site/index.html", b"MZ\0").is_empty());
+    }
+
+    #[test]
+    fn launcher_screenshots_require_the_expected_path_signature_and_size() {
+        let path = "docs/screenshots/play.png";
+        let mut png = super::PNG_SIGNATURE.to_vec();
+        png.push(0);
+        assert!(check(path, &png).is_empty());
+        assert!(!check("docs/screenshots/other.png", &png).is_empty());
+        assert_eq!(
+            check(path, b"plaintext"),
+            ["launcher screenshot lacks a PNG signature"]
+        );
+        assert!(!check(path, b"MZ\0").is_empty());
+        png.resize(super::MAX_FILE_SIZE + 1, 0);
+        assert!(!check(path, &png).is_empty());
     }
 
     #[test]

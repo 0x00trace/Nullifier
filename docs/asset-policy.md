@@ -16,7 +16,9 @@ In any form (files, string literals, fixtures, snapshots, docs):
 
 ## Allowed
 
-* our own code that understands formats;
+* our own source and configuration, including the launcher, project site and
+  developer tools;
+* screenshots of Nullifier's launcher UI used in the README;
 * build identities: BLAKE3 of an executable, CodeView GUID/age;
 * per-build offsets of functions we hook, under names we choose;
 * byte-pattern signatures that locate functions or data in the executable;
@@ -26,7 +28,7 @@ In any form (files, string literals, fixtures, snapshots, docs):
   licence and named as what it is (`tools/wine/`: an upstream Wine commit
   that Proton does not ship yet).
 
-## The one exception
+## Format table exception
 
 `crates/victory-formats/src/bcpack-tables.bin` (about 78 KB): the constant
 tables of the BCPack format (entropy models, index rank tables, control
@@ -47,10 +49,11 @@ user's dump), `test_titles`, and `cache_dir` for everything derived
 
 1. `.gitignore` keeps common data types out of `git status`.
 2. `cargo xtask policy` (run by the pre-commit hook; install with
-   `cargo xtask install-hooks`) is an allowlist: files must have an allowed
-   type, be under 512 KiB, contain no binary data or known binary
-   signatures, and hold no long hex/base64 runs. Exceptions need an entry
-   with a reason in `xtask/src/policy.rs`.
+   `cargo xtask install-hooks`) checks the types and paths listed in
+   `xtask/src/policy.rs`. Text files must fit within 512 KiB and pass the
+   checks for binary data and long hex/base64 runs. The four launcher
+   screenshots are listed by exact path and must have a PNG signature and
+   fit within the same size limit.
 3. At runtime, everything that writes derived data calls
    `victory_core::ensure_outside_repo`.
 4. Tests that need real files take their paths from environment variables
