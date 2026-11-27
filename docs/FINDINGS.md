@@ -651,7 +651,7 @@ used.
   dispatcher). In most frames the loop ends 10 to 15 ms after the first long
   wait for the card of the thread that submits. My reading, from the timing
   alone: the title waits for the card to finish the last frame before it
-  records the next.
+  records the next. 2.21 says what the loop is.
 * **The five recording threads run 169 ms a frame in sum, 10 ms of it title
   code.** By the unwound stacks 100 ms are under `draw::State::bind` (78
   under `tables`: making the slots of tables made afresh 25, table entries
@@ -1402,6 +1402,60 @@ relay without its queue; NVIDIA cards under 16 GB, which keep
 `linux-nvidia`; other driver versions; play beyond the scene after the
 opening; and the picture defects of 2.19 over more runs than these 20.
 
+## 2.21 What the title's loop after a present is, and what its spinning costs (2026-11-27)
+
+2.10 found the title's main render thread in a loop for a median of 67 ms
+after each present, with 61,000 `NtDelayExecution` calls a frame. This
+section says what the loop is, read from the title's code at the image
+offsets of 2.10 (the function from `+0x4fb0ad0` to `+0x4fb0e84`), and
+what the spinning costs the thread that submits, from the profile of 2.10.
+Nothing was changed and no run was made for it.
+
+**What it waits for.** A fence's value. The title asks the fence for the
+address of its value (`gpu_address` in `crates/victory-gpu/src/fence.rs`)
+and reads the value from memory until it has reached a target. The two are
+compared as 56-bit counters; the top 8 bits of the title's value select the
+fence. This agrees with 2.15: the title waits until the card has
+finished the frame before the last.
+
+**How it waits.** Each pass arms `MONITORX` on the value's address, reads
+the value, waits with `MWAITX` and a time limit, reads the value again and
+calls `Sleep(0)`. From the tenth pass on it also compares the time that has
+passed with a limit of 10 s.
+
+**The time limit is about 440 times shorter here than the title means.**
+The title computes it as 100 µs in ticks of `QueryPerformanceFrequency`.
+`MWAITX` counts its limit in ticks of the time-stamp counter. Under Wine
+the frequency is 10 MHz, so the limit is 1,000 ticks, and on this processor
+(Ryzen 9 9900X, time-stamp counter at 4,400 MHz) the wait ends after about
+0.23 µs. A pass then takes about 1.1 µs (67 ms over 61,000 passes), nearly
+all of it the `Sleep(0)`; with waits of 100 µs there would be at most
+about 670 passes a frame. The layer does not supply
+`QueryPerformanceFrequency` to the title: the call goes to Wine. Where
+`MWAITX` faults, the layer runs it as a spin hint
+(`crates/victory-loader/src/console_insn.rs`), so the loop spins on those
+processors too. My reading, not verified: on the console a tick of the
+performance counter is a tick of the time-stamp counter.
+
+**What the spinning costs the thread that submits.** While the main thread
+spins, a change of page protection made by the thread that submits has to
+interrupt the main thread's processor to flush the page tables there
+(2.10). In the profile of 2.10 the thread that submits has 5.6 % of its
+samples in that cross-processor flush (`smp_call_function_many_cond` and
+the sending of the interrupts), about 6.4 ms of its 114 ms a frame; under
+`mprotect` it is a third of the time. The five recording threads cause a
+part of it while they record. So a main thread that slept in the kernel
+could save less than 6.4 ms of a 197 ms frame, under 3 %. A wait that
+lasted its 100 µs in `MWAITX` would not save it: the thread stays on its
+processor.
+
+**Not done.** The gain is at most the 3 % above, and two runs of one
+configuration differ by about as much (3.29c). Two ways to end the
+spinning, if a processor with few cores needs it: give the title a
+performance counter that ticks at the rate of the time-stamp counter, which
+makes its own wait last 100 µs; or answer the title's `Sleep(0)`, after
+many in a row, with a wait of up to 100 µs that ends when a fence moves.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
@@ -2124,8 +2178,13 @@ black. So `settings.xml` is the writable store for graphics (and probably the
 advanced graphics list); the video section's `frameRateLimit`/`resolution` were
 the exceptions tested earlier, not the rule.
 
+Correction, 2026-11-27: this is known for `gamma` only. Values of the advanced
+graphics list, `fsrQuality` and `graphicsQualityPreset`, written to the file in
+the same way, changed nothing in a run (3.29c).
+
 Next: (1) test an XML-only advanced setting with a visible effect (e.g.
-`lodScale` 0.05) to see whether the XML store is honoured for graphics; (2) find
+`lodScale` 0.05) to see whether the XML store is honoured for graphics (done in
+3.29c: it is not applied); (2) find
 which file records the current version/revision (rename one at a time and see
 whether the identical copy is accepted); (3) only then write the container.
 
@@ -2155,6 +2214,61 @@ pickers's player). Next: rename or remove each store in turn (settings.xml,
 the container version, `storage/cloudcache`, the Player container) and see
 which one the menu follows; then map keys by changing several menu values to
 distinct numbers per run.
+
+### 3.29c Values written to `settings.xml` change neither the frame rate nor what is drawn (2026-11-27)
+
+The test that 3.29 names as next, with more values. RTX 5080 16 GB, NVIDIA
+620.73.04, the built wineserver; the diagnostics build of v0.005
+(`6c74aec`) and the `linux-nvidia-16gb` profile with `VICTORY_RELAY=2
+VICTORY_RELAY_QUEUE=1 VICTORY_BACK_OWN_VIEW=1 VICTORY_ALIAS_LAZY=1`. Runs
+of 200 s of the opening with captures, one after the other. Before each run
+one group of values was written to `settings.xml`, and the file was put
+back after it. The title rewrote the file in no run, and no run removed the
+device.
+
+**One run a row**, in this order:
+
+| written to `settings.xml` | median fps | n | by draws (500 or more a frame) | n |
+|---|---|---|---|---|
+| nothing | 6.30 | 26 | 6.50 | 29 |
+| `rtDynamicShadows` false | 6.40 | 27 | 6.50 | 30 |
+| `asyncComputeEnabled` false | 6.70 | 27 | 6.80 | 30 |
+| `lodScale` 0.5, `grassLod` 0.5 | 6.50 | 27 | 6.50 | 29 |
+| `motionBlur` false, `waterReflectionSSR` false | 6.30 | 27 | 6.50 | 30 |
+| `shadowParticleShadows` false, `shadowAlphaTintedShadows` false | 6.40 | 28 | 6.40 | 30 |
+| `graphicsQualityPreset` 1 | 6.50 | 28 | 6.55 | 30 |
+| nothing | 6.40 | 27 | 6.50 | 30 |
+
+**Three rounds in turn** for the one row that differed:
+
+| written to `settings.xml` | median fps | n | by draws | n |
+|---|---|---|---|---|
+| nothing | 6.50 / 6.35 / 6.30 | 28 / 26 / 27 | 6.50 / 6.50 / 6.30 | 30 / 29 / 30 |
+| `asyncComputeEnabled` false | 6.30 / 6.40 / 6.30 | 27 / 27 / 27 | 6.40 / 6.55 / 6.65 | 30 / 30 / 30 |
+
+**Two values whose effect would show in the counters**, one run each,
+beside the three runs with nothing written (medians of the frame lines of
+500 draws or more):
+
+| written to `settings.xml` | median fps | by draws | draws a frame | copied back, a frame | wait for the card |
+|---|---|---|---|---|---|
+| nothing | 6.50 / 6.35 / 6.30 | 6.50 / 6.50 / 6.30 | 3,536 / 3,446 / 3,618 | 65.2 / 66.4 / 64.5 MB | 74.2 / 74.0 / 74.5 ms |
+| `lodScale` 0.05, `grassLod` 0.05 | 6.30 | 6.50 | 3,561 | 64.4 MB | 76.8 ms |
+| `fsrQuality` 3 | 6.40 | 6.50 | 3,617 | 66.4 MB | 71.7 ms |
+
+**What follows.** `settings.xml` is not a way to change what the title
+draws. With `lodScale` at a twentieth the draws a frame are the same. With
+`fsrQuality` 3 as much is copied back as before, so the title renders at
+the same size (in 2.17 two thirds of the pixels in each direction took the
+copy from 63 to 40 MB). On sheets of captures the runs cannot be told
+apart. The 6.70 fps of `asyncComputeEnabled` in the first table did not
+come again in three rounds: runs of one configuration lie between 6.30 and
+6.50 fps here. Of the values in the file only `gamma` is known to apply
+(3.29). The loader found the same for the output size: the console's
+profile wins, and `crates/victory-loader/src/resolution.rs` writes the size
+into the title's live settings instead. A value of this list could be
+changed in the same way. The page of the graphical launcher that edits
+`settings.xml` offers these values as if they applied.
 
 ## 4. Switch matrix (same build, same scene class)
 
@@ -2208,6 +2322,9 @@ Two-run variance of one config is ±30 %. Do not chase 10 %.
   88 hashes and each run found more, because pipeline creation is concurrent and
   whichever program crashes first kills the process. It is a driver bug, and the
   fix is the newer vkd3d-proton, not a skip list.
+* Changing the title's `settings.xml` to gain frame rate (3.29c): eight groups
+  of values, among them `lodScale` 0.05 and `fsrQuality` 3, changed neither the
+  frame rate, the draws a frame nor the picture. Only `gamma` is known to apply.
 
 ## 8. Useful internals
 
