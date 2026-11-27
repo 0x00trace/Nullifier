@@ -833,7 +833,9 @@ const KERNEL_WRITE_TRIES: u32 = 8;
 
 /// Runs `write`, a system call that writes title memory `[at, at + len)`,
 /// with the range's guarded blocks open ([`writing`]); `refused` says of
-/// its result whether the kernel could not write there (`ERROR_NOACCESS`).
+/// its result whether the kernel could not write there (`ERROR_NOACCESS`;
+/// on Windows also `ERROR_INVALID_USER_BUFFER`, for a raw read in
+/// DirectStorage).
 ///
 /// The kernel does not fault into our handler, and nothing holds the blocks
 /// open between the opening and the call: a copy on another thread can take

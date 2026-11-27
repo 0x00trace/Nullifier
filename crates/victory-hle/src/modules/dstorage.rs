@@ -47,6 +47,10 @@ const INVALID_DATA: HRESULT = 0x8007_000D_u32 as i32;
 /// `HRESULT_FROM_WIN32(ERROR_NOACCESS)`: the kernel could not write the
 /// destination of a read.
 const NO_ACCESS: HRESULT = 0x8007_03E6_u32 as i32;
+/// `HRESULT_FROM_WIN32(ERROR_INVALID_USER_BUFFER)`: on Windows, the file
+/// system could not write the destination of a read after the system call
+/// had checked it ([`refused_write`]).
+const INVALID_USER_BUFFER: HRESULT = 0x8007_06F8_u32 as i32;
 
 type Out = *mut *mut c_void;
 
@@ -950,7 +954,8 @@ fn read_into(request: &Request, out: &mut [u8]) -> Result<(), HRESULT> {
 /// meanwhile (`victory_gpu::kernel_write`). The title stops at a breakpoint
 /// of its own when such a request fails: three runs of three ended that way
 /// 17 to 20 s into the world (RTX 5080 under Proton, 2026-11-25), each on
-/// one read refused with `ERROR_NOACCESS`.
+/// one read refused with `ERROR_NOACCESS`, and a run on Windows on one
+/// refused with `ERROR_INVALID_USER_BUFFER` ([`refused_write`]).
 fn read_raw(request: &Request, len: usize) -> Result<(), HRESULT> {
     // SAFETY: the title's destination holds `destination_size` bytes, at
     // least `len`, and nothing else writes it until completion.
@@ -959,8 +964,22 @@ fn read_raw(request: &Request, len: usize) -> Result<(), HRESULT> {
         request.destination as usize,
         len,
         || read_into(request, out),
-        |result| *result == Err(NO_ACCESS),
+        refused_write,
     )
+}
+
+/// Whether a raw read was refused because the kernel could not write its
+/// destination, as when a copy guards the block again meanwhile
+/// ([`read_raw`]). Windows gives the refusal in two forms. A page that is
+/// read-only as the system call begins gives `ERROR_NOACCESS`
+/// (`a_raw_read_the_kernel_cannot_land_fails_with_no_access` passes on
+/// Windows in CI). A run on Windows with an NVIDIA card (2026-11-26) logged
+/// one read failed with `ERROR_INVALID_USER_BUFFER`, and the title stopped
+/// 2.3 s later at the breakpoint of the runs under Proton; the reading that
+/// this is a page guarded after the call checked its buffer is inferred, not
+/// reproduced. Wine gives `ERROR_NOACCESS` in both cases.
+fn refused_write(result: &Result<(), HRESULT>) -> bool {
+    matches!(result, Err(NO_ACCESS | INVALID_USER_BUFFER))
 }
 
 /// Runs `fill` on the destination's first `len` bytes; `fill` returns how
@@ -1282,6 +1301,33 @@ mod tests {
         void(queue, 0x40);
         // SAFETY: allocated above.
         unsafe { VirtualFree(at, 0, MEM_RELEASE) };
+    }
+
+    /// A raw read refused because a copy guarded its destination meanwhile is
+    /// made again in both forms Windows gives the refusal ([`refused_write`]).
+    /// The refusal is played here: Wine gives `ERROR_NOACCESS` in both cases,
+    /// so the second form cannot be had from its kernel.
+    #[test]
+    fn a_refused_raw_read_is_made_again_in_either_form() {
+        let mut out = vec![0u8; 64];
+        for refusal in [NO_ACCESS, INVALID_USER_BUFFER] {
+            let mut calls = 0;
+            let result = victory_gpu::kernel_write(
+                out.as_mut_ptr() as usize,
+                out.len(),
+                || {
+                    calls += 1;
+                    if calls == 1 { Err(refusal) } else { Ok(()) }
+                },
+                refused_write,
+            );
+            assert_eq!(
+                result,
+                Ok(()),
+                "{refusal:#x}: refused once, then made again"
+            );
+            assert_eq!(calls, 2, "{refusal:#x}");
+        }
     }
 
     #[test]
