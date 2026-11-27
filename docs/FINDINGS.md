@@ -1567,7 +1567,9 @@ Also ruled out: memory pressure (`si/so` 0/0, zram flat) and THP (already
 
 Two runs of the **same build, same profile, same warm cache**, measured with
 `tools/bench_scene.sh` (world entry at fps<2, 20 s warm-up discarded, then a
-fixed 60 s window):
+fixed 60 s window). The numbers below are medians over the whole log, not over
+the window: `bench_scene.sh` did not use its window bounds until #31. They do
+not compare with `bench_scene.sh` results after #31.
 
 | Run | Median | p10 | Frame | copies | textures | GPU | copy-back | unacc |
 |---|---|---|---|---|---|---|---|---|
@@ -1617,7 +1619,9 @@ picture. The numbers below are kept to show how the trap looked.
 ### The retracted measurement
 
 `--console series-s` (the title's own lower-resolution profile) measured with
-`bench_scene.sh`, same window and warm-up, two runs:
+`bench_scene.sh`, same window and warm-up, two runs. As in 3.12, these are
+medians over the whole log, not the window; they do not compare with
+`bench_scene.sh` results after #31.
 
 | config | median | p10 | frame | copies | textures | copy-back | GPU |
 |---|---|---|---|---|---|---|---|
