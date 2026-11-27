@@ -13,7 +13,11 @@ use crate::widgets::{card, page_header};
 
 impl App {
     pub(super) fn debug(&mut self, ui: &mut egui::Ui) {
-        page_header(ui, "Tools", "Hardware, benchmark, installation and screenshots.");
+        page_header(
+            ui,
+            "Tools",
+            "Hardware, benchmark, installation and screenshots.",
+        );
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.spacing_mut().interact_size.y = 28.0;
             card(ui, |ui| {

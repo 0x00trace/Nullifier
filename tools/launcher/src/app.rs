@@ -119,7 +119,10 @@ enum Preset {
     Safe,
 }
 
-fn current_preset(sets: &BTreeMap<String, String>, shipped: &BTreeMap<String, String>) -> Option<Preset> {
+fn current_preset(
+    sets: &BTreeMap<String, String>,
+    shipped: &BTreeMap<String, String>,
+) -> Option<Preset> {
     let safe = sets.get("VICTORY_LATE_WAIT").map(String::as_str) == Some("0")
         && sets.get("VICTORY_TEXTURE_NO_WAIT").map(String::as_str) == Some("0")
         && !sets.contains_key("VICTORY_JOIN_COPIES")
@@ -150,11 +153,7 @@ pub(crate) enum Tab {
 impl App {
     pub(crate) fn new(settings: Settings) -> Self {
         let profiles = settings.root.as_deref().map(profiles).unwrap_or_default();
-        let hardware = settings
-            .root
-            .as_deref()
-            .map(hardware)
-            .unwrap_or_default();
+        let hardware = settings.root.as_deref().map(hardware).unwrap_or_default();
         let log_path = cache_dir()
             .map(|d| d.join("launcher-last.log"))
             .filter(|p| p.is_file());
@@ -291,8 +290,12 @@ impl App {
             self.status = "close the game before measuring".into();
             return;
         }
-        let Some(root) = self.settings.root.clone() else { return };
-        let Some(profile) = custom_profile(&self.settings) else { return };
+        let Some(root) = self.settings.root.clone() else {
+            return;
+        };
+        let Some(profile) = custom_profile(&self.settings) else {
+            return;
+        };
         let log = cache_dir().map(|d| d.join("bench-last.log"));
         // No screenshots or scripted keys during a measurement: they would
         // change the number it reports.
@@ -444,7 +447,9 @@ impl App {
     }
 
     fn tick_prepare(&mut self, ctx: &egui::Context) {
-        let Some(child) = self.prep.as_mut() else { return };
+        let Some(child) = self.prep.as_mut() else {
+            return;
+        };
         match child.try_wait() {
             Ok(Some(status)) => {
                 self.prep = None;
@@ -455,9 +460,13 @@ impl App {
                     (Prep::Engine, true) => "the engine is ready".into(),
                     (Prep::Engine, false) => "setup failed - the details are in the log".into(),
                     (Prep::Wineserver, true) => "the fast graphics service is ready".into(),
-                    (Prep::Wineserver, false) => "the fast graphics service did not build - the log has the details".into(),
+                    (Prep::Wineserver, false) => {
+                        "the fast graphics service did not build - the log has the details".into()
+                    }
                     (Prep::Preload, true) => "shaders preloaded".into(),
-                    (Prep::Preload, false) => "preloading stopped early - the log has the details".into(),
+                    (Prep::Preload, false) => {
+                        "preloading stopped early - the log has the details".into()
+                    }
                 };
                 self.toast = Some((self.status.clone(), std::time::Instant::now()));
                 if !ok {
@@ -493,7 +502,9 @@ impl App {
     }
 
     fn tick_bench(&mut self) {
-        let Some(start) = self.bench_start else { return };
+        let Some(start) = self.bench_start else {
+            return;
+        };
         let elapsed = start.elapsed().as_secs_f32();
         let text = self
             .log_path
@@ -601,15 +612,21 @@ impl App {
 
     fn read_last_run(&self) -> LastRun {
         let mut run = LastRun::default();
-        let Some(path) = &self.log_path else { return run };
-        let Some(text) = read_tail(path, 2 * 1024 * 1024) else { return run };
+        let Some(path) = &self.log_path else {
+            return run;
+        };
+        let Some(text) = read_tail(path, 2 * 1024 * 1024) else {
+            return run;
+        };
         run.removals = text.matches("device removed").count() as u32;
         let mut world: Vec<f32> = Vec::new();
         let mut menus: Vec<f32> = Vec::new();
         let mut last_fps = None;
         for line in text.lines() {
             let clean = strip_ansi(line);
-            let Some(rest) = after(&clean, "host: ") else { continue };
+            let Some(rest) = after(&clean, "host: ") else {
+                continue;
+            };
             let mut line_draws = None;
             if let Some(v) = before(rest, " draws/frame").and_then(last_num) {
                 line_draws = Some(v as u32);
@@ -684,7 +701,9 @@ impl App {
     }
 
     fn profile(&self) -> Option<&Profile> {
-        self.profiles.iter().find(|p| p.name == self.settings.profile)
+        self.profiles
+            .iter()
+            .find(|p| p.name == self.settings.profile)
     }
 }
 
@@ -759,14 +778,27 @@ impl eframe::App for App {
             self.settings.game_dir = dir.display().to_string();
             self.settings.save();
             self.status = match title_exe(&dir) {
-                Some(exe) => format!("found {}", exe.file_name().and_then(|n| n.to_str()).unwrap_or("the game")),
+                Some(exe) => format!(
+                    "found {}",
+                    exe.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("the game")
+                ),
                 None => "that folder has no .exe in it".into(),
             };
             self.toast = Some((self.status.clone(), std::time::Instant::now()));
         }
 
         egui::SidePanel::left("rail")
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(27, 30, 38)).inner_margin(egui::Margin::symmetric(14, 14)).stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(42, 46, 56))))
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(27, 30, 38))
+                    .inner_margin(egui::Margin::symmetric(14, 14))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgb(42, 46, 56),
+                    )),
+            )
             .exact_width(190.0)
             .resizable(false)
             .show(ctx, |ui| {
@@ -783,9 +815,7 @@ impl eframe::App for App {
                             let dot = ui
                                 .add(
                                     egui::Label::new(
-                                        egui::RichText::new("● update")
-                                            .size(10.0)
-                                            .color(ACCENT),
+                                        egui::RichText::new("● update").size(10.0).color(ACCENT),
                                     )
                                     .sense(egui::Sense::click()),
                                 )
@@ -863,81 +893,119 @@ impl eframe::App for App {
             });
 
         let footer = egui::TopBottomPanel::bottom("log")
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(27, 30, 38)).inner_margin(egui::Margin::symmetric(16, 8)).stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(42, 46, 56))))
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(27, 30, 38))
+                    .inner_margin(egui::Margin::symmetric(16, 8))
+                    .stroke(egui::Stroke::new(
+                        1.0_f32,
+                        egui::Color32::from_rgb(42, 46, 56),
+                    )),
+            )
             .resizable(false);
-        let footer = if self.log_open { footer.exact_height(180.0) } else { footer };
-        footer
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    let live = self.running() || self.bench_running();
-                    ui.label(
-                        egui::RichText::new(capitalise(&self.status))
-                            .small()
-                            .color(if live { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::GRAY }),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.add_space(10.0);
-                        ui.style_mut().spacing.button_padding = egui::vec2(9.0, 4.0);
-                        ui.style_mut().spacing.interact_size.y = 26.0;
-                        ui.style_mut().spacing.item_spacing.x = 6.0;
-                        ui.style_mut().visuals.widgets.noninteractive.corner_radius = 4.into();
-                        ui.style_mut().visuals.widgets.inactive.corner_radius = 4.into();
-                        ui.style_mut().visuals.widgets.hovered.corner_radius = 4.into();
-                        ui.style_mut().visuals.widgets.active.corner_radius = 4.into();
-                        if chip_button(ui, if self.log_open { "Hide log" } else { "Show log" }).clicked() {
-                            self.log_open = !self.log_open;
-                        }
+        let footer = if self.log_open {
+            footer.exact_height(180.0)
+        } else {
+            footer
+        };
+        footer.show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                let live = self.running() || self.bench_running();
+                ui.label(
+                    egui::RichText::new(capitalise(&self.status))
+                        .small()
+                        .color(if live {
+                            egui::Color32::from_rgb(87, 199, 133)
+                        } else {
+                            egui::Color32::GRAY
+                        }),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.add_space(10.0);
+                    ui.style_mut().spacing.button_padding = egui::vec2(9.0, 4.0);
+                    ui.style_mut().spacing.interact_size.y = 26.0;
+                    ui.style_mut().spacing.item_spacing.x = 6.0;
+                    ui.style_mut().visuals.widgets.noninteractive.corner_radius = 4.into();
+                    ui.style_mut().visuals.widgets.inactive.corner_radius = 4.into();
+                    ui.style_mut().visuals.widgets.hovered.corner_radius = 4.into();
+                    ui.style_mut().visuals.widgets.active.corner_radius = 4.into();
+                    if chip_button(
+                        ui,
                         if self.log_open {
-                            if chip_button(ui, "Clear").clicked() {
-                                self.log_shown.clear();
-                            }
-                            if chip_button(ui, "Open log").clicked() {
-                                if let Some(path) = &self.log_path {
-                                    open_path(path);
-                                }
-                            }
-                            let shown = match self.settings.log_level.as_str() {
-                                "warn" => "Quiet",
-                                "debug" => "Detailed",
-                                "trace" => "Everything",
-                                _ => "Normal",
-                            };
-                            egui::ComboBox::from_id_salt("log detail footer")
-                                .selected_text(egui::RichText::new(shown).small())
-                                .width(92.0)
-                                .show_ui(ui, |ui| {
-                                    for (value, label) in [
-                                        ("warn", "Quiet"),
-                                        ("info", "Normal"),
-                                        ("debug", "Detailed"),
-                                        ("trace", "Everything"),
-                                    ] {
-                                        ui.selectable_value(&mut self.settings.log_level, value.to_string(), label);
-                                    }
-                                });
-                            ui.label(egui::RichText::new("Log detail").small().color(egui::Color32::GRAY));
+                            "Hide log"
+                        } else {
+                            "Show log"
+                        },
+                    )
+                    .clicked()
+                    {
+                        self.log_open = !self.log_open;
+                    }
+                    if self.log_open {
+                        if chip_button(ui, "Clear").clicked() {
+                            self.log_shown.clear();
                         }
-                    });
+                        if chip_button(ui, "Open log").clicked() {
+                            if let Some(path) = &self.log_path {
+                                open_path(path);
+                            }
+                        }
+                        let shown = match self.settings.log_level.as_str() {
+                            "warn" => "Quiet",
+                            "debug" => "Detailed",
+                            "trace" => "Everything",
+                            _ => "Normal",
+                        };
+                        egui::ComboBox::from_id_salt("log detail footer")
+                            .selected_text(egui::RichText::new(shown).small())
+                            .width(92.0)
+                            .show_ui(ui, |ui| {
+                                for (value, label) in [
+                                    ("warn", "Quiet"),
+                                    ("info", "Normal"),
+                                    ("debug", "Detailed"),
+                                    ("trace", "Everything"),
+                                ] {
+                                    ui.selectable_value(
+                                        &mut self.settings.log_level,
+                                        value.to_string(),
+                                        label,
+                                    );
+                                }
+                            });
+                        ui.label(
+                            egui::RichText::new("Log detail")
+                                .small()
+                                .color(egui::Color32::GRAY),
+                        );
+                    }
                 });
-                if self.log_open {
-                    egui::ScrollArea::vertical().stick_to_bottom(true).show(ui, |ui| {
+            });
+            if self.log_open {
+                egui::ScrollArea::vertical()
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
                         ui.monospace(&self.log_shown);
                     });
-                }
-                ui.add_space(4.0);
-            });
+            }
+            ui.add_space(4.0);
+        });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(egui::Color32::from_rgb(23, 25, 31)).inner_margin(egui::Margin::symmetric(22, 18)))
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(23, 25, 31))
+                    .inner_margin(egui::Margin::symmetric(22, 18)),
+            )
             .show(ctx, |ui| match self.tab {
-            Tab::Play => self.play(ui),
-            Tab::Graphics => self.game_page(ui),
-            Tab::Controls => self.controls(ui),
-            Tab::Community => self.community_page(ui),
-            Tab::Rendering => self.rendering(ui),
-            Tab::Advanced => self.advanced(ui),
-            Tab::Debug => self.debug(ui),
-        });
+                Tab::Play => self.play(ui),
+                Tab::Graphics => self.game_page(ui),
+                Tab::Controls => self.controls(ui),
+                Tab::Community => self.community_page(ui),
+                Tab::Rendering => self.rendering(ui),
+                Tab::Advanced => self.advanced(ui),
+                Tab::Debug => self.debug(ui),
+            });
 
         if let Some(key) = self.info.clone() {
             let mut open = true;
@@ -984,41 +1052,43 @@ impl eframe::App for App {
                         ui.monospace(self.pick_dir.display().to_string());
                     });
                     ui.separator();
-                    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                        let mut entries: Vec<PathBuf> = std::fs::read_dir(&self.pick_dir)
-                            .into_iter()
-                            .flatten()
-                            .flatten()
-                            .map(|e| e.path())
-                            .filter(|p| p.is_dir())
-                            .collect();
-                        entries.sort();
-                        for dir in entries {
-                            let name = dir
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let has_game = dir.join("game_scarlett_master.exe").is_file();
-                            let label = if has_game {
-                                format!("📁 {name}   ·   game found")
-                            } else {
-                                format!("📁 {name}")
-                            };
-                            let text = if has_game {
-                                egui::RichText::new(label).color(egui::Color32::from_rgb(160, 214, 180))
-                            } else {
-                                egui::RichText::new(label)
-                            };
-                            if ui.selectable_label(false, text).clicked() {
-                                self.pick_dir = dir;
+                    egui::ScrollArea::vertical()
+                        .max_height(260.0)
+                        .show(ui, |ui| {
+                            let mut entries: Vec<PathBuf> = std::fs::read_dir(&self.pick_dir)
+                                .into_iter()
+                                .flatten()
+                                .flatten()
+                                .map(|e| e.path())
+                                .filter(|p| p.is_dir())
+                                .collect();
+                            entries.sort();
+                            for dir in entries {
+                                let name = dir
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let has_game = dir.join("game_scarlett_master.exe").is_file();
+                                let label = if has_game {
+                                    format!("📁 {name}   ·   game found")
+                                } else {
+                                    format!("📁 {name}")
+                                };
+                                let text = if has_game {
+                                    egui::RichText::new(label)
+                                        .color(egui::Color32::from_rgb(160, 214, 180))
+                                } else {
+                                    egui::RichText::new(label)
+                                };
+                                if ui.selectable_label(false, text).clicked() {
+                                    self.pick_dir = dir;
+                                }
                             }
-                        }
-                    });
+                        });
                     ui.separator();
                     ui.horizontal(|ui| {
-                        if ui.add(primary("Use this folder", 140.0, 32.0)).clicked()
-                        {
+                        if ui.add(primary("Use this folder", 140.0, 32.0)).clicked() {
                             let picked = self.pick_dir.display().to_string();
                             match self.pick_for {
                                 Pick::Game => {
@@ -1028,12 +1098,17 @@ impl eframe::App for App {
                                     self.status = match title_exe(&self.pick_dir) {
                                         Some(exe) => format!(
                                             "found {}",
-                                            exe.file_name().and_then(|n| n.to_str()).unwrap_or("the game")
+                                            exe.file_name()
+                                                .and_then(|n| n.to_str())
+                                                .unwrap_or("the game")
                                         ),
-                                        None => "game_scarlett_master.exe is not in that folder".into(),
+                                        None => {
+                                            "game_scarlett_master.exe is not in that folder".into()
+                                        }
                                     };
                                     if title_exe(&self.pick_dir).is_some() {
-                                        self.toast = Some((self.status.clone(), std::time::Instant::now()));
+                                        self.toast =
+                                            Some((self.status.clone(), std::time::Instant::now()));
                                     }
                                 }
                                 Pick::Capture => self.settings.capture_dir = picked,

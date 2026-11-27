@@ -35,11 +35,15 @@ fn find_game_settings() -> Option<PathBuf> {
             if depth > 12 || seen > 40_000 {
                 continue;
             }
-            let Ok(entries) = std::fs::read_dir(&dir) else { continue };
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 seen += 1;
                 let path = entry.path();
-                let Ok(kind) = entry.file_type() else { continue };
+                let Ok(kind) = entry.file_type() else {
+                    continue;
+                };
                 if kind.is_dir() {
                     stack.push((path, depth + 1));
                 } else if path.file_name().and_then(|n| n.to_str()) == Some("settings.xml")
@@ -88,12 +92,7 @@ pub(crate) fn load_game_settings() -> Option<GameSettings> {
         }
         if let Some(value) = attribute(trimmed, "value") {
             let indent = line[..line.len() - line.trim_start().len()].to_string();
-            let section = stack
-                .iter()
-                .skip(1)
-                .cloned()
-                .collect::<Vec<_>>()
-                .join("/");
+            let section = stack.iter().skip(1).cloned().collect::<Vec<_>>().join("/");
             settings.push(GameSetting {
                 section,
                 key: name.clone(),
@@ -109,7 +108,13 @@ pub(crate) fn load_game_settings() -> Option<GameSettings> {
         }
     }
     let note = format!("{} settings from settings.xml", settings.len());
-    Some(GameSettings { path, lines, settings, dirty: false, note })
+    Some(GameSettings {
+        path,
+        lines,
+        settings,
+        dirty: false,
+        note,
+    })
 }
 
 fn attribute(line: &str, name: &str) -> Option<String> {
@@ -133,8 +138,15 @@ fn pretty(key: &str) -> String {
         None => String::new(),
     };
     for (from, to) in [
-        ("Hdr", "HDR"), ("Ui", "UI"), ("U I", "UI"), ("Fps", "FPS"), ("Fsr", "FSR"),
-        ("Msaa", "MSAA"), ("Ssro", "SSRO"), ("Vrs", "VRS"), ("S lod", "SLOD"),
+        ("Hdr", "HDR"),
+        ("Ui", "UI"),
+        ("U I", "UI"),
+        ("Fps", "FPS"),
+        ("Fsr", "FSR"),
+        ("Msaa", "MSAA"),
+        ("Ssro", "SSRO"),
+        ("Vrs", "VRS"),
+        ("S lod", "SLOD"),
     ] {
         out = out.replace(from, to);
     }
@@ -340,13 +352,22 @@ pub(crate) fn limits(key: &str) -> Option<(f64, f64, f64)> {
         "vSync" => Some((0.0, 2.0, 1.0)),
         "fsrQuality" => Some((0.0, 4.0, 1.0)),
         "fsrSharpen" | "manualMipBias" => Some((-5.0, 5.0, 0.05)),
-        "lodScale" | "grassLod" | "texLodScale_Global" | "texLodScale_LOD"
-        | "texLodScale_SLOD1" | "texLodScale_SLOD2" | "texLodScale_SLOD3"
-        | "texLodScale_SLOD4" | "texLodScale_Mat_High" | "texLodScale_Mat_Med"
-        | "texLodScale_Mat_Low" | "texLodScale_Buildings" | "texLodScale_Objects"
-        | "texLodScale_HD" | "texLodScale_OrphanHD" | "vehicleLodBias" => {
-            Some((0.0, 64.0, 0.05))
-        }
+        "lodScale"
+        | "grassLod"
+        | "texLodScale_Global"
+        | "texLodScale_LOD"
+        | "texLodScale_SLOD1"
+        | "texLodScale_SLOD2"
+        | "texLodScale_SLOD3"
+        | "texLodScale_SLOD4"
+        | "texLodScale_Mat_High"
+        | "texLodScale_Mat_Med"
+        | "texLodScale_Mat_Low"
+        | "texLodScale_Buildings"
+        | "texLodScale_Objects"
+        | "texLodScale_HD"
+        | "texLodScale_OrphanHD"
+        | "vehicleLodBias" => Some((0.0, 64.0, 0.05)),
         "width" | "height" => Some((0.0, 7680.0, 1.0)),
         _ => None,
     }

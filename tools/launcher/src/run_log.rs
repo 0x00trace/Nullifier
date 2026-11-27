@@ -79,13 +79,20 @@ pub(crate) fn world_frames(text: &str) -> Vec<WorldFrame> {
             let draws = before(rest, " draws/frame")
                 .and_then(last_num)
                 .map(|v| v as u32)?;
-            let waiting = before(rest, " waiting,").and_then(last_num).map(|v| v as u32);
+            let waiting = before(rest, " waiting,")
+                .and_then(last_num)
+                .map(|v| v as u32);
             let heap_ms = rest
                 .split_once("heap buffers ")
                 .and_then(|(_, tail)| tail.split_once(" passes "))
                 .and_then(|(_, tail)| before(tail, " ms"))
                 .and_then(last_num);
-            Some(WorldFrame { fps, draws, waiting, heap_ms })
+            Some(WorldFrame {
+                fps,
+                draws,
+                waiting,
+                heap_ms,
+            })
         })
         .collect()
 }
@@ -141,7 +148,11 @@ pub(crate) fn read_tail(path: &Path, max: usize) -> Option<String> {
     let text = String::from_utf8_lossy(&bytes).into_owned();
     if start > 0 {
         // The first line is cut: drop it.
-        Some(text.split_once('\n').map(|(_, rest)| rest.to_string()).unwrap_or(text))
+        Some(
+            text.split_once('\n')
+                .map(|(_, rest)| rest.to_string())
+                .unwrap_or(text),
+        )
     } else {
         Some(text)
     }
@@ -183,9 +194,18 @@ mod tests {
         };
         let streaming = line(0.6, 810, 12_599, 2_423.0);
         let settled = line(10.8, 956, 1_282, 26.0);
-        assert!(!world_loaded(&world_frames(&streaming)[0]), "streaming is not loaded");
-        assert!(world_loaded(&world_frames(&settled)[0]), "settled world is loaded");
+        assert!(
+            !world_loaded(&world_frames(&streaming)[0]),
+            "streaming is not loaded"
+        );
+        assert!(
+            world_loaded(&world_frames(&settled)[0]),
+            "settled world is loaded"
+        );
         let menu = "INFO victory_gpu::host: 30.0 fps, 33.3 ms/frame (1.0 preparing; 0.0 on the GPU), 13 draws/frame\n";
-        assert_eq!(world_fps(&format!("{menu}{streaming}{settled}")), vec![10.8]);
+        assert_eq!(
+            world_fps(&format!("{menu}{streaming}{settled}")),
+            vec![10.8]
+        );
     }
 }

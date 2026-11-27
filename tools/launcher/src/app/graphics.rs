@@ -128,7 +128,11 @@ impl App {
                 ui.label(egui::RichText::new("The game is running.").small().color(egui::Color32::from_rgb(232, 106, 106)));
             }
         });
-        ui.label(egui::RichText::new(&game.note).small().color(egui::Color32::GRAY));
+        ui.label(
+            egui::RichText::new(&game.note)
+                .small()
+                .color(egui::Color32::GRAY),
+        );
         // Display output, V-Sync and the frame cap are Nullifier's, because the
         // title ignores its own settings.xml values for them.
         let mut output = self.settings.output.clone();

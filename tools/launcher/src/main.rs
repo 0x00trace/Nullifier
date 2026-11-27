@@ -59,12 +59,25 @@ fn apply_theme(ctx: &egui::Context) {
     style.spacing.indent = 18.0;
     style.spacing.window_margin = egui::Margin::same(18);
     style.text_styles = [
-        (TextStyle::Heading, FontId::new(23.0, FontFamily::Proportional)),
+        (
+            TextStyle::Heading,
+            FontId::new(23.0, FontFamily::Proportional),
+        ),
         (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
-        (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
-        (TextStyle::Small, FontId::new(11.5, FontFamily::Proportional)),
-        (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
-    ].into();
+        (
+            TextStyle::Button,
+            FontId::new(14.0, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Small,
+            FontId::new(11.5, FontFamily::Proportional),
+        ),
+        (
+            TextStyle::Monospace,
+            FontId::new(12.5, FontFamily::Monospace),
+        ),
+    ]
+    .into();
 
     let mut v = egui::Visuals::dark();
     v.panel_fill = bg;
@@ -108,7 +121,6 @@ fn apply_theme(ctx: &egui::Context) {
 
     style.visuals = v;
     ctx.set_style(style);
-
 }
 
 fn main() -> eframe::Result<()> {

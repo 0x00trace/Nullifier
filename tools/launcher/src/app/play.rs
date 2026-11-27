@@ -26,28 +26,26 @@ impl App {
             ui.add_space(4.0);
             egui::Frame::group(ui.style())
                 .fill(egui::Color32::from_rgb(45, 38, 24))
-                .stroke(egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(120, 95, 45)))
+                .stroke(egui::Stroke::new(
+                    1.0_f32,
+                    egui::Color32::from_rgb(120, 95, 45),
+                ))
                 .inner_margin(egui::Margin::symmetric(14, 10))
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!(
-                                "Using {name}'s settings — temporary"
-                            ))
-                            .color(egui::Color32::from_rgb(240, 200, 120)),
+                            egui::RichText::new(format!("Using {name}'s settings — temporary"))
+                                .color(egui::Color32::from_rgb(240, 200, 120)),
                         );
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui.add(secondary("Revert", 80.0, 28.0)).clicked() {
-                                    self.revert_settings();
-                                }
-                                if ui.add(primary("Keep", 70.0, 28.0)).clicked() {
-                                    self.keep_settings();
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(secondary("Revert", 80.0, 28.0)).clicked() {
+                                self.revert_settings();
+                            }
+                            if ui.add(primary("Keep", 70.0, 28.0)).clicked() {
+                                self.keep_settings();
+                            }
+                        });
                     });
                 });
         }
@@ -173,7 +171,10 @@ impl App {
                 .wrap(),
             );
             ui.add_space(8.0);
-            if ui.add(primary("Choose the right folder…", 200.0, 34.0)).clicked() {
+            if ui
+                .add(primary("Choose the right folder…", 200.0, 34.0))
+                .clicked()
+            {
                 self.open_game_picker();
             }
             ui.label(
@@ -231,13 +232,9 @@ impl App {
             };
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    let name = dir
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("game");
+                    let name = dir.file_name().and_then(|n| n.to_str()).unwrap_or("game");
                     ui.add(
-                        egui::Label::new(egui::RichText::new(name).size(18.0).strong())
-                            .truncate(),
+                        egui::Label::new(egui::RichText::new(name).size(18.0).strong()).truncate(),
                     )
                     .on_hover_text(dir.display().to_string());
                     let state = if self.running() {
@@ -264,14 +261,19 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let button = if self.running() {
                         egui::Button::new(
-                            egui::RichText::new("Stop").strong().color(egui::Color32::WHITE),
+                            egui::RichText::new("Stop")
+                                .strong()
+                                .color(egui::Color32::WHITE),
                         )
                         .fill(egui::Color32::from_rgb(176, 68, 68))
                         .min_size(egui::vec2(150.0, 40.0))
                     } else {
                         primary("Play", 150.0, 40.0)
                     };
-                    if ui.add_enabled(!self.prep.is_some() || self.running(), button).clicked() {
+                    if ui
+                        .add_enabled(!self.prep.is_some() || self.running(), button)
+                        .clicked()
+                    {
                         if self.running() {
                             self.stop();
                         } else {
@@ -284,25 +286,23 @@ impl App {
                         |ui| {
                             egui::menu::menu_custom_button(
                                 ui,
-                                egui::Button::new(
-                                    egui::RichText::new("•  •  •").size(12.0),
-                                )
-                                .min_size(egui::vec2(48.0, 32.0)),
+                                egui::Button::new(egui::RichText::new("•  •  •").size(12.0))
+                                    .min_size(egui::vec2(48.0, 32.0)),
                                 |ui| {
-                                if ui.button("Change folder…").clicked() {
-                                    self.open_game_picker();
-                                    ui.close_menu();
-                                }
-                                if ui.button("Settings…").clicked() {
-                                    self.settings.show_advanced = true;
-                                    self.tab = Tab::Rendering;
-                                    self.settings.save();
-                                    ui.close_menu();
-                                }
-                                if ui.button("Open game folder").clicked() {
-                                    open_path(dir);
-                                    ui.close_menu();
-                                }
+                                    if ui.button("Change folder…").clicked() {
+                                        self.open_game_picker();
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Settings…").clicked() {
+                                        self.settings.show_advanced = true;
+                                        self.tab = Tab::Rendering;
+                                        self.settings.save();
+                                        ui.close_menu();
+                                    }
+                                    if ui.button("Open game folder").clicked() {
+                                        open_path(dir);
+                                        ui.close_menu();
+                                    }
                                 },
                             );
                         },
@@ -310,7 +310,9 @@ impl App {
                 });
             });
             ui.separator();
-            let cold = pipeline_cache().map(|(count, _)| count == 0).unwrap_or(true);
+            let cold = pipeline_cache()
+                .map(|(count, _)| count == 0)
+                .unwrap_or(true);
             ui.horizontal(|ui| {
                 match pipeline_cache() {
                     Some((count, bytes)) if count > 0 => {
@@ -329,9 +331,11 @@ impl App {
                     }
                     _ => {
                         ui.label(
-                            egui::RichText::new("Shader cache is empty — the first run compiles while it loads.")
-                                .small()
-                                .color(egui::Color32::from_rgb(232, 179, 74)),
+                            egui::RichText::new(
+                                "Shader cache is empty — the first run compiles while it loads.",
+                            )
+                            .small()
+                            .color(egui::Color32::from_rgb(232, 179, 74)),
                         );
                     }
                 }
@@ -453,11 +457,19 @@ impl App {
                     ui.label(
                         egui::RichText::new(if tree { "optimised" } else { "standard" })
                             .small()
-                            .color(if tree { egui::Color32::from_rgb(87, 199, 133) } else { egui::Color32::from_rgb(232, 179, 74) }),
+                            .color(if tree {
+                                egui::Color32::from_rgb(87, 199, 133)
+                            } else {
+                                egui::Color32::from_rgb(232, 179, 74)
+                            }),
                     );
                     ui.add_space(12.0);
                     ui.label(egui::RichText::new("Game data").small());
-                    ui.label(egui::RichText::new(prefix.display().to_string()).small().color(egui::Color32::GRAY));
+                    ui.label(
+                        egui::RichText::new(prefix.display().to_string())
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
                 });
                 ui.horizontal(|ui| {
                     if chip_button(ui, "Open game data").clicked() {
@@ -489,28 +501,31 @@ impl App {
             ui.horizontal(|ui| {
                 ui.strong("Performance");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .link(egui::RichText::new("Customise…").small())
-                        .clicked()
-                    {
+                    if ui.link(egui::RichText::new("Customise…").small()).clicked() {
                         self.settings.show_advanced = true;
                         self.tab = Tab::Rendering;
                         self.settings.save();
                     }
                 });
             });
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new("Choose a preset; the numbers are in Rendering.")
-                        .small()
-                        .color(egui::Color32::GRAY),
-                ),
-            );
+            ui.add(egui::Label::new(
+                egui::RichText::new("Choose a preset; the numbers are in Rendering.")
+                    .small()
+                    .color(egui::Color32::GRAY),
+            ));
             ui.add_space(2.0);
             let mut chosen = None;
             for (preset, title, desc) in [
-                (Preset::Recommended, "Recommended", "Measured for your graphics card."),
-                (Preset::LowMemory, "Low memory", "For an 8 GB card or a busy desktop."),
+                (
+                    Preset::Recommended,
+                    "Recommended",
+                    "Measured for your graphics card.",
+                ),
+                (
+                    Preset::LowMemory,
+                    "Low memory",
+                    "For an 8 GB card or a busy desktop.",
+                ),
                 (
                     Preset::Safe,
                     "Safe",
@@ -567,7 +582,11 @@ impl App {
             }
             ui.horizontal(|ui| {
                 ui.heading(format!("{:.1}", run.fps.unwrap_or(0.0)));
-                ui.label(if run.in_game { "fps in game" } else { "fps (menu/loading)" });
+                ui.label(if run.in_game {
+                    "fps in game"
+                } else {
+                    "fps (menu/loading)"
+                });
             });
             ui.horizontal_wrapped(|ui| {
                 if run.in_game {
@@ -581,7 +600,11 @@ impl App {
                 }
                 if let Some(draws) = run.draws {
                     ui.add_space(8.0);
-                    ui.label(egui::RichText::new(format!("{draws} draws a frame")).small().color(egui::Color32::GRAY));
+                    ui.label(
+                        egui::RichText::new(format!("{draws} draws a frame"))
+                            .small()
+                            .color(egui::Color32::GRAY),
+                    );
                 }
                 ui.add_space(8.0);
                 if run.removals == 0 {

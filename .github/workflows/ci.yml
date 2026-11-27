@@ -61,6 +61,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: tools/launcher
+      - name: Formatting of the launcher
+        run: cargo fmt --check --manifest-path tools/launcher/Cargo.toml
       - name: Build the launcher (Windows)
         run: cargo build --release --locked --manifest-path tools/launcher/Cargo.toml
       - name: Clippy, launcher

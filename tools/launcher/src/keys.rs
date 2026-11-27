@@ -24,9 +24,14 @@ pub(crate) const PAD_ACTIONS: [(&str, &str); 14] = [
 ];
 
 pub(crate) fn load_keys(text: &str) -> Vec<String> {
-    let mut keys: Vec<String> = PAD_ACTIONS.iter().map(|(_, key)| (*key).to_string()).collect();
+    let mut keys: Vec<String> = PAD_ACTIONS
+        .iter()
+        .map(|(_, key)| (*key).to_string())
+        .collect();
     for pair in text.split([',', ';']) {
-        let Some((key, action)) = pair.split_once('=') else { continue };
+        let Some((key, action)) = pair.split_once('=') else {
+            continue;
+        };
         if let Some(index) = PAD_ACTIONS
             .iter()
             .position(|(name, _)| name.eq_ignore_ascii_case(action.trim()))
@@ -79,8 +84,22 @@ pub(crate) fn key_name_ok(name: &str) -> bool {
     let name = name.trim().to_ascii_lowercase();
     if matches!(
         name.as_str(),
-        "esc" | "escape" | "tab" | "enter" | "return" | "backspace" | "back" | "space"
-            | "up" | "down" | "left" | "right" | "shift" | "ctrl" | "control" | "alt"
+        "esc"
+            | "escape"
+            | "tab"
+            | "enter"
+            | "return"
+            | "backspace"
+            | "back"
+            | "space"
+            | "up"
+            | "down"
+            | "left"
+            | "right"
+            | "shift"
+            | "ctrl"
+            | "control"
+            | "alt"
     ) {
         return true;
     }

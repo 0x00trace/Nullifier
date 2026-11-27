@@ -93,9 +93,7 @@ pub(crate) fn example(key: &str) -> Option<&'static str> {
         "VICTORY_FPS_CAP" => Some("30, 60, 120 or 0 for unlimited"),
         "VICTORY_VSYNC" => Some("1 = on"),
         "gamma" => Some("1-50; 15 is the default"),
-        "graphicsQualityPreset" => {
-            Some("1 low, 2 medium, 3 high, 4 ultra; 0 is custom")
-        }
+        "graphicsQualityPreset" => Some("1 low, 2 medium, 3 high, 4 ultra; 0 is custom"),
         "hdrIntensity" => Some("0-100; 50 is the default"),
         "hdrBlackLevels" => Some("0-100; 50 is the default"),
         "hdrPeakBrightness" => Some("600-1600 nits"),
@@ -116,7 +114,9 @@ pub(crate) fn example(key: &str) -> Option<&'static str> {
         "texLodScale_Mat_High" => Some("0.25 is the default"),
         "texLodScale_Mat_Med" => Some("0.5 is the default"),
         "texLodScale_Mat_Low" => Some("1.0 is the default"),
-        "texLodScale_Buildings" | "texLodScale_Objects" | "texLodScale_HD"
+        "texLodScale_Buildings"
+        | "texLodScale_Objects"
+        | "texLodScale_HD"
         | "texLodScale_OrphanHD" => Some("1.0 is the default"),
         "vehicleLodBias" => Some("0.0 is the default"),
         "manualMipBias" => Some("0.0 is the default; negative is sharper"),
@@ -309,7 +309,10 @@ pub(crate) fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
     let mut out = Vec::new();
     if let Some(budget) = setting_value(sets, "VICTORY_TEXTURE_BUDGET_MB") {
         if budget == 0 {
-            out.push("Texture budget is 0: no texture can be copied, the world will stay untextured.".into());
+            out.push(
+                "Texture budget is 0: no texture can be copied, the world will stay untextured."
+                    .into(),
+            );
         } else if vram > 0 && budget > vram {
             out.push(format!(
                 "Texture budget is {budget} MB, more than your card's {vram} MB. It spills into system memory and can stall or fail."
@@ -335,17 +338,23 @@ pub(crate) fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
         }
     }
     if sets.contains_key("VICTORY_JOIN_COPIES") {
-        out.push("Joined copies can crash the graphics driver; it did before on this project.".into());
+        out.push(
+            "Joined copies can crash the graphics driver; it did before on this project.".into(),
+        );
     }
     // With an NVIDIA card on Linux, 2 is the measured value of the
     // linux-nvidia-16gb profile, together with VICTORY_RELAY_QUEUE=1
     // (docs/FORK.md).
     if setting_value(sets, "VICTORY_RELAY") == Some(2) && !cfg!(windows) && hw.vendor != "nvidia" {
-        out.push("Relay 2 has crashed the driver before on Linux. If a run dies, set it to 0.".into());
+        out.push(
+            "Relay 2 has crashed the driver before on Linux. If a run dies, set it to 0.".into(),
+        );
     }
     for key in sets.keys() {
         if key.starts_with("VICTORY_") && describe(key).is_none() {
-            out.push(format!("{key} is not a switch this build knows; it will be ignored."));
+            out.push(format!(
+                "{key} is not a switch this build knows; it will be ignored."
+            ));
         }
     }
     out
