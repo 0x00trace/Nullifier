@@ -1454,11 +1454,11 @@ mod host {
     /// Once every few seconds, say why mouse look is doing nothing.
     fn idle(reason: &str) {
         static LAST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
-        if let Ok(mut last) = LAST.lock() {
-            if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(5)) {
-                tracing::info!(reason, "mouse look idle");
-                *last = Some(Instant::now());
-            }
+        if let Ok(mut last) = LAST.lock()
+            && last.is_none_or(|at| at.elapsed() >= Duration::from_secs(5))
+        {
+            tracing::info!(reason, "mouse look idle");
+            *last = Some(Instant::now());
         }
     }
 
@@ -1535,12 +1535,12 @@ mod host {
                 y: top_left.y + (bottom_right.y - top_left.y) / 2,
             };
             let centre_xy = (centre.x, centre.y);
-            if let Ok(mut last) = LAST_CENTRE.lock() {
-                if *last != Some(centre_xy) {
-                    SetCursorPos(centre.x, centre.y);
-                    *last = Some(centre_xy);
-                    return (0.0, 0.0, fire, aim);
-                }
+            if let Ok(mut last) = LAST_CENTRE.lock()
+                && *last != Some(centre_xy)
+            {
+                SetCursorPos(centre.x, centre.y);
+                *last = Some(centre_xy);
+                return (0.0, 0.0, fire, aim);
             }
             if GetCursorPos(&mut point) == 0 {
                 return (0.0, 0.0, fire, aim);
@@ -1583,16 +1583,15 @@ mod host {
             let x = (smooth_x * sens / 60.0).clamp(-1.0, 1.0);
             let dir = if invert { -1.0 } else { 1.0 };
             let y = (smooth_y * sens / 60.0 * dir).clamp(-1.0, 1.0) * -1.0;
-            if dx != 0 || dy != 0 {
-                if let Ok(mut last) = LAST_LOG.lock() {
-                    if last.is_none_or(|at| at.elapsed() >= Duration::from_secs(1)) {
-                        tracing::info!(
-                            dx, dy, x, y, dt, hold, instant_x, instant_y, fire, aim,
-                            "mouse look stick"
-                        );
-                        *last = Some(now);
-                    }
-                }
+            if (dx != 0 || dy != 0)
+                && let Ok(mut last) = LAST_LOG.lock()
+                && last.is_none_or(|at| at.elapsed() >= Duration::from_secs(1))
+            {
+                tracing::info!(
+                    dx, dy, x, y, dt, hold, instant_x, instant_y, fire, aim,
+                    "mouse look stick"
+                );
+                *last = Some(now);
             }
             (x, y, fire, aim)
         }
