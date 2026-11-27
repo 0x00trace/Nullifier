@@ -8,14 +8,11 @@
 #
 #   VICTORY_LATE_WAIT=1 ./tools/bench.sh "amd linux, late-wait 1"
 #
-# Reports the median of the world-phase frame lines (fps < 10), which is the
-# only number comparable between runs: menu/loading frames are 30 fps and
-# would flatter any configuration. Peaks are reported but are scenes, not
-# settings. See docs/FORK.md for the protocol and why it is medians.
-#
-# A second line reports the same median over the frame lines of 500 draws or
-# more, whatever their rate. The first count cuts lines off once a
-# configuration reaches 10 fps; quote the second one there.
+# Reports the median over the frame lines of 200 draws or more a frame — the
+# world rule the launcher and the bench scripts use. A menu or loading frame
+# has 13 draws at most; 200 or more is the world. The median over lines under
+# 10 fps is kept as a legacy line for old logs; where the two differ, quote
+# the draws one. Peaks are scenes, not settings. See docs/FORK.md.
 set -uo pipefail
 
 # --summary LOG: report on an existing log and run nothing.
@@ -71,13 +68,11 @@ STATS=$(echo "$CLEAN" | grep -oE '[0-9.]+ fps' | tr -d ' fps' | awk '$1 < 10 {pr
 set -- $STATS
 MED=$1 MIN=$2 MAX=$3 N=$4
 
-# The same, with a world frame told by its draws: a frame line of 500 draws or
-# more, at any rate. A menu or loading frame has a few hundred at most. Under
-# 10 fps the two counts take nearly the same lines. From 10 fps on the count
-# above leaves lines out (a run at 10.0 fps by this count was reported as 9.20
-# with n=13 of 31), and at 12 fps it leaves nearly all of them out.
+# A world frame told by its draws: a frame line of 200 draws or more, at any
+# rate. A menu or loading frame has 13 at most. The legacy count above leaves
+# lines out from 10 fps on; this one does not, so it is the rule.
 DSTATS=$(echo "$CLEAN" | grep -oE '[0-9.]+ fps, .*[^0-9][0-9]+ draws/frame' \
-  | awk '{ n = split($0, f, " "); if (f[n-1] + 0 >= 500) print f[1] }' | sort -n | awk '
+  | awk '{ n = split($0, f, " "); if (f[n-1] + 0 >= 200) print f[1] }' | sort -n | awk '
   {a[NR]=$1}
   END {
     if (!NR) { print "0 0"; exit }
@@ -87,15 +82,15 @@ DSTATS=$(echo "$CLEAN" | grep -oE '[0-9.]+ fps, .*[^0-9][0-9]+ draws/frame' \
 set -- $DSTATS
 DMED=$1 DN=$2
 
-printf '\n  %-28s median %5s fps   min %5s   max %5s   n=%s\n' "$LABEL" "$MED" "$MIN" "$MAX" "$N"
-printf '  %-28s by draws (500 or more a frame): median %5s fps   n=%s\n' "" "$DMED" "$DN"
+printf '\n  %-28s by draws (200 or more a frame): median %5s fps   n=%s\n' "$LABEL" "$DMED" "$DN"
+printf '  %-28s legacy under 10 fps: median %5s fps   min %5s   max %5s   n=%s\n' "" "$MED" "$MIN" "$MAX" "$N"
 printf '  %-28s removals %s   faults %s   clamp-fail %s   indirect-dropped %s   exit %s\n' "" "$REMOVALS" "$FAULTS" "$CLAMP" "${INDIRECT:-0}" "$CODE"
 
 if [ "$N" -lt 8 ] && [ "$DN" -lt 8 ]; then
   echo "  note: fewer than 8 world frames sampled; the run probably never reached the world"
 fi
 if [ "$DN" -gt $((N + N / 4)) ]; then
-  echo "  note: $((DN - N)) world frame lines are at 10 fps or over and not in the first median; quote the one by draws"
+  echo "  note: the legacy under-10 count leaves $((DN - N)) world lines out; quote the one by draws"
 fi
 if [ "$REMOVALS" != "0" ]; then
   echo "  note: the host device was removed - this configuration is not stable"

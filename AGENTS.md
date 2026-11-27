@@ -173,11 +173,13 @@ VICTORY_LATE_WAIT=1 ./tools/bench_scene.sh "late-wait 1"
 
 Protocol, because the frame rate is scene-dependent and deceiving:
 
-* Report the **median of world frames** (`fps < 10`), with n. Menus are 30 fps
-  and loading dips to 5–20 fps; including them flatters or wrecks a run.
+* Report the **median of world frames**: a frame line of **200 draws or more**
+  a frame, whatever its rate. Menus and loading frames have 13 draws at most.
+  The old count of lines under 10 fps is kept for old logs; where the two
+  differ, quote the 200-draw median.
 * From 10 fps on that count cuts world lines off (a run at 12.4 fps was
   reported as 9.25 with n=2). `bench.sh` prints a second median, over the
-  frame lines of 500 draws or more: quote that one there, and say which
+  frame lines of 200 draws or more: quote that one there, and say which
   count a number is.
 * A 60 s window needs **n ≥ 12** world frames; the whole-run `bench.sh` wants
   n ≥ 20. Below that the run did not reach the world.

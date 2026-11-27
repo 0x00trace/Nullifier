@@ -76,7 +76,7 @@ It is not for people without their own copy of the title. macOS is wanted but ha
 
 - Is running other Xbox titles a non-goal, or may the layer grow to more titles?
 - What median of world frames counts as playable? Suggested: 30 fps, the rate of the menus.
-- `tools/bench.sh` and `tools/bench_scene.sh` count a frame line as a world frame when it is under 10 fps, so world frames above 10 fps are left out. The launcher already uses 200 or more draws a frame instead. Which rule should the bench scripts use?
+- ~~Which rule for a world frame?~~ Decided: 200 draws or more a frame, at any rate. `bench.sh`, `bench_scene.sh`, `frames.py` and the launcher use it; the under-10-fps count is kept only for old logs. A streamed world also waits for the texture slots waiting and the heap pass to settle (`frames.py --ready`).
 
 ## Glossary
 

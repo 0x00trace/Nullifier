@@ -70,7 +70,8 @@ def main():
     ap.add_argument("log")
     ap.add_argument("--html")
     ap.add_argument("--csv")
-    ap.add_argument("--world", type=float, default=10.0, help="fps below this counts as the world")
+    ap.add_argument("--world", type=float, default=10.0,
+                    help="for a line with no draw count, fps below this counts as the world")
     ap.add_argument("--watch", type=float, default=0, metavar="SECONDS",
                     help="re-read the log every N seconds and repaint (live overlay in the terminal)")
     ap.add_argument("--stat", action="store_true",
