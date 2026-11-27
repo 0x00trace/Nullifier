@@ -421,6 +421,9 @@ fn readable_value(key: &str, value: &str) -> String {
             | "VICTORY_JOIN_COPIES"
             | "VICTORY_INDIRECT_RUNS"
             | "VICTORY_INDIRECT_WINDOW"
+            | "VICTORY_RELAY_QUEUE"
+            | "VICTORY_BACK_OWN_VIEW"
+            | "VICTORY_ALIAS_LAZY"
     ) {
         return match value {
             "1" => "on".into(),
@@ -4233,6 +4236,10 @@ impl App {
                 }
                 let asked = switch_info(ui, sets, "VICTORY_WIDE_BACK");
                 if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_BACK_OWN_VIEW");
+                if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_ALIAS_LAZY");
+                if info.is_none() { info = asked; }
                 let asked = switch_info(ui, sets, "VICTORY_CARD_REHASH_RUNS");
                 if info.is_none() { info = asked; }
             });
@@ -4252,6 +4259,8 @@ impl App {
                 let asked = switch_info(ui, sets, "VICTORY_JOIN_COPIES");
                 if info.is_none() { info = asked; }
                 let asked = number_info(ui, sets, "VICTORY_RELAY", 0..=2, 2);
+                if info.is_none() { info = asked; }
+                let asked = switch_info(ui, sets, "VICTORY_RELAY_QUEUE");
                 if info.is_none() { info = asked; }
             });
         });
@@ -4989,7 +4998,8 @@ fn example(key: &str) -> Option<&'static str> {
         "VICTORY_CARD_BUFFERS_MIN_MB" => Some("1 (MB)"),
         "VICTORY_LATE_WAIT" => Some("0 to 3"),
         "VICTORY_CARD_REHASH_RUNS" => Some("0, 1 or 2"),
-        "VICTORY_INDIRECT_RUNS" | "VICTORY_INDIRECT_WINDOW" => Some("1"),
+        "VICTORY_INDIRECT_RUNS" | "VICTORY_INDIRECT_WINDOW" | "VICTORY_RELAY_QUEUE" => Some("1"),
+        "VICTORY_BACK_OWN_VIEW" | "VICTORY_ALIAS_LAZY" => Some("1"),
         "VICTORY_RELAY" => Some("0, 1 or 2"),
         "VICTORY_FPS_CAP" => Some("30, 60, 120 or 0 for unlimited"),
         "VICTORY_VSYNC" => Some("1 = on"),
@@ -5044,11 +5054,14 @@ const KNOWN_SWITCHES: &[(&str, &str)] = &[
     ("VICTORY_TEXTURE_NO_WAIT", "1"),
     ("VICTORY_CARD_HASH_LANES", "1"),
     ("VICTORY_WIDE_BACK", "1"),
+    ("VICTORY_BACK_OWN_VIEW", "1"),
+    ("VICTORY_ALIAS_LAZY", "1"),
     ("VICTORY_CARD_REHASH_RUNS", "1"),
     ("VICTORY_INDIRECT_WINDOW", "1"),
     ("VICTORY_INDIRECT_RUNS", "1"),
     ("VICTORY_JOIN_COPIES", "1"),
     ("VICTORY_RELAY", "2"),
+    ("VICTORY_RELAY_QUEUE", "1"),
     ("VICTORY_LATE_WAIT", "1"),
     ("VICTORY_LOG", "info"),
 ];
@@ -5106,6 +5119,16 @@ fn describe(key: &str) -> Option<Desc> {
             "Copy shader results back in whole ranges instead of small pieces.",
             "On.",
         ),
+        "VICTORY_BACK_OWN_VIEW" => d(
+            "Copy results back through a view of our own",
+            "Shader results go back to the title's memory through a view of the layer's own, so they are not sent up to the card again.",
+            "On with a 16 GB NVIDIA card on Linux (linux-nvidia-16gb). Not measured elsewhere.",
+        ),
+        "VICTORY_ALIAS_LAZY" => d(
+            "Guard only the views that are written",
+            "A write through one view of a guarded page leaves the page's other views read-only until they are written too.",
+            "On with a 16 GB NVIDIA card on Linux (linux-nvidia-16gb). Not measured elsewhere.",
+        ),
         "VICTORY_CARD_REHASH_RUNS" => d(
             "Re-check only changed ranges",
             "Only re-check card copies that changed.",
@@ -5130,6 +5153,11 @@ fn describe(key: &str) -> Option<Desc> {
             "Hand results back beside writes",
             "Hand results back beside writes. 2 is faster but has crashed before.",
             "0, or 2 if your machine stays stable with it.",
+        ),
+        "VICTORY_RELAY_QUEUE" => d(
+            "A queue of its own for handed-back results",
+            "With Relay on, results are fetched on a copy queue of their own, so they do not wait behind the next frame's work.",
+            "On with Relay 2 on a 16 GB NVIDIA card on Linux (linux-nvidia-16gb). It does nothing with Relay 0.",
         ),
         "VICTORY_VSYNC" => d(
             "V-Sync",
@@ -5189,7 +5217,10 @@ fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
     if sets.contains_key("VICTORY_JOIN_COPIES") {
         out.push("Joined copies can crash the graphics driver; it did before on this project.".into());
     }
-    if setting_value(sets, "VICTORY_RELAY") == Some(2) {
+    // With an NVIDIA card on Linux, 2 is the measured value of the
+    // linux-nvidia-16gb profile, together with VICTORY_RELAY_QUEUE=1
+    // (docs/FORK.md).
+    if setting_value(sets, "VICTORY_RELAY") == Some(2) && (cfg!(windows) || hw.vendor != "nvidia") {
         out.push("Relay 2 has crashed the driver before. If a run dies, set it to 0.".into());
     }
     for key in sets.keys() {

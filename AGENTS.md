@@ -229,8 +229,9 @@ standalone and fine on lavapipe: it is a driver crash, not our translation.
 **`device removed 0x887A0005` after minutes.** Submissions sent ahead of the
 fence outrun the driver. → `LATE_WAIT>=2`, `JOIN_COPIES=1` and `RELAY` are not
 safe on Linux with AMD (RADV). Default `LATE_WAIT=1`. The one exception that
-is measured: `LATE_WAIT=3` on an RTX 5080 with the built wineserver
-(`linux-nvidia-16gb`, `docs/FINDINGS.md` 2.9); go back to 1 there first if a
+is measured: `LATE_WAIT=3`, and `RELAY=2` with `RELAY_QUEUE=1`, on an RTX 5080
+with the built wineserver (`linux-nvidia-16gb`, `docs/FINDINGS.md` 2.9 and
+2.20); set `VICTORY_RELAY=0` there first, then `VICTORY_LATE_WAIT=1`, if a
 session loses the device.
 
 **Every bench run starts in another scene, with about 4,850 steady draws a
