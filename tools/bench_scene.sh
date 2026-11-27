@@ -73,15 +73,18 @@ if [ -z "$ENTRY" ]; then
 fi
 echo "  world reached; discarding ${WARMUP}s"
 sleep "$WARMUP"
-START=$(date +%s)
+# Snapshot complete log lines at both boundaries, before stopping the title.
+START=$(wc -l < "$LOG")
 sleep "$WINDOW"
-END=$(date +%s)
+END=$(wc -l < "$LOG")
 kill $RUN 2>/dev/null
 stop_run
 
-CLEAN=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG")
+WINDOW_LOG="$CAPDIR/window.log"
+awk -v start="$START" -v end="$END" 'NR > end { exit } NR > start' "$LOG" > "$WINDOW_LOG"
+CLEAN=$(sed 's/\x1b\[[0-9;]*m//g' "$WINDOW_LOG")
 STATS=$(echo "$CLEAN" | grep -oE '^[^ ]* +INFO victory_gpu::host: [0-9.]+ fps' \
-  | grep -oE '[0-9.]+ fps' | tr -d ' fps' | awk -v s="$START" -v e="$END" '$1<10{print}' \
+  | grep -oE '[0-9.]+ fps' | tr -d ' fps' | awk '$1<10{print}' \
   | sort -n | awk '{a[NR]=$1;s+=$1} END{if(!NR){print "0 0 0 0";exit}
       med=(NR%2)?a[int((NR+1)/2)]:(a[NR/2]+a[NR/2+1])/2;
       p10=a[int(NR*0.1)<1?1:int(NR*0.1)];
@@ -95,7 +98,7 @@ CL=$(grep -c 'no argument clamp' "$LOG" 2>/dev/null); CL=${CL:-0}
 printf '\n  %-30s median %5s fps   p10 %5s   mean %5s   n=%s   removals=%s crashes=%s clamp=%s\n' \
   "$LABEL" "$1" "$2" "$4" "$3" "$REM" "$CR" "$CL"
 echo "  phases:"
-./tools/frames.py "$LOG" 2>/dev/null | sed -n '/phase/,/^$/p' | sed 's/^/    /'
+./tools/frames.py "$WINDOW_LOG" 2>/dev/null | sed -n '/phase/,/^$/p' | sed 's/^/    /'
 BIGGEST=$(ls -S "$CAPDIR"/*.png 2>/dev/null | head -1)
 if [ -z "$BIGGEST" ]; then
   echo "  PICTURE: no frame captured (window too short, or capture failed) - NUMBER IS UNVERIFIED"
