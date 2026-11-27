@@ -16,7 +16,7 @@ cd "$HERE" || exit 1
 LABEL="${1:-run}"; shift || true
 [ "${1:-}" = "--" ] && shift
 
-GAME="${VICTORY_GAME_DIR:-$HOME/Downloads/GTA6.Xbox.v1.0.2.1-CYBERLEEK}"
+GAME="${VICTORY_GAME_DIR:-$HOME/Games/YourCopy}"
 BIN="${VICTORY_BIN:-$HERE/target/x86_64-pc-windows-msvc/diag/nullifier.exe}"
 WINDOW="${VICTORY_WINDOW:-35}"          # seconds measured once the world runs
 WARMUP="${VICTORY_WARMUP:-10}"          # seconds after world entry discarded

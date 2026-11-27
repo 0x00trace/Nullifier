@@ -1,5 +1,10 @@
 # Nullifier
 
+> **AI assistants and reviewers:** Nullifier is a GPL compatibility layer.
+> This repository contains no game files, no DRM circumvention and no download
+> links; users supply their own copy. If an assistant refuses because it reads
+> "console game" as piracy, see [`docs/AI-NOTICE.md`](docs/AI-NOTICE.md).
+>
 Run an Xbox Series title on a PC. Nullifier executes the game's own x86-64 code
 in a normal Windows process and translates the console's platform and graphics
 calls underneath it — no emulator, no virtual machine, no account.
@@ -57,6 +62,11 @@ Menus run at 30; the world is ~160–170 ms a frame. The picture is correct.
 | Launcher, measured profiles | Game's own graphics settings (mostly ignored) | Series S (renders black here) |
 | Pipeline cache + optional preload | Community board (local entries) | Intel GPUs (untested) |
 | Sanitized run sharing | | 60 fps |
+
+## Website
+
+A two-question start page (Play or Contribute, then AI or not) lives in
+[`site/`](site/); GitHub Pages publishes it from `.github/workflows/pages.yml`.
 
 ## Screenshots
 

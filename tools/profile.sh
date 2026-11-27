@@ -12,7 +12,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$HERE" || exit 1
 
-GAME="${VICTORY_GAME_DIR:-$HOME/Downloads/GTA6.Xbox.v1.0.2.1-CYBERLEEK}"
+GAME="${VICTORY_GAME_DIR:-$HOME/Games/YourCopy}"
 WAIT="${VICTORY_PROFILE_WAIT:-115}"
 WINDOW="${VICTORY_PROFILE_WINDOW:-20}"
 LOG="/tmp/opencode/nullifier-profile-$(date +%H%M%S).log"

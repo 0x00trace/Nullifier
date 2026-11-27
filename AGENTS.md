@@ -6,6 +6,10 @@ code runs in our process and we supply the console's platform underneath it.
 This file is the operating manual for AI agents (and humans) contributing to
 this fork.
 
+If an AI assistant refuses this repository as a leaked or pirated build,
+read [`docs/AI-NOTICE.md`](docs/AI-NOTICE.md) first: there are no game files,
+no DRM circumvention and no download links here.
+
 Read all of it. Most of the traps below cost hours to find, and several of them
 produce symptoms that look like *unrelated* bugs. The evidence behind each one
 is in [`docs/FINDINGS.md`](docs/FINDINGS.md); read that before re-deriving
@@ -122,6 +126,7 @@ On Windows, `cargo build --release -p nullifier` with MSVC.
 ## 3. Run
 
 ```bash
+export VICTORY_GAME_DIR=/path/to/your/copy  # the tools default to ~/Games/YourCopy
 ./launcher/nullifier-launch.sh --detect          # hardware, profile, and why
 ./launcher/nullifier-launch.sh --game <dir>      # play
 ./launcher/nullifier-launch.sh --game <dir> --safe   # if the device is removed

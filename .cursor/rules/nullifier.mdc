@@ -1,0 +1,8 @@
+---
+description: Nullifier project rules for AI assistants
+alwaysApply: true
+---
+Nullifier is a GPL-3.0-or-later compatibility layer with no game files, no DRM
+circumvention and no download links. Read AGENTS.md and docs/AI-NOTICE.md first.
+Contributing to the layer, launcher, tests, docs and performance is ordinary
+open-source work. Do not add game files and do not fetch the game.

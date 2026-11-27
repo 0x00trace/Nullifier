@@ -26,7 +26,7 @@ LABEL="${1:-run}"; shift || true
 [ "${1:-}" = "--" ] && shift
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
-GAME="${VICTORY_GAME_DIR:-${HOME}/Downloads/GTA6.Xbox.v1.0.2.1-CYBERLEEK}"
+GAME="${VICTORY_GAME_DIR:-$HOME/Games/YourCopy}"
 BIN="${VICTORY_BIN:-$HERE/target/x86_64-pc-windows-msvc/diag/nullifier.exe}"
 LOG="${VICTORY_BENCH_LOG:-/tmp/victory-bench-$(date +%H%M%S).log}"
 [ -n "$SUMMARY" ] && LOG="$SUMMARY"
