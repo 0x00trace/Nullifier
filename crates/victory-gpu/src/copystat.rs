@@ -264,8 +264,23 @@ pub(crate) fn compared(src: usize, len: usize, written: usize) {
     e.1 += written as u64;
 }
 
+/// Whether the copies are counted by source range, for the lines "copied
+/// from" behind the frame line (`VICTORY_COPY_RANGES=1`; off by default).
+///
+/// Every refresh of a host copy looked its range up in a map behind a lock
+/// to count there: about 1 ms a frame of the thread that submits, in the
+/// build that players on Linux get (docs/FINDINGS.md 2.25). The frame
+/// line's own sums ("copies", "refreshes") do not come from this map.
+fn ranges_counted() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_COPY_RANGES").is_some_and(|v| v == "1"))
+}
+
 /// A copy of `len` bytes from `src` (memory type `kind`) took `us`.
 pub(crate) fn range(src: usize, len: usize, us: u64, kind: u32) {
+    if !ranges_counted() {
+        return;
+    }
     let mut map = RANGES.lock().unwrap_or_else(|e| e.into_inner());
     let e = map
         .get_or_insert_with(HashMap::new)
@@ -284,7 +299,34 @@ pub(crate) fn range(src: usize, len: usize, us: u64, kind: u32) {
 /// runtime and of the driver alike (3.5 GB in run 60's gameplay, growing by
 /// some 2 MB a frame, and nothing said whose): this says which part is
 /// ours. Bigger blocks are allocations of their own in the map.
-static OWN: [AtomicU64; 8] = [const { AtomicU64::new(0) }; 8];
+///
+/// Counted in [`STRIPES`] sets, a thread to a set by its id, and read as
+/// their sums ([`own_now`]): one set for every thread was two locked
+/// additions on one cache line at every allocation and release, which the
+/// six threads that record and submit passed back and forth (about 1 ms a
+/// frame of the thread that submits and 3.7 ms over the five that record,
+/// docs/FINDINGS.md 2.25). A block made on one thread and released on
+/// another is added in one set and taken off in another, so a set alone
+/// says nothing and its numbers wrap; the sums are right.
+static OWN: [Stripe; STRIPES] = [const { Stripe([const { AtomicU64::new(0) }; 8]) }; STRIPES];
+
+/// The sets of counters [`OWN`] is kept in.
+const STRIPES: usize = 64;
+
+/// One set of [`OWN`]'s counters, alone on its cache lines.
+#[repr(align(128))]
+struct Stripe([AtomicU64; 8]);
+
+/// [`OWN`] as it is now: bytes by size class, then blocks.
+fn own_now() -> [u64; 8] {
+    let mut sums = [0u64; 8];
+    for stripe in &OWN {
+        for (sum, counter) in sums.iter_mut().zip(&stripe.0) {
+            *sum = sum.wrapping_add(counter.load(Relaxed));
+        }
+    }
+    sums
+}
 
 /// The class of [`OWN`] a block of `size` bytes counts in.
 fn block_class(size: usize) -> usize {
@@ -298,12 +340,15 @@ fn block_class(size: usize) -> usize {
 
 fn own(size: usize, made: bool) {
     let class = block_class(size);
+    // Thread ids are multiples of four. (Nothing here may allocate: this
+    // runs inside the allocator.)
+    let own = &OWN[(thread_id() as usize >> 2) % STRIPES].0;
     if made {
-        OWN[class].fetch_add(size as u64, Relaxed);
-        OWN[4 + class].fetch_add(1, Relaxed);
+        own[class].fetch_add(size as u64, Relaxed);
+        own[4 + class].fetch_add(1, Relaxed);
     } else {
-        OWN[class].fetch_sub(size as u64, Relaxed);
-        OWN[4 + class].fetch_sub(1, Relaxed);
+        own[class].fetch_sub(size as u64, Relaxed);
+        own[4 + class].fetch_sub(1, Relaxed);
     }
 }
 
@@ -415,7 +460,7 @@ mod command_tests {
 
 #[cfg(test)]
 mod own_tests {
-    use super::{OWN, block_class};
+    use super::{block_class, own_now};
     use std::sync::atomic::Ordering::Relaxed;
 
     #[test]
@@ -453,10 +498,38 @@ mod own_tests {
     #[test]
     fn a_block_is_counted_while_it_lives() {
         let block = vec![1u8; 8 << 20];
-        assert!(OWN[3].load(Relaxed) >= 8 << 20);
-        assert!(OWN[7].load(Relaxed) >= 1);
+        assert!(own_now()[3] >= 8 << 20);
+        assert!(own_now()[7] >= 1);
         drop(block);
-        assert!(OWN[7].load(Relaxed) < u64::MAX / 2, "no count below zero");
+        assert!(own_now()[7] < u64::MAX / 2, "no count below zero");
+    }
+
+    /// A block made on one thread and released on another is counted once
+    /// while it lives and not at all afterwards, whichever sets of counters
+    /// the two threads use.
+    #[test]
+    fn a_block_released_on_another_thread_is_counted_out() {
+        // Classes 0 to 2 move with every other test's allocations: the big
+        // class, and by more than any other test holds at once.
+        const SIZE: usize = 192 << 20;
+        let before = own_now();
+        let block = std::thread::spawn(|| vec![0u8; SIZE])
+            .join()
+            .expect("the thread");
+        let alive = own_now();
+        assert!(
+            alive[3].wrapping_sub(before[3]) as i64 >= (SIZE as i64) / 2,
+            "counted while it lives"
+        );
+        std::thread::spawn(move || drop(block))
+            .join()
+            .expect("the thread");
+        let after = own_now();
+        assert!(
+            (after[3].wrapping_sub(before[3]) as i64) < (SIZE as i64) / 2,
+            "counted out when released"
+        );
+        assert!(after[7] < u64::MAX / 2, "no count below zero");
     }
 }
 
@@ -793,7 +866,7 @@ fn log_memory() {
     let alive: Vec<u64> = crate::host::ALIVE.iter().map(|a| a.load(Relaxed)).collect();
     let window = crate::shadow::window_use();
     let views = crate::descriptor::views_kept();
-    let own: Vec<u64> = OWN.iter().map(|o| o.load(Relaxed)).collect();
+    let own = own_now();
     tracing::info!(
         "memory, what holds it: {} host lists alive; their scratch memory: {} chunks {:.0} MB, of          them {} chunks {:.0} MB spare ({} taken from the spare ones so far); their other upload          buffers: {} alive {:.0} MB; windows outside buffers (grid {} KiB): {:.0} MB of their          pages ever copied, {} shown by descriptor slots {:.0} MB, {} held by lists or the pass          over the heap {:.0} MB, {} asked for without a length {:.0} MB; buffer views of the heap          whose slot showed another copy than the one brought up to date: {}; distinct views          kept: {} ({} free) {:.0} MB; our own allocations: {:.0} MB in {} blocks (under 4 KiB          {:.0} MB in {}, to 64 KiB {:.0} MB in {}, to 1 MiB {:.0} MB in {}, larger {:.0} MB in {})",
         alive[0],
@@ -899,6 +972,11 @@ struct Submitter {
     lock: u64,
     inside_user: u64,
     inside_kernel: u64,
+    /// Without [`thread_times_split`]: the thread running, in submissions
+    /// and between them, from its first submission after one present to
+    /// its first after a later one.
+    ran_user: u64,
+    ran_kernel: u64,
 }
 
 /// By thread: the submitting threads, and list-call time (nanoseconds,
@@ -916,6 +994,30 @@ thread_local! {
     static OURS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     /// List-call time not yet added to `RECORDERS` (nanoseconds, calls).
     static UNSENT: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+    /// Without [`thread_times_split`]: the present this thread last read
+    /// its processor time after (its number plus one; 0: never), and that
+    /// time (user, kernel).
+    static SAMPLED: std::cell::Cell<(u64, u64, u64)> = const { std::cell::Cell::new((0, 0, 0)) };
+}
+
+/// Frames presented since the start.
+static PRESENTS: AtomicU64 = AtomicU64::new(0);
+
+/// Whether a submitting thread's processor time is read when each of its
+/// submissions is called and when it returns (`VICTORY_THREAD_TIMES=1`; off
+/// by default), which lets the frame line say how much of the thread's
+/// running lies inside submissions.
+///
+/// Reading it is a request to Wine's server and four reads under `/proc`,
+/// and the thread sleeps until the answer is there: twice a submission that
+/// was about 119 readings a frame in the world, 1.5 ms of running and 1 ms
+/// asleep (docs/FINDINGS.md 2.25), in the build that players on Linux get.
+/// Without the switch a thread reads it once a frame, at its first
+/// submission after a present, and the line gives the thread's running in
+/// all.
+fn thread_times_split() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("VICTORY_THREAD_TIMES").is_some_and(|v| v == "1"))
 }
 
 fn thread_id() -> u32 {
@@ -933,9 +1035,77 @@ fn thread_times() -> (u64, u64) {
     use windows_sys::Win32::System::Threading::{GetCurrentThread, GetThreadTimes};
     let zero = FILETIME { dwLowDateTime: 0, dwHighDateTime: 0 };
     let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+    #[cfg(test)]
+    thread_time_tests::READINGS.with(|n| n.set(n.get() + 1));
     // SAFETY: our own thread and four valid out pointers.
     unsafe { GetThreadTimes(GetCurrentThread(), &mut created, &mut exited, &mut kernel, &mut user) };
     (micros(user), micros(kernel))
+}
+
+#[cfg(test)]
+mod thread_time_tests {
+    use super::{
+        SUBMITTERS, presented, submission_begins, submission_ends, thread_id, thread_times_split,
+    };
+
+    thread_local! {
+        /// The readings of this thread's processor time (`thread_times`).
+        pub(super) static READINGS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Without `VICTORY_THREAD_TIMES=1` a thread that submits reads its
+    /// processor time once a frame, at its first submission after a
+    /// present, however many submissions it makes; its running between two
+    /// readings is on its line.
+    #[test]
+    fn a_submitting_thread_reads_its_processor_time_once_a_frame() {
+        if thread_times_split() {
+            return;
+        }
+        let readings = || READINGS.with(|n| n.replace(0));
+        let submit = |times: usize| {
+            for _ in 0..times {
+                submission_begins();
+                submission_ends(0);
+            }
+        };
+        readings();
+        submit(5);
+        assert_eq!(
+            readings(),
+            1,
+            "the first submission reads, the next four do not"
+        );
+        // The thread runs for a while (processor time is counted in
+        // hundredths of a second), then a frame is presented.
+        let began = std::time::Instant::now();
+        while began.elapsed() < std::time::Duration::from_millis(80) {
+            std::hint::spin_loop();
+        }
+        presented();
+        submit(5);
+        assert_eq!(readings(), 1, "one reading after the present");
+        submit(3);
+        assert_eq!(readings(), 0, "none until the next present");
+        let all = SUBMITTERS.lock().unwrap_or_else(|e| e.into_inner());
+        let ours = all
+            .iter()
+            .find(|s| s.0 == thread_id())
+            .expect("this thread's line")
+            .1;
+        assert_eq!(ours.submissions, 13);
+        assert!(
+            ours.ran_user + ours.ran_kernel >= 30_000,
+            "ran {} + {} microseconds",
+            ours.ran_user,
+            ours.ran_kernel
+        );
+        assert_eq!(
+            (ours.inside_user, ours.between_user),
+            (0, 0),
+            "no reading inside submissions"
+        );
+    }
 }
 
 /// The process's processor time so far (user, kernel), in microseconds.
@@ -993,9 +1163,35 @@ pub(crate) fn submission_begins() {
     if !SUBMITTED_SINCE.load(Relaxed) && !SUBMITTED_SINCE.swap(true, Relaxed) {
         add(C::UntilSubmitUs, now.saturating_sub(PRESENTED_AT.load(Relaxed)));
     }
+    let ours = OURS.with(|o| o.replace(0));
+    if !thread_times_split() {
+        // Once a frame: at the thread's first submission after a present.
+        let present = PRESENTS.load(Relaxed) + 1;
+        let (sampled, u, k) = SAMPLED.with(|s| s.get());
+        let ran = (sampled != present).then(|| {
+            let (user, kernel) = thread_times();
+            SAMPLED.with(|s| s.set((present, user, kernel)));
+            (user.saturating_sub(u), kernel.saturating_sub(k))
+        });
+        let left = LEFT.with(|l| l.get());
+        if left.is_none() && (ran.is_none() || sampled == 0) {
+            return;
+        }
+        let mut all = SUBMITTERS.lock().unwrap_or_else(|e| e.into_inner());
+        let s = submitter(&mut all, thread_id());
+        if let Some((left, ..)) = left {
+            s.between += now.saturating_sub(left);
+            s.between_ours += ours;
+        }
+        // The first reading has nothing to be taken from.
+        if let Some((user, kernel)) = ran.filter(|_| sampled != 0) {
+            s.ran_user += user;
+            s.ran_kernel += kernel;
+        }
+        return;
+    }
     let (user, kernel) = thread_times();
     ENTERED.with(|e| e.set((user, kernel)));
-    let ours = OURS.with(|o| o.replace(0));
     if let Some((left, u, k)) = LEFT.with(|l| l.get()) {
         let mut all = SUBMITTERS.lock().unwrap_or_else(|e| e.into_inner());
         let s = submitter(&mut all, thread_id());
@@ -1011,7 +1207,11 @@ pub(crate) fn submission_begins() {
 pub(crate) fn submission_ends(lock: u64) {
     let now = now_us();
     SUBMITTED_AT.store(now, Relaxed);
-    let (user, kernel) = thread_times();
+    let (user, kernel) = if thread_times_split() {
+        thread_times()
+    } else {
+        (0, 0)
+    };
     let (u, k) = ENTERED.with(|e| e.get());
     LEFT.with(|l| l.set(Some((now, user, kernel))));
     OURS.with(|o| o.set(0));
@@ -1031,6 +1231,7 @@ pub(crate) fn present_begins() {
 /// A frame was presented.
 pub(crate) fn presented() {
     add(C::Frames, 1);
+    PRESENTS.fetch_add(1, Relaxed);
     PRESENTED_AT.store(now_us(), Relaxed);
     RECORDED_SINCE.store(false, Relaxed);
     SUBMITTED_SINCE.store(false, Relaxed);
@@ -1283,6 +1484,20 @@ pub(crate) fn log(frames: f64) {
     submitters.sort_by_key(|s| std::cmp::Reverse(s.1.submissions));
     for (id, s) in submitters.into_iter().take(4) {
         let per = |v: u64| v as f64 / 1e3 / frames;
+        if !thread_times_split() {
+            tracing::info!(
+                "  thread {id} submitted {:.1}x/frame: between its submissions {:.1} ms ({:.1} ms in list \
+                 calls), {:.1} ms waiting for the submission lock; running {:.1} ms user + {:.1} ms kernel \
+                 a frame, in submissions and between them (VICTORY_THREAD_TIMES=1 gives the two apart)",
+                s.submissions as f64 / frames,
+                per(s.between),
+                s.between_ours as f64 / 1e6 / frames,
+                per(s.lock),
+                per(s.ran_user),
+                per(s.ran_kernel),
+            );
+            continue;
+        }
         tracing::info!(
             "  thread {id} submitted {:.1}x/frame: between its submissions {:.1} ms (running \
              {:.1} ms user + {:.1} ms kernel; {:.1} ms in list calls), in them running {:.1} ms \
