@@ -114,6 +114,7 @@ pub extern "system" fn XMemVirtualAlloc(
     if placeholder {
         if kind & MEM_REPLACE_PLACEHOLDER != 0 {
             // Part of a placeholder the title split: it stays one.
+            victory_gpu::title_memory_placeholder(base as usize, size);
             return base;
         }
         protect = PAGE_NOACCESS;
@@ -161,6 +162,17 @@ pub extern "system" fn XMemVirtualAlloc(
             at = format_args!("{at:p}"),
             "XMemVirtualAlloc"
         );
+    }
+    // The GPU side asks Windows about unmapped blocks of view memory only
+    // outside placeholders: in one, memory appears only as the views that
+    // `map` maps and tells it of. Anything else that is given out here is
+    // new memory, whatever the GPU side noted of its addresses before.
+    if !at.is_null() {
+        if kind & MEM_RESERVE_PLACEHOLDER != 0 {
+            victory_gpu::title_memory_placeholder(at as usize, size);
+        } else {
+            victory_gpu::title_memory_allocated(at as usize, size);
+        }
     }
     at
 }

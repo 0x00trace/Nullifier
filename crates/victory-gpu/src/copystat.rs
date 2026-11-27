@@ -131,6 +131,11 @@ pub(crate) enum C {
     /// and the times the memo of refused ranges was emptied.
     WatchRefused,
     WatchMemos,
+    /// Runs of blocks noted absent that Windows was asked about again
+    /// (`watch::guard`), and those left as they are because they lie in a
+    /// placeholder of the runtime's.
+    AbsentAsked,
+    AbsentKept,
 }
 const COUNTERS: usize = 80;
 static COUNT: [AtomicU64; COUNTERS] = [const { AtomicU64::new(0) }; COUNTERS];
@@ -1068,7 +1073,7 @@ pub(crate) fn log(frames: f64) {
          {:.2} MB unmapped; {:.0} page faults; {:.0} watches {:.2} ms, {:.1} MB checked, {:.1} MB \
          unchanged; {:.1} fallbacks; {:.0} guard faults; textures {:.1} MB watched and \
          changed, {:.1} MB hashed, {:.1} MB of them changed; {:.0} askings ahead refused, \
-         their memo emptied {:.2}x",
+         their memo emptied {:.2}x; absent runs: {:.0} asked about, {:.0} kept (in placeholders)",
         c[C::Submissions as usize],
         c[C::Copies as usize],
         mb(c[C::CopyBytes as usize]),
@@ -1094,6 +1099,8 @@ pub(crate) fn log(frames: f64) {
         mb(c[C::TexChanged as usize]),
         c[C::WatchRefused as usize],
         c[C::WatchMemos as usize],
+        c[C::AbsentAsked as usize],
+        c[C::AbsentKept as usize],
     );
     tracing::info!(
         "recording per frame ({frames:.0} frames): {:.0} list calls {:.1} ms (all recording \
