@@ -36,16 +36,20 @@ jobs:
           # GitHub runs this script with -e; a failing test must still reach
           # the summary and annotation block below.
           set +e
-          cargo test --workspace --locked 2>&1 | tee test.log
+          # The log goes outside the checkout: xtask's repository_passes_policy
+          # runs in this step, and it refuses a file in the tree whose type is
+          # not on the allowlist.
+          log="${RUNNER_TEMP//\\//}/test.log"
+          cargo test --workspace --locked 2>&1 | tee "$log"
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
             {
               echo "### Tests failed"
               echo '```'
-              tail -300 test.log
+              tail -300 "$log"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            grep -aE 'FAILED|panicked|^error|Running ' test.log | tail -12 |
+            grep -aE 'FAILED|panicked|^error|Running ' "$log" | tail -12 |
               while IFS= read -r line; do
                 echo "::error title=test failure::$line"
               done
