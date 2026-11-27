@@ -175,6 +175,10 @@ Protocol, because the frame rate is scene-dependent and deceiving:
 
 * Report the **median of world frames** (`fps < 10`), with n. Menus are 30 fps
   and loading dips to 5–20 fps; including them flatters or wrecks a run.
+* From 10 fps on that count cuts world lines off (a run at 12.4 fps was
+  reported as 9.25 with n=2). `bench.sh` prints a second median, over the
+  frame lines of 500 draws or more: quote that one there, and say which
+  count a number is.
 * A 60 s window needs **n ≥ 12** world frames; the whole-run `bench.sh` wants
   n ≥ 20. Below that the run did not reach the world.
 * Peaks (5–8 fps) are camera cuts, not settings. Never quote them alone.
