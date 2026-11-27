@@ -69,9 +69,13 @@
         "VICTORY_CARD_BUFFERS_MB": "1024",
         "VKD3D_DISABLE_EXTENSIONS": "VK_NV_raw_access_chains",
         "VICTORY_INDIRECT_RUNS": "1",
-        "VICTORY_CARD_HASH_LANES": "1"
+        "VICTORY_CARD_HASH_LANES": "1",
+        "VICTORY_RELAY": "2",
+        "VICTORY_RELAY_QUEUE": "1",
+        "VICTORY_BACK_OWN_VIEW": "1",
+        "VICTORY_ALIAS_LAZY": "1"
       },
-      "note": "RTX 5080 16 GB, NVIDIA 620.73.04, Proton Experimental 11.0-20261112, the wineserver from tools/build-wineserver.sh, main at 6f3375d. Nine runs in turn: 4.30 / 4.30 / 4.30 fps with the linux-nvidia values, 5.20 / 5.20 / 5.20 with VICTORY_INDIRECT_RUNS=1 too, 6.20 / 5.85 / 5.75 with VICTORY_LATE_WAIT=3 as well; frame at 3,000 draws 226 -> 189 -> 169 ms; no removals, and none in a 20-minute run of this profile (6.30 fps) or in a run with Proton's own wineserver. LATE_WAIT 3 removes the device on AMD under Linux: set VICTORY_LATE_WAIT=1 first if a session here loses it. Not measured: NVIDIA cards under 16 GB (they keep linux-nvidia), other driver versions, play beyond the first scene after the opening."
+      "note": "RTX 5080 16 GB, NVIDIA 620.73.04, Proton Experimental 11.0-20261112, the wineserver from tools/build-wineserver.sh, main at 6f3375d. Nine runs in turn: 4.30 / 4.30 / 4.30 fps with the linux-nvidia values, 5.20 / 5.20 / 5.20 with VICTORY_INDIRECT_RUNS=1 too, 6.20 / 5.85 / 5.75 with VICTORY_LATE_WAIT=3 as well; frame at 3,000 draws 226 -> 189 -> 169 ms; no removals, and none in a 20-minute run of this profile (6.30 fps) or in a run with Proton's own wineserver. LATE_WAIT 3 removes the device on AMD under Linux: set VICTORY_LATE_WAIT=1 first if a session here loses it. Not measured: NVIDIA cards under 16 GB (they keep linux-nvidia), other driver versions, play beyond the first scene after the opening. The relay with a copy queue of its own, the copy-back through the layer's own view and lazy tracking of title writes (VICTORY_RELAY=2, VICTORY_RELAY_QUEUE=1, VICTORY_BACK_OWN_VIEW=1, VICTORY_ALIAS_LAZY=1; docs/FINDINGS.md 2.12, 2.14, 2.18 and 2.20), 200 s runs in turn at 5aa7b69: 5.10 / 5.40 / 5.35 fps without them and 6.00 / 5.90 / 5.70 with the relay and its queue; in a later set 6.00 / 5.40 / 5.80 with those two and 6.20 / 6.40 / 6.50 with all four; frame at 3,000 draws 175 -> 157 -> 148 ms. No removals in 33 runs of 200 s with the relay and its queue, nor in two 20-minute runs with all four (7.10 fps at 3840x2160 output, 9.70 fps with VICTORY_OUTPUT=2560x1440). Set VICTORY_RELAY=0 first, then VICTORY_LATE_WAIT=1, if a session here loses the device. Not measured with these four: AMD (the relay is not safe under RADV), Windows, NVIDIA cards under 16 GB."
     },
     {
       "name": "linux-nvidia",

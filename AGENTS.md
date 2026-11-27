@@ -156,7 +156,7 @@ and `VICTORY_WINESERVER=0` runs with Proton's own.
 |---|---|
 | Linux + AMD | `TEXTURE_NO_WAIT=1 LATE_WAIT=1 WIDE_BACK=1 CARD_BUFFERS_MIN_MB=1 CARD_BUFFERS_MB=1024` |
 | Linux + NVIDIA | same + `VKD3D_DISABLE_EXTENSIONS=VK_NV_raw_access_chains` |
-| Linux + NVIDIA, 13 GB or more | the row above with `LATE_WAIT=3`, + `INDIRECT_RUNS=1 CARD_HASH_LANES=1` (`linux-nvidia-16gb`; 5.60–6.20 fps against 4.30 on an RTX 5080) |
+| Linux + NVIDIA, 13 GB or more | the row above with `LATE_WAIT=3`, + `INDIRECT_RUNS=1 CARD_HASH_LANES=1 RELAY=2 RELAY_QUEUE=1 BACK_OWN_VIEW=1 ALIAS_LAZY=1` (`linux-nvidia-16gb`; 6.20–6.40 fps against 4.30 on an RTX 5080) |
 | Windows + AMD | `LATE_WAIT=3 WIDE_BACK=1 CARD_BUFFERS_MIN_MB=1 CARD_BUFFERS_MB=1024`; add `SHADER_OPT=59` if the driver compiler crashes |
 | Windows + NVIDIA | `RELAY=2`, or the `LATE_WAIT=3` combo |
 | VRAM < 10 GB | `CARD_BUFFERS_MB=512` (or 409); do not exceed 1024 on 12 GB — it corrupts the picture |
@@ -229,8 +229,9 @@ standalone and fine on lavapipe: it is a driver crash, not our translation.
 **`device removed 0x887A0005` after minutes.** Submissions sent ahead of the
 fence outrun the driver. → `LATE_WAIT>=2`, `JOIN_COPIES=1` and `RELAY` are not
 safe on Linux with AMD (RADV). Default `LATE_WAIT=1`. The one exception that
-is measured: `LATE_WAIT=3` on an RTX 5080 with the built wineserver
-(`linux-nvidia-16gb`, `docs/FINDINGS.md` 2.9); go back to 1 there first if a
+is measured: `LATE_WAIT=3`, and `RELAY=2` with `RELAY_QUEUE=1`, on an RTX 5080
+with the built wineserver (`linux-nvidia-16gb`, `docs/FINDINGS.md` 2.9 and
+2.20); set `VICTORY_RELAY=0` there first, then `VICTORY_LATE_WAIT=1`, if a
 session loses the device.
 
 **Every bench run starts in another scene, with about 4,850 steady draws a
@@ -389,9 +390,12 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
   copy queue: 6.20 / 6.45 / 6.75 fps against 5.65 / 6.00 / 6.25 with the relay
   alone and 5.50 / 5.90 / 5.55 without it, and 9.20 / 8.70 / 9.85 against 7.80 / 8.20 / 8.40 at
   2560x1440 output with 512 lists in the air too (frame lines of 500 draws
-  or more), with evenly spaced presents. Off by default and in no profile:
-  not run under Windows or on AMD, and the man's face was black in two of
-  the three runs with 512 lists at 3840x2160.
+  or more), with evenly spaced presents. Off by default. The
+  `linux-nvidia-16gb` profile sets it, with the own view and lazy tracking
+  (2.20): 6.20 / 6.40 / 6.40 fps against 5.30 / 5.35 / 5.50 with the
+  profile's old values, and 7.1 fps (9.7 at 2560x1440 output) over 20
+  minutes with no device removed. Not run under Windows or on AMD, and the
+  man's face was black in two of the three runs with 512 lists at 3840x2160.
 
 The next wins are on the copy lane — joined submission parts, measured in
 fxceless/victory-fork and not yet ported here, and what 2.16 leads to. The

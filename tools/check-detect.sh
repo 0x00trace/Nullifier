@@ -50,4 +50,23 @@ check_detect 24564 linux-nvidia-16gb 3
 check_detect 12999 linux-nvidia 1
 check_detect 13000 linux-nvidia-16gb 3
 check_detect 13000 linux-nvidia-16gb 1 VICTORY_LATE_WAIT=1
-echo "check-detect: ok (NVIDIA VRAM, profile boundary, user override)"
+
+# The relay and its copy queue are set by linux-nvidia-16gb only, and a user
+# setting takes precedence there too.
+check_relay() {
+  local vram="$1" relay="$2" queue="$3" out
+  shift 3
+  out=$(env -i PATH="$T:$PATH" STEAM_ROOT="$T" VICTORY_WINESERVER_DIR="$T" \
+      FAKE_NVIDIA_VRAM="$vram" "$@" "$HERE/launcher/nullifier-launch.sh" --detect 2>&1)
+  if [ "$(grep -xE '  VICTORY_RELAY=.*' <<< "$out")" != "$relay" ] ||
+      [ "$(grep -xE '  VICTORY_RELAY_QUEUE=.*' <<< "$out")" != "$queue" ]; then
+    echo "FAIL: at $vram MB expected '$relay' and '$queue'"
+    echo "$out"
+    exit 1
+  fi
+}
+
+check_relay 13000 '  VICTORY_RELAY=2' '  VICTORY_RELAY_QUEUE=1'
+check_relay 12999 '' ''
+check_relay 13000 '  VICTORY_RELAY=0' '  VICTORY_RELAY_QUEUE=1' VICTORY_RELAY=0
+echo "check-detect: ok (NVIDIA VRAM, profile boundary, user override, relay values)"

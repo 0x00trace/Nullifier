@@ -78,7 +78,7 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   `VICTORY_MOUSE_BUTTONS=0`. If it does nothing, the game log says why every
   five seconds (`mouse look idle` with the reason).
 * **Community** — each run records the **translation layer** version (the
-  title window's `v0.005` build string) and the launcher version separately;
+  title window's `v0.006` build string) and the launcher version separately;
   a nickname, **where** in the game the run was and **notes**
   (pop-in, flicker, HUD, crashes), then **Share last run**: it adds a local
   entry and copies a JSON block. Each entry keeps the Nullifier version, title
@@ -302,8 +302,9 @@ waits on this.
 * `LATE_WAIT >= 2`, `JOIN_COPIES=1` and `RELAY` are not defaulted on Linux:
   on AMD (RADV) they remove the device (`0x887A0005`) within minutes. One
   profile is an exception, with its evidence in `docs/FORK.md`:
-  `linux-nvidia-16gb` sets `LATE_WAIT=3`, measured on an RTX 5080 with the
-  built wineserver. `--safe` turns all send-ahead off if a run still dies.
+  `linux-nvidia-16gb` sets `LATE_WAIT=3` and `RELAY=2` with
+  `RELAY_QUEUE=1`, measured on an RTX 5080 with the built wineserver.
+  `--safe` turns all send-ahead off if a run still dies.
 * vkd3d-proton below build **5742** segfaults RADV on the first world mesh
   pipeline. The launcher installs the newest one it can find (Proton
   Experimental) into the prefix once, keeps `.bak` copies, and records the

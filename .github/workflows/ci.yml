@@ -28,29 +28,28 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Clippy, diagnostics build
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      # tools/ci-test.sh runs a test command and, if it fails, puts the output
+      # in the job summary and the lines that name the failure in error
+      # annotations. This step checks that script against stand-ins.
+      - name: Check of the test wrapper
+        shell: bash
+        run: bash tools/check-ci-test.sh
       # Includes xtask's repository_passes_policy, the asset-policy check.
+      # victory-gpu is left out here and runs in the next step.
       - name: Tests
         shell: bash
-        run: |
-          set -o pipefail
-          # GitHub runs this script with -e; a failing test must still reach
-          # the summary and annotation block below.
-          set +e
-          cargo test --workspace --locked 2>&1 | tee test.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            {
-              echo "### Tests failed"
-              echo '```'
-              tail -300 test.log
-              echo '```'
-            } >> "$GITHUB_STEP_SUMMARY"
-            grep -aE 'FAILED|panicked|^error|Running ' test.log | tail -12 |
-              while IFS= read -r line; do
-                echo "::error title=test failure::$line"
-              done
-          fi
-          exit "$status"
+        run: bash tools/ci-test.sh "Tests" cargo test --workspace --exclude victory-gpu --locked
+      # victory-gpu's tests run one at a time. Many of them submit work on
+      # the one host device and queue, which the layer drives from a single
+      # thread: side by side they ended the process with an access violation
+      # in three runs out of three on the software adapter here, and one at a
+      # time they pass (issue #49). One at a time the harness also prints a
+      # test's name before it runs it, so tools/ci-test.sh can name a test
+      # that ends the process. The step runs after a failed Tests step too.
+      - name: Tests of victory-gpu, one at a time
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tools/ci-test.sh "Tests of victory-gpu, one at a time" cargo test -p victory-gpu --locked -- --test-threads=1
 
   launcher:
     # The GUI is its own workspace; the job above never compiles it.
