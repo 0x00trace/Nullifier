@@ -1523,6 +1523,33 @@ frame's card time at this output size) or read the card's own counters. Data:
 `~/.cache/victory-captures/88-plain-arith`, `89-plain-all`, `90-serial-timing`
 and `91-clamp-rows` on the machine of these runs.
 
+## 2.23 Atomics on small title buffers kept the card waiting: every buffer's copy in the card's memory (2026-11-27)
+
+**How it was found.** Nsight Systems samples the card's own counters for the whole device (`nsys profile --gpu-metrics-devices=0 --gpu-metrics-set=gb20x-top`). The driver lets only an administrator read them, so nsys ran as root and started the bench as the user (`--run-as=<user>`); the launcher runs Proton's `wine` directly, so nothing else changes. Over 12 s of world frames of `main` at `63b67fc` (RTX 5080, `linux-nvidia-16gb`, `VICTORY_OUTPUT=2560x1440`), the card had work 58 % of the time, but its multiprocessors issued 3.3 % of the instructions they could (6.9 % while they were busy), and card memory was read at 4.5 % of its bandwidth. The warps were resident and waiting, not computing and not moving data.
+
+The waiting came in stretches. About once a frame, for 4.5 to 5.6 ms, one dispatch filled 96 % of the warp slots and 90 % of the registers within 0.2 ms, then issued 1 % of what the card can, with almost no memory traffic and no further thread groups; its warps finished over 2 to 6 ms. One counter was higher in these stretches than elsewhere: atomics at the cache in front of PC memory (`SysL2 Atomic Stage Active`, 0.41 % against 0.10 %).
+
+**The cause.** `shadowmask:CS_GenerateShadowMasks_Checkerboard_NoHair` (`5cf00dc39042edaf`, #51) adds, once per warp, to counters in a title buffer of 52 bytes (its unordered-access view `s1+56`), in 25,680 thread groups of one warp. A copy of a title buffer below `VICTORY_CARD_BUFFERS_MIN_MB` (1 MiB in the profiles, which is also its floor) is in the PC's memory, so each of these atomics goes over PCIe, and atomics on one address are done one after another. About 40 of the 493 compute programs of a world frame do atomics on buffers.
+
+**The change.** `VICTORY_CARD_BUFFERS_MIN_KB` gives the smallest buffer whose copy goes to the card in KiB (64 or less: every buffer, since copies are made in steps of 64 KiB). With 64, about 3,460 copies of 1,095 MB are in the card's memory instead of 98 of 865 MB, so `VICTORY_CARD_BUFFERS_MB` goes from 1024 to 2048 as well. Both are set in `linux-nvidia-16gb`.
+
+**What it gives** (200 s runs in turn, medians of world frames by the rule of 200 draws or more, n = 31 each, no device removed in any run):
+
+| | runs | `main`'s profile | every copy on the card |
+|---|---|---|---|
+| this change's build, profile as the launcher picks it (`docs/FORK.md`) | 3 rounds | 8.80 / 9.20 / 9.40 fps | **10.80 / 11.20 / 10.80 fps** |
+| the trial switch, before the profile change | 2 rounds | 9.50 / 8.90 fps | 11.50 / 10.50 fps |
+
+In a pair of timing runs the shadow-mask pass went from 4.92 to 0.91 ms, all dispatches from 28.0 to 7.9 ms, and all commands of the title from 73.7 to 58.8 ms. The indirect-light passes that the timing run of 2.22 charged with about 2 ms each are no longer among the heavy commands: they, or the passes just before them, do atomics on buffers too. Our own sync lists (`ours-sync`) went from 9.4 to 19.7 ms, the cost of keeping 3,460 copies up to date.
+
+Under Nsight Systems, in 12 s of world frames: no stalled stretch of 4.5 ms or more (27 before), 6 of 2 to 4.5 ms (92 before), 361 of 0.5 to 2 ms (803 before); 457 ms with resident warps issuing under 3 % (1,349 ms before); no atomics at the PC memory's cache. The card had no work 41 % of the time (32 % before), so the frame now waits more on the processor side.
+
+**The picture.** Each capture of one run was matched by content with the captures of a run of the other arm near the same point of the sequence. The best matches differ by a median of 2.3 to 3.3 (of 255) between the arms and 2.0 to 3.3 between two runs of one arm, and the median luminance is 15.5 to 16.6 against 15.7 to 16.9. The worst matches, looked at, are the same shot at another moment.
+
+**Not measured:** AMD cards and Windows (their profiles are unchanged), NVIDIA cards with less memory, scenes after the opening, and runs longer than 200 s.
+
+Data: `~/.cache/victory-captures/92-nsys` (run1 and run2 before, run3 after), `95-small-card`, `96-small-card-profile` and `97-verify` on the machine of these runs.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
