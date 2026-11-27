@@ -42,7 +42,7 @@ jobs:
               tail -300 test.log
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            grep -aE 'FAILED|panicked|^error' test.log | tail -20 |
+            grep -aE 'FAILED|panicked|^error|Running ' test.log | tail -12 |
               while IFS= read -r line; do
                 echo "::error title=test failure::$line"
               done
