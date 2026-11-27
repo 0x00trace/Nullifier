@@ -63,3 +63,12 @@ jobs:
           workspaces: tools/launcher
       - name: Build the launcher (Windows)
         run: cargo build --release --locked --manifest-path tools/launcher/Cargo.toml
+      - name: Clippy, launcher
+        run: cargo clippy --all-targets --locked --manifest-path tools/launcher/Cargo.toml -- -D warnings
+      # Through tools/ci-test.sh, as in the job above, so that a failure is in
+      # the job summary and the error annotations. It runs after a failed
+      # Clippy step too.
+      - name: Tests of the launcher
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: bash tools/ci-test.sh "Tests of the launcher" cargo test --locked --manifest-path tools/launcher/Cargo.toml
