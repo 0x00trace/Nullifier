@@ -28,13 +28,18 @@ $MatrixPath = if ($env:VICTORY_PROFILES) { $env:VICTORY_PROFILES } else { Join-P
 $Matrix = Get-Content $MatrixPath -Raw | ConvertFrom-Json
 
 function Get-NvidiaVram {
-  $smi = Join-Path $env:SystemRoot "System32\nvidia-smi.exe"
-  if (-not (Test-Path $smi)) { $smi = "nvidia-smi" }
-  try {
-    $line = & $smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null |
-      Select-Object -First 1
-    if ($line -match "^\s*(\d+)") { return [int64]$Matches[1] }
-  } catch { }
+  $candidates = @(
+    (Join-Path $env:SystemRoot "System32\nvidia-smi.exe"),
+    (Join-Path $env:ProgramFiles "NVIDIA Corporation\NVSMI\nvidia-smi.exe"),
+    "nvidia-smi"
+  )
+  foreach ($smi in $candidates) {
+    try {
+      $line = & $smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null |
+        Select-Object -First 1
+      if ($line -match "^\s*(\d+)") { return [int64]$Matches[1] }
+    } catch { }
+  }
   return 0
 }
 
