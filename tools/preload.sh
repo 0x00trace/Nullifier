@@ -19,34 +19,14 @@ GAME="${VICTORY_GAME_DIR:-}"
 LOG="${XDG_CACHE_HOME:-$HOME/.cache}/nullifier/preload-game.log"
 mkdir -p "$(dirname "$LOG")"
 
-# The same gentle opening sequence the bench uses: it only dismisses menus.
-export VICTORY_KEYS="${VICTORY_KEYS:-15:Enter,22:Enter,30:Enter,38:Enter,46:Enter,55:Enter,65:Enter,75:Enter,90:Enter,110:Enter,130:Enter}"
-
-./launcher/nullifier-launch.sh --game "$GAME" "$@" >"$LOG" 2>&1 &
-RUN=$!
-
-ENTRY=0
-for _ in $(seq 1 320); do
-  sleep 1
-  if sed 's/\x1b\[[0-9;]*m//g' "$LOG" 2>/dev/null \
-      | grep -oE '[0-9.]+ fps' | tr -d ' fps' | tail -2 | paste -sd' ' \
-      | awk 'NF == 2 && $1 < 10 && $2 < 10 {ok = 1} END {exit !ok}'; then
-    ENTRY=1
-    break
-  fi
-  kill -0 "$RUN" 2>/dev/null || break
-done
-
-if [ "$ENTRY" != 1 ]; then
-  echo "preload: the world was not reached (see $LOG)" >&2
-  kill "$RUN" 2>/dev/null
-  for p in $(pgrep -f "nullifier[.]exe run"); do kill -9 "$p" 2>/dev/null; done
-  exit 1
+# Offline: translate the shaders and make their compute pipelines. The title
+# is not started, so no menu timing or world gate is involved.
+./launcher/nullifier-launch.sh --game "$GAME" --warm "$@" >"$LOG" 2>&1
+STATUS=$?
+if [ "$STATUS" = 0 ]; then
+  echo "preload: shaders warmed"
+else
+  echo "preload: warming failed (see $LOG)" >&2
 fi
-
-echo "preload: world reached, warming the first world pipelines"
-sleep 12
-kill "$RUN" 2>/dev/null
-for p in $(pgrep -f "nullifier[.]exe run"); do kill -9 "$p" 2>/dev/null; done
-echo "preload: done"
+exit "$STATUS"
 exit 0

@@ -5,6 +5,7 @@
 #   ./launcher/nullifier-launch.sh --detect          show hardware + chosen profile
 #   ./launcher/nullifier-launch.sh --list            list profiles
 #   ./launcher/nullifier-launch.sh --game DIR        play
+#   ./launcher/nullifier-launch.sh --game DIR --warm translate shaders offline
 #   ./launcher/nullifier-launch.sh --game DIR --safe play, no send-ahead
 #
 # Anything you export overrides the profile (VICTORY_*, VKD3D_*).
@@ -30,6 +31,7 @@ MIN_VKD3D=5742
 while [ $# -gt 0 ]; do
   case "$1" in
     --detect) MODE="detect"; shift ;;
+    --warm) MODE="warm"; shift ;;
     --list) MODE="list"; shift ;;
     --game) GAME="${2:-}"; shift 2 ;;
     --bin) BIN="${2:-}"; shift 2 ;;
@@ -296,4 +298,7 @@ WIN_GAME="Z:${GAME//\//\\}"
 WIN_BIN="Z:${BIN//\//\\}"
 CONSOLE_ARGS=()
 [ -n "$CONSOLE" ] && CONSOLE_ARGS=(--console "$CONSOLE")
+if [ "$MODE" = warm ]; then
+  exec "$PROTON/files/bin/wine" "$WIN_BIN" warm "$WIN_GAME" "${PASSTHRU[@]}"
+fi
 exec "$PROTON/files/bin/wine" "$WIN_BIN" run "$WIN_GAME\\$TITLE_EXE" --execute "${CONSOLE_ARGS[@]}" "${PASSTHRU[@]}"

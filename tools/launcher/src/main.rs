@@ -39,7 +39,6 @@ fn apply_theme(ctx: &egui::Context) {
     let raised = Color32::from_rgb(41, 46, 57);
     let border = Color32::from_rgb(52, 58, 71);
     let text = Color32::from_rgb(230, 233, 240);
-    let muted = Color32::from_rgb(150, 157, 171);
 
     let mut style = (*ctx.style()).clone();
     style.spacing.item_spacing = egui::vec2(10.0, 10.0);
@@ -60,8 +59,11 @@ fn apply_theme(ctx: &egui::Context) {
     v.window_fill = surface;
     v.faint_bg_color = raised;
     v.extreme_bg_color = Color32::from_rgb(19, 21, 26);
-    v.override_text_color = Some(text);
-    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, muted);
+    v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0_f32, text);
+    v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0_f32, text);
+    v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0_f32, text);
+    v.widgets.active.fg_stroke = egui::Stroke::new(1.0_f32, egui::Color32::WHITE);
+    v.widgets.open.fg_stroke = egui::Stroke::new(1.0_f32, text);
     v.hyperlink_color = ACCENT;
     v.selection.bg_fill = Color32::from_rgb(54, 83, 143);
     v.selection.stroke = Stroke::new(1.0_f32, Color32::from_rgb(132, 164, 235));
@@ -230,6 +232,9 @@ struct Settings {
     /// `Esc=Menu,Enter=A,...` for the keyboard stand-in pad. Empty = defaults.
     #[serde(default)]
     keyboard: String,
+    /// `VICTORY_INPUT`: "auto", "controller" or "keyboard".
+    #[serde(default = "default_input_mode")]
+    input_mode: String,
     #[serde(default)]
     mouse_look: bool,
     #[serde(default = "default_mouse_sensitivity")]
@@ -295,6 +300,7 @@ impl Default for Settings {
             planned: Planned::default(),
             show_advanced: false,
             keyboard: String::new(),
+            input_mode: default_input_mode(),
             mouse_look: false,
             mouse_sensitivity: 0.02,
             mouse_invert: false,
@@ -386,38 +392,23 @@ struct CommunityEntry {
     remote: bool,
 }
 
+/// One fixed-width table cell, left-aligned, the same call in the header and rows.
+fn table_cell(ui: &mut egui::Ui, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, 20.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        add,
+    );
+}
+
+fn table_sep(ui: &mut egui::Ui) {
+    ui.add(egui::Separator::default().vertical().spacing(8.0));
+}
+
 fn small_label(text: &str) -> egui::RichText {
     egui::RichText::new(text)
         .small()
         .color(egui::Color32::from_rgb(140, 146, 158))
-}
-
-fn field_row(
-    ui: &mut egui::Ui,
-    label: &str,
-    value: &mut String,
-    hint: &str,
-    width: f32,
-) -> bool {
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.allocate_ui_with_layout(
-            egui::vec2(64.0, 28.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.label(small_label(label));
-            },
-        );
-        changed = ui
-            .add_sized(
-                [width, 28.0],
-                egui::TextEdit::singleline(value)
-                    .hint_text(hint)
-                    .vertical_align(egui::Align::Center),
-            )
-            .changed();
-    });
-    changed
 }
 
 fn readable_value(key: &str, value: &str) -> String {
@@ -462,6 +453,9 @@ fn settings_summary(settings: &Settings, hardware: &Hardware) -> String {
     ));
     if settings.render_scale > 0.0 {
         parts.push(format!("render_scale={:.2}", settings.render_scale));
+    }
+    if settings.input_mode != "auto" {
+        parts.push(format!("input={}", settings.input_mode));
     }
     if settings.mouse_look {
         parts.push("mouse_look=1".into());
@@ -708,6 +702,10 @@ fn game_label(raw: &str) -> String {
         }
     }
     "unknown".into()
+}
+
+fn default_input_mode() -> String {
+    "auto".into()
 }
 
 fn default_mouse_sensitivity() -> f32 {
@@ -1186,6 +1184,35 @@ fn keys_to_text(keys: &[String]) -> String {
         .join(",")
 }
 
+/// The key's name as the keyboard bindings spell it.
+fn key_name(key: egui::Key) -> String {
+    let name = format!("{key:?}");
+    match name.as_str() {
+        "ArrowUp" => "Up".into(),
+        "ArrowDown" => "Down".into(),
+        "ArrowLeft" => "Left".into(),
+        "ArrowRight" => "Right".into(),
+        "Escape" => "Esc".into(),
+        "Backspace" => "Backspace".into(),
+        "Enter" => "Enter".into(),
+        "Space" => "Space".into(),
+        "Tab" => "Tab".into(),
+        other => other.to_string(),
+    }
+}
+
+fn same_key(bound: &str, key: &str) -> bool {
+    let bound = bound.trim().to_ascii_lowercase();
+    let key = key.trim().to_ascii_lowercase();
+    let alias = |name: &str| match name {
+        "escape" => "esc".to_string(),
+        "return" => "enter".to_string(),
+        "back" => "backspace".to_string(),
+        other => other.to_string(),
+    };
+    alias(&bound) == alias(&key)
+}
+
 fn key_name_ok(name: &str) -> bool {
     let name = name.trim().to_ascii_lowercase();
     if matches!(
@@ -1337,6 +1364,9 @@ fn launch_command(root: &Path, settings: &Settings, profile_file: &Path) -> Comm
     if settings.render_scale > 0.0 {
         cmd.env("VICTORY_RENDER_SCALE", format!("{:.2}", settings.render_scale));
     }
+    if settings.input_mode != "auto" {
+        cmd.env("VICTORY_INPUT", settings.input_mode.trim());
+    }
     if settings.mouse_look {
         cmd.env("VICTORY_MOUSE_LOOK", "1");
         cmd.env(
@@ -1448,6 +1478,10 @@ struct App {
     community_rx: Option<std::sync::mpsc::Receiver<Option<Vec<CommunityEntry>>>>,
     community_fetching: bool,
     community_checked: bool,
+    /// The last key seen by the input test.
+    test_key: Option<String>,
+    /// Mouse movement while the pointer is over the window.
+    test_mouse: egui::Vec2,
     borrowed_from: Option<String>,
     borrowed_sets: Option<BTreeMap<String, String>>,
     borrowed_profile: Option<String>,
@@ -1679,6 +1713,8 @@ impl App {
             community_rx: None,
             community_fetching: false,
             community_checked: false,
+            test_key: None,
+            test_mouse: egui::Vec2::ZERO,
             borrowed_from: None,
             borrowed_sets: None,
             borrowed_profile: None,
@@ -2349,10 +2385,16 @@ impl App {
                         }
                     }
                     ui.allocate_ui_with_layout(
-                        egui::vec2(34.0, 40.0),
+                        egui::vec2(52.0, 40.0),
                         egui::Layout::centered_and_justified(egui::Direction::TopDown),
                         |ui| {
-                            ui.menu_button(egui::RichText::new("…").size(20.0), |ui| {
+                            egui::menu::menu_custom_button(
+                                ui,
+                                egui::Button::new(
+                                    egui::RichText::new("•  •  •").size(12.0),
+                                )
+                                .min_size(egui::vec2(48.0, 32.0)),
+                                |ui| {
                                 if ui.button("Change folder…").clicked() {
                                     self.open_game_picker();
                                     ui.close_menu();
@@ -2367,7 +2409,8 @@ impl App {
                                     open_path(dir);
                                     ui.close_menu();
                                 }
-                            });
+                                },
+                            );
                         },
                     );
                 });
@@ -2640,6 +2683,24 @@ impl App {
                     ui.add_space(10.0);
                     ui.label(egui::RichText::new(format!("{draws} draws a frame")).small().color(egui::Color32::GRAY));
                 }
+                ui.add_space(10.0);
+                if run.removals == 0 {
+                    ui.label(
+                        egui::RichText::new("no crashes")
+                            .small()
+                            .color(egui::Color32::from_rgb(87, 199, 133)),
+                    );
+                } else {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} crash{}",
+                            run.removals,
+                            if run.removals == 1 { "" } else { "es" }
+                        ))
+                        .small()
+                        .color(egui::Color32::from_rgb(232, 106, 106)),
+                    );
+                }
             });
             egui::Grid::new("last run")
                 .num_columns(2)
@@ -2653,9 +2714,6 @@ impl App {
                     ui.end_row();
                     stat(ui, "Copy back", run.back_ms.map(|v| format!("{v:.1} ms")));
                     stat(ui, "Card check", run.heap_ms.map(|v| format!("{v:.1} ms")));
-                    ui.end_row();
-                    stat(ui, "Crashes", Some(run.removals.to_string()));
-                    stat(ui, "Menu", run.menu_fps.map(|v| format!("{v:.0} fps")));
                     ui.end_row();
                 });
         });
@@ -2841,7 +2899,7 @@ impl App {
         page_header(
             ui,
             "Controls",
-            "Xbox and DualSense pads work through the system's own controller support. While no pad is connected, the keyboard stands in for one.",
+            "A connected Xbox or DualSense pad is used automatically; the keyboard stands in when there is none.",
         );
         if !self.controllers_checked {
             self.controllers = scan_controllers();
@@ -2849,6 +2907,209 @@ impl App {
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             ui.spacing_mut().interact_size.y = 28.0;
+            card(ui, |ui| {
+                ui.strong("Input mode");
+                ui.label(
+                    egui::RichText::new(
+                        "Auto is right for almost everyone. Pick a mode only if a pad and the keyboard are both connected and you want one of them ignored.",
+                    )
+                    .small()
+                    .color(egui::Color32::GRAY),
+                );
+                ui.add_space(4.0);
+                let modes = [
+                    (
+                        "auto",
+                        "Auto",
+                        "Use a controller when one is connected, otherwise the keyboard.",
+                    ),
+                    (
+                        "controller",
+                        "Controller only",
+                        "Ignore the keyboard and mouse look; a pad must be connected.",
+                    ),
+                    (
+                        "keyboard",
+                        "Mouse & keyboard",
+                        "Ignore any pad and always use the keyboard bindings below.",
+                    ),
+                ];
+                let mut chosen = self.settings.input_mode.clone();
+                let gap = 10.0;
+                let width = ((ui.available_width() - gap * 2.0) / 3.0).max(80.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for (value, title, hint) in modes {
+                        let selected = self.settings.input_mode == value;
+                        let response = ui.add_sized(
+                            [width, 32.0],
+                            egui::Button::new(title).selected(selected),
+                        );
+                        if response.clicked() {
+                            chosen = value.to_string();
+                        }
+                        response.on_hover_text(hint);
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(
+                        modes
+                            .iter()
+                            .find(|(value, _, _)| *value == chosen.as_str())
+                            .map(|(_, _, hint)| *hint)
+                            .unwrap_or(""),
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(120, 126, 138)),
+                );
+                if chosen != self.settings.input_mode {
+                    self.settings.input_mode = chosen;
+                    self.settings.save();
+                    self.status = format!("input mode: {}", self.settings.input_mode);
+                }
+            });
+
+            ui.add_space(4.0);
+            card(ui, |ui| {
+                ui.strong("Test input");
+                ui.label(
+                    egui::RichText::new(
+                        "Try your bindings here before starting the game. Pad buttons are read by the engine, so they are tested in-game.",
+                    )
+                    .small()
+                    .color(egui::Color32::GRAY),
+                );
+                ui.add_space(4.0);
+                let mode = self.settings.input_mode.as_str();
+                let keys_used = mode != "controller";
+                let pad_used = mode != "keyboard";
+
+                let mut seen_key = self.test_key.clone();
+                if keys_used {
+                    for event in ui.input(|i| i.events.clone()) {
+                        if let egui::Event::Key {
+                            key,
+                            pressed: true,
+                            repeat: false,
+                            ..
+                        } = event
+                        {
+                            seen_key = Some(key_name(key));
+                        }
+                    }
+                    self.test_key = seen_key.clone();
+                }
+                let delta = ui.input(|i| i.pointer.delta());
+                if delta != egui::Vec2::ZERO {
+                    self.test_mouse = delta;
+                }
+
+                egui::Grid::new("input test")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label(small_label("Pad"));
+                        if self.controllers.is_empty() {
+                            ui.label(
+                                egui::RichText::new("none connected").color(
+                                    egui::Color32::from_rgb(232, 179, 74),
+                                ),
+                            );
+                        } else if pad_used {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} — in use",
+                                    self.controllers.join(", ")
+                                ))
+                                .color(egui::Color32::from_rgb(87, 199, 133)),
+                            );
+                        } else {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} — ignored by this mode",
+                                    self.controllers.join(", ")
+                                ))
+                                .color(egui::Color32::from_rgb(120, 126, 138)),
+                            );
+                        }
+                        ui.end_row();
+
+                        ui.label(small_label("Keyboard"));
+                        if !keys_used {
+                            ui.label(
+                                egui::RichText::new("ignored by this mode")
+                                    .color(egui::Color32::from_rgb(120, 126, 138)),
+                            );
+                        } else if let Some(key) = &seen_key {
+                            let action = self
+                                .keyboard_keys
+                                .iter()
+                                .position(|bound| same_key(bound, key))
+                                .map(|index| PAD_ACTIONS[index].0);
+                            match action {
+                                Some(action) => {
+                                    ui.label(egui::RichText::new(format!(
+                                        "{key} → pad {action}"
+                                    )));
+                                }
+                                None => {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{key} — not bound to a pad button"
+                                        ))
+                                        .color(egui::Color32::from_rgb(120, 126, 138)),
+                                    );
+                                }
+                            }
+                        } else {
+                            ui.label(
+                                egui::RichText::new("press a key")
+                                    .color(egui::Color32::from_rgb(120, 126, 138)),
+                            );
+                        }
+                        ui.end_row();
+
+                        ui.label(small_label("Mouse"));
+                        if !keys_used || !self.settings.mouse_look {
+                            ui.label(
+                                egui::RichText::new(if !keys_used {
+                                    "ignored by this mode".to_string()
+                                } else {
+                                    "mouse look is off".to_string()
+                                })
+                                .color(egui::Color32::from_rgb(120, 126, 138)),
+                            );
+                        } else if self.test_mouse == egui::Vec2::ZERO {
+                            ui.label(
+                                egui::RichText::new("move the pointer to test")
+                                    .color(egui::Color32::from_rgb(120, 126, 138)),
+                            );
+                        } else {
+                            ui.label(format!(
+                                "{:+.0} × {:+.0} px → right stick {:.2}, {:.2}",
+                                self.test_mouse.x,
+                                self.test_mouse.y,
+                                (self.test_mouse.x * self.settings.mouse_sensitivity)
+                                    .clamp(-1.0, 1.0),
+                                (self.test_mouse.y * self.settings.mouse_sensitivity
+                                    * if self.settings.mouse_invert { -1.0 } else { 1.0 })
+                                    .clamp(-1.0, 1.0),
+                            ));
+                        }
+                        ui.end_row();
+
+                        ui.label(small_label("Sticks"));
+                        ui.label(
+                            egui::RichText::new(
+                                "W A S D (left) · I J K L (right) · Z C (triggers)",
+                            )
+                            .color(egui::Color32::from_rgb(120, 126, 138)),
+                        );
+                        ui.end_row();
+                    });
+            });
+
+            ui.add_space(4.0);
             card(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.strong("Controllers");
@@ -2889,6 +3150,8 @@ impl App {
             });
 
             ui.add_space(4.0);
+            let keys_used = self.settings.input_mode != "controller";
+            ui.add_enabled_ui(keys_used, |ui| {
             card(ui, |ui| {
                 ui.strong("Keyboard pad");
                 ui.add(
@@ -2955,8 +3218,10 @@ impl App {
                     .wrap(),
                 );
             });
+            });
 
             ui.add_space(4.0);
+            ui.add_enabled_ui(keys_used, |ui| {
             card(ui, |ui| {
                 ui.strong("Mouse");
                 let mut changed = false;
@@ -3005,6 +3270,7 @@ impl App {
                     )
                     .wrap(),
                 );
+            });
             });
         });
     }
@@ -3177,27 +3443,48 @@ impl App {
             card(ui, |ui| {
                 ui.strong("Your entry");
                 let mut changed = false;
-                changed |= field_row(
-                    ui,
-                    "Name",
-                    &mut self.settings.community_name,
-                    "a nickname",
-                    360.0,
-                );
-                changed |= field_row(
-                    ui,
-                    "Where",
-                    &mut self.settings.community_area,
-                    "prologue cell, boat mission, city street…",
-                    360.0,
-                );
-                changed |= field_row(
-                    ui,
-                    "Notes",
-                    &mut self.settings.community_notes,
-                    "pop-in, flicker, HUD, crashes…",
-                    360.0,
-                );
+                egui::Grid::new("community entry")
+                    .num_columns(2)
+                    .min_row_height(30.0)
+                    .spacing([10.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label(small_label("Username"));
+                        changed |= ui
+                            .add_sized(
+                                [380.0, 28.0],
+                                egui::TextEdit::singleline(
+                                    &mut self.settings.community_name,
+                                )
+                                .hint_text("a nickname")
+                                .vertical_align(egui::Align::Center),
+                            )
+                            .changed();
+                        ui.end_row();
+                        ui.label(small_label("Where"));
+                        changed |= ui
+                            .add_sized(
+                                [380.0, 28.0],
+                                egui::TextEdit::singleline(
+                                    &mut self.settings.community_area,
+                                )
+                                .hint_text("prologue cell, boat mission…")
+                                .vertical_align(egui::Align::Center),
+                            )
+                            .changed();
+                        ui.end_row();
+                        ui.label(small_label("Notes"));
+                        changed |= ui
+                            .add_sized(
+                                [380.0, 28.0],
+                                egui::TextEdit::singleline(
+                                    &mut self.settings.community_notes,
+                                )
+                                .hint_text("pop-in, flicker, HUD…")
+                                .vertical_align(egui::Align::Center),
+                            )
+                            .changed();
+                        ui.end_row();
+                    });
                 if changed {
                     self.settings.save();
                 }
@@ -3245,16 +3532,6 @@ impl App {
                         .wrap(),
                     );
                 }
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(
-                            "The log is filtered; home paths, the game folder, emails and IP addresses are replaced.",
-                        )
-                        .small()
-                        .color(egui::Color32::from_rgb(120, 126, 138)),
-                    )
-                    .wrap(),
-                );
             });
 
             ui.add_space(4.0);
@@ -3273,13 +3550,6 @@ impl App {
                             ui.add_enabled(false, egui::Button::new("Checking board…").small());
                         } else if ui.add(secondary("Refresh board", 120.0, 28.0)).clicked() {
                             self.start_community_fetch();
-                        }
-                        if ui.add(secondary("Open folder", 105.0, 28.0)).clicked() {
-                            if let Some(dir) =
-                                community_path().and_then(|p| p.parent().map(Path::to_path_buf))
-                            {
-                                open_path(&dir);
-                            }
                         }
                     });
                 });
@@ -3310,7 +3580,7 @@ impl App {
                     ui.add_sized(
                         [search_width, 28.0],
                         egui::TextEdit::singleline(&mut self.community_filter)
-                            .hint_text("Search name, area, notes, settings")
+                            .hint_text("Search")
                             .vertical_align(egui::Align::Center),
                     );
                     let filters_label = if active_filters == 0 {
@@ -3478,18 +3748,19 @@ impl App {
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         ui.add_space(10.0);
-                        ui.add_sized(
-                            [140.0, 16.0],
-                            egui::Label::new(small_label("Name")),
-                        );
-                        ui.add(egui::Separator::default().vertical().spacing(8.0));
-                        ui.add_sized(
-                            [56.0, 16.0],
-                            egui::Label::new(small_label("Version")),
-                        );
-                        ui.add(egui::Separator::default().vertical().spacing(8.0));
-                        ui.add_sized([64.0, 16.0], egui::Label::new(small_label("FPS")));
-                        ui.add(egui::Separator::default().vertical().spacing(8.0));
+                        table_cell(ui, 140.0, |ui| {
+                            ui.label(small_label("Username"));
+                        });
+                        table_sep(ui);
+                        table_cell(ui, 56.0, |ui| {
+                            ui.label(small_label("Version"));
+                        });
+                        table_sep(ui);
+                        table_cell(ui, 64.0, |ui| {
+                            ui.label(small_label("FPS"));
+                        });
+                        table_sep(ui);
+                        ui.add_space(6.0);
                         ui.label(small_label("Where"));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             ui.add_space(50.0);
@@ -3511,35 +3782,46 @@ impl App {
                                 .inner_margin(egui::Margin::symmetric(10, 8))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
-                                        ui.add_sized(
-                                            [140.0, 20.0],
-                                            egui::Label::new(
-                                                egui::RichText::new(&entry.name).strong(),
-                                            )
-                                            .truncate(),
-                                        );
-                                        ui.add(egui::Separator::default().vertical().spacing(8.0));
-                                        ui.add_sized(
-                                            [56.0, 20.0],
-                                            egui::Label::new(
-                                                egui::RichText::new(format!("v{}", entry.version))
+                                        table_cell(ui, 140.0, |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(&entry.name).strong(),
+                                                )
+                                                .truncate(),
+                                            );
+                                        });
+                                        table_sep(ui);
+                                        table_cell(ui, 56.0, |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(format!(
+                                                        "v{}",
+                                                        entry.version
+                                                    ))
                                                     .small()
                                                     .color(egui::Color32::GRAY),
-                                            )
-                                            .truncate(),
-                                        );
-                                        ui.add(egui::Separator::default().vertical().spacing(8.0));
-                                        ui.add_sized(
-                                            [64.0, 20.0],
-                                            egui::Label::new(
-                                                egui::RichText::new(format!(
-                                                    "{:.1} fps",
-                                                    entry.fps
-                                                ))
-                                                .strong()
-                                                .color(egui::Color32::from_rgb(87, 199, 133)),
-                                            ),
-                                        );
+                                                )
+                                                .truncate(),
+                                            );
+                                        });
+                                        table_sep(ui);
+                                        table_cell(ui, 64.0, |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(format!(
+                                                        "{:.1} fps",
+                                                        entry.fps
+                                                    ))
+                                                    .strong()
+                                                    .color(egui::Color32::from_rgb(
+                                                        87, 199, 133,
+                                                    )),
+                                                )
+                                                .truncate(),
+                                            );
+                                        });
+                                        table_sep(ui);
+                                        ui.add_space(6.0);
                                         let where_at = if entry.area.is_empty() {
                                             entry.game.clone()
                                         } else {

@@ -186,6 +186,28 @@ trait Source: Send {
     fn rumble(&mut self, slot: usize, low: u16, high: u16);
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InputMode {
+    Auto,
+    Keyboard,
+    Controller,
+}
+
+/// `VICTORY_INPUT=auto|controller|keyboard` (`VICTORY_INPUT_MODE` also read).
+fn input_mode() -> InputMode {
+    static MODE: std::sync::OnceLock<InputMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| {
+        let value = std::env::var("VICTORY_INPUT")
+            .or_else(|_| std::env::var("VICTORY_INPUT_MODE"))
+            .unwrap_or_default();
+        match value.trim().to_ascii_lowercase().as_str() {
+            "controller" | "pad" => InputMode::Controller,
+            "keyboard" | "mouse" | "keyboard_mouse" => InputMode::Keyboard,
+            _ => InputMode::Auto,
+        }
+    })
+}
+
 /// Mouse look: right stick from cursor movement, opt-in (see the host module).
 #[cfg(windows)]
 fn mouse_stick() -> (f32, f32) {
@@ -541,7 +563,8 @@ impl State {
         for (slot, pad) in pads.into_iter().enumerate() {
             self.update(devices, slot, pad.map(Value::Pad), now, &mut events);
         }
-        let fallback = (!any_pad).then(|| Value::Pad(fallback(&keys)));
+        let fallback = (!any_pad && input_mode() != InputMode::Controller)
+            .then(|| Value::Pad(fallback(&keys)));
         self.update(devices, FALLBACK, fallback, now, &mut events);
         self.update(devices, KEYBOARD, Some(Value::Keys(keys)), now, &mut events);
         events
@@ -1222,6 +1245,9 @@ mod host {
 
     impl Source for Host {
         fn pad(&mut self, slot: usize) -> Option<PadState> {
+            if super::input_mode() == super::InputMode::Keyboard {
+                return None;
+            }
             if self.empty_until[slot].is_some_and(|until| Instant::now() < until) {
                 return None;
             }
@@ -1353,6 +1379,9 @@ mod host {
         let Some((sens, invert)) = *MOUSE_LOOK else {
             return (0.0, 0.0);
         };
+        if super::input_mode() == super::InputMode::Controller {
+            return (0.0, 0.0);
+        }
         if !focused() {
             return (0.0, 0.0);
         }

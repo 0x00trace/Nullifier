@@ -54,14 +54,21 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   **Advanced settings** at the bottom reveals Rendering, Advanced and Tools and
   is remembered. Anything that needs the technical tabs (Settings…, Customise…)
   reveals them itself.
-* **Controls** — pads the system reports (Xbox, DualSense, DualShock) with a
-  **Check again** button, and the keyboard bindings used while no pad is
-  connected. Apply writes `VICTORY_KEYBOARD` for the next run; Accept is a
-  normal key name (`Enter`, `Space`, `F1`, or one letter). Sticks and triggers
-  stay W/A/S/D, I/J/K/L, Z/C. **Mouse look** is opt-in and experimental: while
-  the game has focus and no pad is connected, the cursor is kept in the window
-  and its movement turns the right stick; sensitivity and inversion are on the
-  same page. Menu navigation with the mouse is not included.
+* **Controls** — an **Input mode**: **Auto** (a connected pad wins, the
+  keyboard stands in when there is none), **Controller only** (the keyboard and
+  mouse look are ignored) or **Mouse & keyboard** (a pad is ignored). Auto is
+  the default and is right for almost everyone. The page lists the pads the
+  system reports (Xbox, DualSense, DualShock) with **Check again**, and the
+  keyboard bindings used while no pad is connected. Apply writes
+  `VICTORY_KEYBOARD` for the next run; Accept is a normal key name (`Enter`,
+  `Space`, `F1`, or one letter). Sticks and triggers stay W/A/S/D, I/J/K/L, Z/C.
+  **Test input** shows the last key you pressed and which pad button it fires,
+  the live mouse movement and the right-stick values it produces, so bindings
+  can be checked before starting the game. **Mouse look** is opt-in and
+  experimental: while the game has focus and no pad is connected, the cursor is
+  kept in the window and its movement turns the right stick; sensitivity and
+  inversion are on the same page. Menu navigation with the mouse is not
+  included. The mode reaches the engine as `VICTORY_INPUT=auto|controller|keyboard`.
 * **Community** — each run records the **translation layer** version (the
   title window's `v0.004` build string) and the launcher version separately;
   a nickname, **where** in the game the run was and **notes**
@@ -269,11 +276,12 @@ title loads — about 2,700 on the current cache, and the world spends 0.0 ms a
 frame waiting for a pipeline. Nothing has to be preloaded before a normal run.
 
 For a cold cache (first install, or after a shader change) **Play → Shader
-cache → Preload** starts the title, waits until the world draws, lets the
-first world pipelines compile for twelve seconds, and stops. It takes about two
-minutes and writes the same library and list a normal run would; the first real
-session then starts warm. It is optional: without it the first run compiles the
-same pipelines during its own loading.
+cache → Preload** translates the title's shaders from its archives and builds
+their compute pipelines **without starting the game** (`warm`), then stops. It
+takes about a minute and writes the same library and list a normal run would;
+the first real session then starts warm. It is optional: without it the first
+run compiles the same pipelines during its own loading. The run itself never
+waits on this.
 
 ## Safety rules the launcher enforces
 
