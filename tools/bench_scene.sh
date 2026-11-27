@@ -34,8 +34,22 @@ export VICTORY_CAPTURE_FRAMES="${VICTORY_CAPTURE_FRAMES:-1024,1536}"
 echo "bench_scene: $LABEL"
 echo "  window ${WINDOW}s (+${WARMUP}s warm-up), log $LOG"
 
-"$HERE/launcher/nullifier-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" >"$LOG" 2>&1 &
+# Give this benchmark its own process group so cleanup also reaches its children.
+RUN=""
+stop_run() {
+  if [ -n "$RUN" ]; then
+    kill -KILL -- "-$RUN" 2>/dev/null || true
+    wait "$RUN" 2>/dev/null || true
+    RUN=""
+  fi
+}
+trap stop_run EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+set -m
+"$HERE/launcher/nullifier-launch.sh" --game "$GAME" --bin "$BIN" -- "$@" </dev/null >"$LOG" 2>&1 &
 RUN=$!
+set +m
 
 # Wait for the world: the first frame line below 10 fps marks entry.
 ENTRY=""
@@ -54,7 +68,8 @@ for _ in $(seq 1 "$TOTAL"); do
 done
 
 if [ -z "$ENTRY" ]; then
-  echo "  never reached the world (see $LOG)"; kill $RUN 2>/dev/null; exit 1
+  echo "  never reached the world (see $LOG)"
+  exit 1
 fi
 echo "  world reached; discarding ${WARMUP}s"
 sleep "$WARMUP"
@@ -62,7 +77,7 @@ START=$(date +%s)
 sleep "$WINDOW"
 END=$(date +%s)
 kill $RUN 2>/dev/null
-for p in $(pgrep -f "nullifier[.]exe run"); do kill -9 "$p" 2>/dev/null; done
+stop_run
 
 CLEAN=$(sed 's/\x1b\[[0-9;]*m//g' "$LOG")
 STATS=$(echo "$CLEAN" | grep -oE '^[^ ]* +INFO victory_gpu::host: [0-9.]+ fps' \
