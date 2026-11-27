@@ -812,6 +812,46 @@ The frame rate is the same within the runs' spread: recording is not what the
 frame waits for on this machine (2.10). The change frees about a third of a
 processor.
 
+**Later: reverted (`dede94c`), because of the picture.** With this change the
+man's top is drawn grey with dark blocks from the close shot with raised
+hands to the end of the run, in about one run in eight; it is black
+otherwise. `main` @ `25f6ae1` and the same with this change reverted, run in
+turn:
+
+| | runs with the grey top, with the change | with it reverted |
+|---|---|---|
+| 8 rounds of 110 s runs at 2560x1440 output (2026-11-26, from 23:50) | 0 of 8 | 0 of 8 |
+| 30 rounds of 110 s runs at 2560x1440 output (2026-11-27, from 00:50) | 4 of 30 | 0 of 30 |
+| 3 rounds of 200 s runs at 3840x2160 (the rows in `docs/FORK.md`) | 1 of 3 | 0 of 3 |
+| sum | 5 of 41 | 0 of 41 |
+
+A 110 s run ends after the shot. The runs were found with a measure of the
+area of his top over every capture of the shot (the share of it that is
+neutral grey of middle brightness: 4.5 to 8.6 % in the five runs, 2.1 % or
+less in the others), and eight captures of the shot were looked at for each
+run of the two later sets. If the change made no difference, five such runs
+would all be on its side one time in 36. Over every run of 2026-11-25 to
+2026-11-27 whose captures were kept and in which the shot was captured, it
+is 18 of the 179 runs of builds with the change and none of the 127 runs of
+builds without it.
+
+The frame rate is the same with and without the change, as it was when the
+change was made (the three rounds of 200 s runs):
+
+| | median fps | n | frame at 3,000 draws | time in list calls, all recording threads | the process, user time a frame |
+|---|---|---|---|---|---|
+| with the change | 5.55 / 5.50 / 5.50 | 28 / 28 / 27 | 167.4 / 166.7 / 169.1 ms | 108.9 / 109.5 / 108.4 ms | 339 / 340 / 355 ms |
+| reverted | 5.50 / 5.50 / 5.65 | 28 / 28 / 28 | 166.5 / 166.0 / 166.7 ms | 182.4 / 181.2 / 183.7 ms | 379 / 381 / 386 ms |
+
+So the revert costs about a quarter of a processor and no frame rate.
+
+**Not known:** what in the change causes the defect. It looks like a texture
+of his top that keeps an early state. The change has six parts (the list
+above), and none was tried alone. To apply a part again, run it in turn with
+`main` as above and look at the shot in every run: the defect occurs in
+bursts (three of the four runs of the long set within five rounds), and the
+first set of eight rounds had none on either side.
+
 ## 2.14 Tracking the title's writes: other views stay read-only, block sets as bits, refused askings not repeated (2026-11-26)
 
 After 2.12 the thread that submits still spent about 19 ms a frame in the

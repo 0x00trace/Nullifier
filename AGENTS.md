@@ -246,6 +246,16 @@ or a software adapter. Check `host mesh shader support mesh=true`.
 **Out of VRAM.** A local LLM on `-ngl 99` will take 11+ GB and push the title
 into GTT, which costs ~10× frame time. Stop it before benchmarking.
 
+**The man's top grey with dark blocks for a whole scene (it is black
+otherwise).** Seen only on builds that have the recording threads' locks of
+2.13, in about one run in eight and in bursts: 5 of 41 runs with them
+against none of 41 with them reverted, in turn. 2.13 is reverted; what in it
+causes the defect is not found. → Before a change to how descriptor slots, a
+texture's host side or retired resources are held is merged, run it in turn
+with `main` about 30 times and look at the close shot with raised hands in
+every run (`docs/FINDINGS.md` 2.13). One clean run, or eight, does not show
+that a build is free of it.
+
 **World under 1.5 fps on Linux, `wineserver` at a whole core.** Wine's server
 walks a list of every view of the process at each map and unmap, and the title
 keeps tens of thousands. → `./tools/build-wineserver.sh` (Wine commit
@@ -344,7 +354,8 @@ At 1.1–1.3 fps (frame 750–950 ms) on an RX 9070 XT / Mesa 26.3.1:
 * **Less work on the thread that submits shortens the frame by less than
   the work saved (2.11 to 2.15).** The accounting's stopwatch (2.11), the
   copy-back through a view of the layer's own (`VICTORY_BACK_OWN_VIEW=1`,
-  2.12), the recording threads' locks (2.13) and the tracking of title
+  2.12), the recording threads' locks (2.13; reverted since, see section 6)
+  and the tracking of title
   writes (`VICTORY_ALIAS_LAZY=1`, 2.14) take 29 ms a frame off that thread in
   submissions, and the frame at 3,000 draws is 19 ms shorter (5.60 / 5.70 / 5.55
   fps against 5.05 / 5.20 / 5.25 in 200 s runs): the thread then waits longer for the
