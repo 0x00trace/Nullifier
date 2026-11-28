@@ -17,6 +17,7 @@ pub(crate) fn readable_value(key: &str, value: &str) -> String {
             | "VICTORY_INDIRECT_RUNS"
             | "VICTORY_INDIRECT_WINDOW"
             | "VICTORY_RELAY_QUEUE"
+            | "VICTORY_SYNC_GROUPED"
             | "VICTORY_BACK_OWN_VIEW"
             | "VICTORY_ALIAS_LAZY"
     ) {
@@ -173,6 +174,16 @@ pub(crate) fn describe(key: &str) -> Option<Desc> {
             "World memory kept on the card",
             "The game's working memory mirrored on the card. Too much competes with textures.",
             "512 MB measured best on 16 GB; 256 MB on an 8 GB card.",
+        ),
+        "VICTORY_CARD_BUFFERS_MIN_KB" => d(
+            "Smallest buffer kept on the card",
+            "The game's buffers of this size or more (in KiB) have their copy in the card's memory. 64 puts every buffer there, which keeps small counters that shaders add to off the link between the PC and the card.",
+            "64 on a 16 GB NVIDIA card on Linux (linux-nvidia-16gb), with World memory kept on the card at 2048 MB. Leave it unset elsewhere.",
+        ),
+        "VICTORY_SYNC_GROUPED" => d(
+            "Grouped updates of the card's copies",
+            "The changes sent to the card's copies before each batch of work are recorded together and then checked together, so the card waits once and not once for each copy.",
+            "On with a 16 GB NVIDIA card on Linux (linux-nvidia-16gb). Not measured elsewhere.",
         ),
         "VICTORY_PIPELINE_WAIT_ONCE" => d(
             "Wait once for a pipeline",
@@ -358,4 +369,30 @@ pub(crate) fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::describe;
+    use std::path::Path;
+
+    /// Every `VICTORY_` switch that a profile of `launcher/profiles.json`
+    /// sets has a description. One without is reported on the Play and
+    /// Rendering pages as "not a switch this build knows; it will be
+    /// ignored", which is not true of a switch that a profile sets.
+    #[test]
+    fn every_switch_a_profile_sets_is_described() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let profiles = crate::profiles::profiles(&root);
+        assert!(!profiles.is_empty(), "launcher/profiles.json was not read");
+        let mut missing: Vec<&str> = profiles
+            .iter()
+            .flat_map(|p| p.sets.keys())
+            .map(String::as_str)
+            .filter(|key| key.starts_with("VICTORY_") && describe(key).is_none())
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        assert!(missing.is_empty(), "no description for {missing:?}");
+    }
 }
