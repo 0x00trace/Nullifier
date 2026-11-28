@@ -424,6 +424,22 @@ pub(crate) fn host_pipeline<'a>(this: This) -> Option<&'a host::HostPipeline> {
     make::ready(&pipeline(this).host)
 }
 
+/// The host pipeline for a dispatch: the heads' blend-shape map is
+/// dispatched once, so its first dispatch waits for it rather than being
+/// dropped while it is made.
+#[cfg(windows)]
+pub(crate) fn host_dispatch_pipeline<'a>(this: This) -> Option<&'a host::HostPipeline> {
+    if this.is_null() {
+        return None;
+    }
+    let p = &pipeline(this).host;
+    if p.head_map {
+        make::head_ready(p)
+    } else {
+        make::ready(p)
+    }
+}
+
 /// Host pipelines queued and not made yet.
 #[cfg(windows)]
 pub(crate) fn making() -> u64 {
