@@ -1637,6 +1637,40 @@ Without captures (one 300 s profile run each): 17.00 fps against 15.90 (and 14.7
 
 **Not measured:** AMD and Windows, and `VICTORY_LATE_WAIT` under 2 (the switch has nothing to do where no submission is sent ahead). Data: `~/.cache/victory-captures/103-proc-stack`, `104-merge-runs` and `106-prof2-fill` on the machine of these runs.
 
+## 2.27 The culling programs' view of the whole heap, bounded from the title's records (2026-11-27)
+
+2.26 names what is left of the waits of the thread that submits: seven culling programs bind one unordered-access view of the whole 174 MiB heap, in 16 to 18 lists a frame (about 35 dispatches). A view says nothing of where its shader stores, so each of those submissions declared the whole heap as written by shaders. With `VICTORY_FILL_AHEAD=1` the fills no longer wait for that, but whatever the title writes into the heap before such a submission has been copied back is still "title memory changed under shader writes": about 5 waits a frame with 16 ms waited.
+
+**Where the stores went.** By the card's compares over a 200 s run, the pieces that differ after these submissions lie in three stretches of the heap, 128 of its 2,784 pieces (8 MiB), and no fill of upload memory read one of them (counted with a diagnostic that is not in the tree).
+
+**Where the programs can store.** Read from the seven programs: every store through the view is of one of three kinds, and all three take their addresses from two small records in the heap that the title's processor writes before it submits the dispatch. With `H[x]` the dword at byte `x` of the heap: a table of one dword for each work group gives `B`, the place of the group's batch record; `M = H[B + 8]` is the batch's model record and `cnt = H[B + 64]` its instances; records `r` from `r0 = H[M + 104]` on are touched, at most `3 * H[M + 128]` and the largest of the five ends `H[M + 108..128]` past it, or `H[M + 132] + 1` past it. The stores are an atomic add at `H[B + 36] + 20 * r`, an atomic add at `H[B + 88] + 16 * r`, and the instances that pass, in up to five lists at `H[B + 12 + 4 * l]` of at most `16 * cnt` bytes each. No constant-buffer field and no value of an instance enters an address.
+
+**The check** (`VICTORY_CULL_RANGES=check`, diagnostics builds). The whole view is declared as before, so every piece the shaders changed is fetched from the card, and each changed byte in the heap is looked up in the bounds and in the ranges that other programs declared exactly. In a 200 s run (the opening and the first scene in the world, 188 frame lines): about 35 bounds a frame, made of 1,180 ranges and 2.2 MB, none that could not be made, and **0 bytes outside**. A build made for this test only, whose bound leaves the lists out, reported bytes outside in 70 of 103 lines (up to 14,000 a frame), so the check does find a bound that is too small.
+
+**The change** (`VICTORY_CULL_RANGES=1`, off by default, set in `linux-nvidia-16gb`). A dispatch of one of the seven programs, known by the hash in its pipeline's name, declares the ranges of its bound in place of the whole view. The bound is read from title memory when the list is submitted, after the steps before it have run. The whole view is declared as before if the views are not where the programs have them, if a record cannot be read or lies outside the heap, or if it gives more than 2^20 records or 2^22 instances. This is a special case for these programs: a build of the title with other programs is not narrowed.
+
+Two costs came with several hundred declared ranges in one copy where there was one, and were taken out first:
+
+- A refresh asked the write journal once for each gap between two declared ranges, and the merge of title bytes under shader writes once for each range: 33,000 askings a frame against 3,300 without the bounds. Both ask once now: 2,800 a frame with the bounds, as without them.
+- Each range had a compare pass of its own on the card: 1,260 passes a frame against 435. Ranges less than one 64 KiB piece apart are compared as one span (470 passes). What is fetched and merged stays the declared ranges: refreshes may write the bytes between two of them, and a merge that took those bytes could put older ones over what the title wrote.
+
+**Measured** (200 s runs in turn with captures at `VICTORY_OUTPUT=2560x1440`, medians of world frames by 200 draws or more, n = 31 to 32; both rows with `VICTORY_FILL_AHEAD=1`):
+
+| | round 1 | round 2 | round 3 | frame | preparing | waiting for the card | card busy |
+|---|---|---|---|---|---|---|---|
+| fills that do not wait (2.26) | 13.50 fps | 13.75 fps | 13.40 fps | 74.2 / 72.7 / 74.7 ms | 35.7 / 33.6 / 36.1 ms | 24.5 / 24.1 / 24.4 ms | 63 % |
+| the same with `VICTORY_CULL_RANGES=1` | **13.90 fps** | **14.20 fps** | **14.65 fps** | 72.1 / 70.3 / 68.3 ms | 39.1 / 39.7 / 37.3 ms | 16.8 / 17.4 / 16.0 ms | 62 % |
+
+Three rounds with an earlier build of the change, which still fetched and merged the bytes between ranges compared as one span: 14.00 / 13.70 / 13.20 fps against 14.60 / 14.80 / 14.00. No device was removed in any of the runs and the driver logged no new errors.
+
+**What changed in the frame.** The settles of submissions sent ahead go from 5.5 to 5.8 a frame to 1.9 to 2.0. Of them, "title memory changed under shader writes" goes from 4.5 to 4.8 a frame (16 ms waited) to 0.6 to 0.7 (8 to 9 ms), and the changed runs put on the card under shader writes from about 2,000 a frame to 30 to 38. No fill of upload memory reads declared memory any more (1,800 a frame did), so in this scene the bounds also do what `VICTORY_FILL_AHEAD` is for: one run with the bounds and `VICTORY_FILL_AHEAD=0` gave 14.30 fps against 14.15 with both (an earlier build). The thread waits 7 to 8 ms less for the card and prepares 1 to 6 ms longer, so the frame gains 2 to 6 ms. Without captures (one 300 s profile run each): 17.80 fps against 17.00.
+
+**Where the longer preparing goes.** A profile as in 2.10: the thread that submits runs 42.0 ms a frame against 38.2 in the profile of 2.26, in many places and none of them more than 0.6 ms. The refreshes around declared ranges take 1.2 ms more (`Shadow::update`, `update_free` and `merge_under_writes`: the heap is no longer one declared range that refreshes pass over, and they look at half as many bytes again). Sorting ranges takes 0.5 ms. The list of a copy's declared ranges, which is read from end to end at each declaration and release, takes 0.6 ms. Reading the records takes 0.4 ms, and Wine's own code 0.6 ms more. These are the next things to take out.
+
+**The picture.** Matched by content as in 2.25: best matches between a run with the bounds and a run without differ by a median of 2.0 to 2.4 (of 255), two runs with them by 2.3 to 2.6, two runs without by 1.8 to 2.2. The man's top in the close shot with raised hands is black in all six runs (1.2 to 1.4 % by the measure of 2.19). A check in turn over ten more rounds (110 s runs, the build of the final code): by the median of the ten run medians 13.70 fps without the bounds and 14.65 with them (13.25 to 14.25 against 14.35 to 14.90), the bounds ahead in all ten rounds. The top is black in all 20 runs (0.8 to 1.5 %), no device was removed, no error was logged, and every bound could be made.
+
+**Not measured:** scenes beyond the opening and the first scene in the world (the check ran there), AMD and Windows, and copies that are not in the card's memory (the check reads what is fetched from the card; the bound itself does not depend on it). Data: `~/.cache/victory-captures/108-whole-view`, `109-cull`, `110-cull-bounds`, `111-cull-bounds`, `112-cull-rounds` and `113-prof2-cull` on the machine of these runs.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask

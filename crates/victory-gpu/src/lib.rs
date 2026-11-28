@@ -21,6 +21,8 @@ mod clock;
 pub mod console;
 #[cfg(all(windows, feature = "diagnostics"))]
 mod copystat;
+#[cfg(windows)]
+mod cull;
 pub mod descriptor;
 pub mod device;
 #[cfg(windows)]
