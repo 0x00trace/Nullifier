@@ -2371,12 +2371,16 @@ impl Shadow {
         }
         let base = start / PAGE;
         let copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
-        busy.into_iter().any(|(a, e)| match crate::watch::asked(a, e) {
-            Some((_, written)) => written.into_iter().any(|(page, write)| {
-                page >= base && copied.get(page - base).is_none_or(|&at| at == 0 || write > at)
-            }),
-            None => true,
-        })
+        busy.into_iter()
+            .any(|(a, e)| match crate::watch::asked(a, e) {
+                Some((_, written)) => written.iter().any(|&(page, write)| {
+                    page >= base
+                        && copied
+                            .get(page - base)
+                            .is_none_or(|&at| at == 0 || write > at)
+                }),
+                None => true,
+            })
     }
 
     /// Where [`Shadow::stale_under_writes`] says yes: puts the bytes the
@@ -2430,9 +2434,14 @@ impl Shadow {
             let stale: Vec<usize> = {
                 let copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
                 written
-                    .into_iter()
-                    .filter(|&(page, write)| page >= base && copied.get(page - base).is_none_or(|&at| at == 0 || write > at))
-                    .map(|(page, _)| page)
+                    .iter()
+                    .filter(|&&(page, write)| {
+                        page >= base
+                            && copied
+                                .get(page - base)
+                                .is_none_or(|&at| at == 0 || write > at)
+                    })
+                    .map(|&(page, _)| page)
                     .collect()
             };
             for page in stale {
