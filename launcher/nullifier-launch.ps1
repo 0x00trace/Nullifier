@@ -181,7 +181,8 @@ if (-not $Bin) {
   }
 }
 if (-not (Test-Path -LiteralPath $Bin -PathType Leaf)) {
-  Write-Error ("no nullifier.exe at {0}, {1} or {2}; build it first (cargo build --release -p nullifier)" -f $native, $diagHost, $diag)
+  $tried = if ($native) { "{0}, {1} or {2}" -f $native, $diagHost, $diag } else { $Bin }
+  Write-Error ("no nullifier.exe at {0}; build it first (cargo build --release -p nullifier)" -f $tried)
   exit 2
 }
 

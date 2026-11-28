@@ -150,6 +150,7 @@ pub(crate) struct Readiness {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[cfg(windows)]
     use std::time::{Duration, SystemTime};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -179,6 +180,7 @@ mod tests {
             std::fs::write(&path, b"stub").unwrap();
         }
 
+        #[cfg(windows)]
         fn stamp(&self, relative: &str, at: SystemTime) {
             let path = self.0.join(relative);
             std::fs::OpenOptions::new()
