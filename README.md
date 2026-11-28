@@ -56,7 +56,7 @@ Menus run at 30; the world is ~160–170 ms a frame. The picture is correct.
 
 | Available | In progress | Not available |
 |---|---|---|
-| Boot, menus, cutscene, prologue, world | Frame rate (5–7 fps, scene-dependent) | Ray-traced light (shadows are black) |
+| Boot, menus, cutscene, prologue, world | Frame rate (5–7 fps, scene-dependent) | Ray-traced light (shadows are black; a stand-in for indirect light is opt-in: `VICTORY_AMBIENT=constant:0.5`) |
 | Audio, saves, Xbox pad, keyboard | Display output/render scale (HUD and effects suffer) | FSR upscaling |
 | Mouse look (experimental, opt-in) | Windows polish | Frame generation |
 | Launcher, measured profiles | Game's own graphics settings (mostly ignored) | Series S (renders black here) |
