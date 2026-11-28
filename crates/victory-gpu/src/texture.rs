@@ -934,18 +934,19 @@ pub(crate) fn unstage(resource: This) {
     }
 }
 
-/// Has the next list that uploads a title texture with a staging buffer
-/// copy it whole, changed or not since: what the check at a submission
-/// finds changed is copied by the next list that samples the texture
-/// through a table, and there may be none for one that shaders now pick by
-/// index alone.
+/// Lets the next check look at a title texture with a staging buffer again,
+/// partly mapped or not, without making an unchanged texture upload whole.
+/// The check at submission marks a changed staging `dirty`, and the next
+/// upload copies it then; `uploaded` is left as it is, so a texture whose
+/// contents did not change records no copy (#121: about 25 to 50 unchanged
+/// textures a frame were copied whole). A new staging starts with
+/// `uploaded` false, so its first upload still happens.
 pub(crate) fn upload_again(resource: This) {
     let staging = {
         let map = STAGING.lock().unwrap_or_else(|e| e.into_inner());
         map.as_ref().and_then(|map| map.get(&(resource as usize)).cloned())
     };
     if let Some(staging) = staging {
-        staging.uploaded.store(false, std::sync::atomic::Ordering::Relaxed);
         staging.last.lock().unwrap_or_else(|e| e.into_inner()).partial = None;
     }
 }

@@ -960,12 +960,19 @@ fn read_raw(request: &Request, len: usize) -> Result<(), HRESULT> {
     // SAFETY: the title's destination holds `destination_size` bytes, at
     // least `len`, and nothing else writes it until completion.
     let out = unsafe { std::slice::from_raw_parts_mut(request.destination.cast::<u8>(), len) };
-    victory_gpu::kernel_write(
+    let result = victory_gpu::kernel_write(
         request.destination as usize,
         len,
         || read_into(request, out),
         refused_write,
-    )
+    );
+    if result.is_ok() {
+        // The bytes are there now: textures under them are made due after
+        // the write, not only before it (the texture pass of another thread
+        // could have uploaded what the memory held before).
+        victory_gpu::title_memory_written(request.destination as usize, len);
+    }
+    result
 }
 
 /// Whether a raw read was refused because the kernel could not write its
@@ -999,7 +1006,14 @@ fn into_destination(
         // SAFETY: the title's destination holds `destination_size` bytes, at
         // least `len`, and nothing else writes it until completion.
         let out = unsafe { std::slice::from_raw_parts_mut(request.destination.cast::<u8>(), len) };
-        return fill(out).map(drop);
+        let result = fill(out).map(drop);
+        if result.is_ok() {
+            // A decompressor or a read has written plain title memory: the
+            // placed textures under it are due again now that the bytes are
+            // there (see `watch::title_memory_written`).
+            victory_gpu::title_memory_written(request.destination as usize, len);
+        }
+        return result;
     }
     let offset = (request.page_offset & 0xffff) as usize;
     let pages = &filled(request.destination.cast(), (offset + len).div_ceil(PAGE))[..];

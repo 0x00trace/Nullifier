@@ -251,6 +251,13 @@ pub(crate) fn wrote(at: usize, len: usize) {
     }
     j.asked += 1;
     let now = j.asked;
+    // The asking that stands for the submission moves with this write: a
+    // copy taking the page at the standing asking would otherwise find it
+    // written "later" at every refresh until that asking ends, and copy it
+    // again each time (#132).
+    if j.kept || !j.ahead.is_empty() {
+        j.ahead_asked = now;
+    }
     for page in at / PAGE..at.saturating_add(len).div_ceil(PAGE) {
         j.written.insert(page, now);
     }
@@ -1004,6 +1011,18 @@ fn open_here(g: &mut Guards, start: usize, end: usize) -> bool {
         unsafe { VirtualProtect((block * BLOCK) as *const _, BLOCK, PAGE_READWRITE, &mut old) };
     }
     !blocks.is_empty()
+}
+
+/// The runtime wrote `[at, at + len)` through a path that does not fault
+/// into the guards (a file read or a decompressor writing plain title
+/// memory): the placed textures there are due again, as after a page write.
+/// Call after the write: told before, the texture pass could upload the
+/// bytes from before it and keep them, which is how a texture that was
+/// streamed in came out black.
+pub fn title_memory_written(at: usize, len: usize) {
+    if len != 0 {
+        crate::descriptor::host::remapped(at, len);
+    }
 }
 
 /// Before our own write into title memory `[at, at + len)` through the
