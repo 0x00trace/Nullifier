@@ -19,8 +19,9 @@
 mod capture;
 mod clock;
 pub mod console;
-#[cfg(all(windows, feature = "diagnostics"))]
+#[cfg(windows)]
 mod ambient;
+#[cfg(all(windows, feature = "diagnostics"))]
 mod copystat;
 #[cfg(windows)]
 mod cull;
