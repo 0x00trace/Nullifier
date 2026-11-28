@@ -2644,6 +2644,30 @@ is a plain `i1` phi). The program translates (50,438 B of DXIL); the whole
 pixel stage of the pack now emits (14,247 of 14,247). A 240 s world run is
 stable, 8.3-12 fps.
 
+## 3.36 Indirect light without rays: the fork's stand-in, ported (2026-11-28)
+
+Demiurge (`jramos19-dev/demiurge`, a Windows/fxceless fork) solves the same
+"everything the sun does not hit is black" problem by running the title's own
+ray-traced light only when its structure builder is on, and otherwise placing
+an estimate of the indirect light right after the title's
+`CS_ScreenProbes_TemporalResolve`: the light visible surfaces send out
+(`CS_CacheScreenSpaceRadiance`) averaged in 64x36 cells, gathered at 160x90
+depth-aware points, raised into the resolve's image with a crease shade from
+the scene's depth. The upstream author's constant mode (`VICTORY_AMBIENT=
+constant:<level>`) is the same insertion with a constant light.
+
+The module and its host wiring are ported here (`crates/victory-gpu/src/
+ambient.rs`, `draw.rs`'s dispatch hook, `pipeline::Translated::ambient`). It
+is off unless `VICTORY_AMBIENT` is set. Wine's HLSL compiler cannot build the
+estimate's programs (its `KEEP` uses a typed `float3` image it rejects and its
+`RAISE` page-faults it), so on Linux the constant mode is the one built; the
+estimate is compiled only on a native Windows host. A/B with the same keys and
+captured frames: at `constant:1` frames with 15-28 % of pixels black went to
+0 %, mean luminance 17-24 to 54-58, no pixel above 250 (no clipping); a 120 s
+run at `constant:0.5` is stable at 9.5-10 fps. This is the same known gap as
+3.35's packing and the geometry stage: the pass is opt-in, and the picture is
+an estimate, not traced light.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |

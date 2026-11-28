@@ -148,6 +148,9 @@ pub(crate) struct Translated {
     /// Whether the shader's code can store to buffer memory ([`stores`]);
     /// true when its code is not known.
     pub(crate) stores: bool,
+    /// The program's part in the stand-in for the indirect light
+    /// ([`crate::ambient`]), by its name in the container.
+    pub(crate) ambient: Option<crate::ambient::Role>,
 }
 
 #[cfg(windows)]
@@ -216,7 +219,12 @@ fn translate(container: &[u8]) -> Result<Translated, String> {
         })
         .map(|p| p.used)
         .unwrap_or_default();
-    Ok(Translated { host, used, stores })
+    Ok(Translated {
+        host,
+        used,
+        stores,
+        ambient: crate::ambient::role(container),
+    })
 }
 
 /// The compute pipelines of the console's ray-tracing structure builder
