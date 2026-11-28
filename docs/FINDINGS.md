@@ -2598,6 +2598,32 @@ accumulation is an f32 one now: water transmission may show a little less
 precision in very long paths, which the f32 alternative to dropping the pass
 accepts.
 
+## 3.34 Shadow rays: a buffer descriptor's address at a computed table index (2026-11-28)
+
+The five `shadowmask:CS_TraceShadowRays_*` programs load a buffer descriptor
+with `s_load_dwordx4` from a descriptor table at an index the code computes
+(the s0/s1/s2 offsets read from a constant buffer), then take the descriptor's
+dword 0-1 as the title address of the BVH and walk it. No image or buffer
+instruction uses that load as a view, so the translator refused it with "a
+descriptor read only as data". The console's descriptor tables live in title
+memory; a new user-data word, `USER_TABLE_ADDRESS`, gives the title address of
+the table's first descriptor, and such a load is now lowered as a raw read of
+the title's own descriptor dwords through the memory directory (the same path
+`s_load_dword` from title memory takes), so the address the shader walks is
+the real one rather than a stand-in. Where the host has no copy of the page
+yet, the read is zeros and the program takes its "no node" path (the ray work
+is skipped for that dispatch).
+
+A program that takes a table descriptor's bits has its loops cut at 64
+iterations each (`table_probe`): the traversal's child loop nests inside its
+node-pop loop, so the per-loop compute limit of 4,096 would allow 16 million
+iterations a lane if the structure holds a cycle. The five programs translate
+and two world runs of 180 s and 240 s have no device removal (9-11 fps; 3-4
+fps only in loading dips). Note that the ray-tracing structure builder is
+still off, so the walk normally finds a root pointer of 0 and the ray work is
+skipped for that dispatch; the pass now runs without stopping the translation,
+and its picture is only meaningful once the builder is on.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
