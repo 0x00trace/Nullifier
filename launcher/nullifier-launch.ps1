@@ -13,6 +13,10 @@ param(
   [string]$Game = $env:VICTORY_GAME_DIR,
   [string]$Bin  = $env:VICTORY_BIN,
   [string]$TitleExe = $(if ($env:VICTORY_TITLE_EXE) { $env:VICTORY_TITLE_EXE } else { "game_scarlett_master.exe" }),
+  # Detection stand-in for tools/check-detect.ps1: a JSON file with
+  # "controllers" (Win32_VideoController rows) and "nvidia_smi_mb". Empty, the
+  # default, reads this machine.
+  [string]$GpuJson = "",
   [string]$Profile = "",
   [switch]$Detect,
   [switch]$List,
@@ -44,13 +48,24 @@ function Get-NvidiaVram {
 }
 
 function Get-GpuInfo {
+  param([string]$StubPath)
+
   $vendor = "unknown"
   $name = "unknown"
   $vram = 0
 
+  # A stand-in list (tools/check-detect.ps1) replaces WMI, nvidia-smi and the
+  # registry wholesale, so the answer is the same on a machine with a card as
+  # on one without.
+  $stub = $null
+  if ($StubPath) {
+    if (-not (Test-Path -LiteralPath $StubPath)) { throw "no GPU stand-in at $StubPath" }
+    $stub = Get-Content -LiteralPath $StubPath -Raw | ConvertFrom-Json
+  }
+
   # Prefer a discrete card: a laptop can report Intel first, and its AdapterRAM
   # must not decide the vendor for the matched profile.
-  $all = @(Get-CimInstance Win32_VideoController)
+  if ($stub) { $all = @($stub.controllers) } else { $all = @(Get-CimInstance Win32_VideoController) }
   $ctrl = $all | Where-Object { $_.Name -match "NVIDIA" } | Select-Object -First 1
   if (-not $ctrl) {
     $ctrl = $all | Where-Object { $_.Name -match "AMD|Radeon|ATI" } | Select-Object -First 1
@@ -72,10 +87,18 @@ function Get-GpuInfo {
 
   # The driver's own answer is the only one that is right for every NVIDIA
   # card; AdapterRAM is a uint32 and caps or misreports.
-  if ($vendor -eq "nvidia") { $vram = Get-NvidiaVram }
+  if ($vendor -eq "nvidia") {
+    if ($stub) {
+      # null or absent means "nvidia-smi said nothing"; a stand-in must not
+      # fall through to this machine's driver.
+      if ($null -ne $stub.nvidia_smi_mb) { $vram = [int64]$stub.nvidia_smi_mb }
+    } else {
+      $vram = Get-NvidiaVram
+    }
+  }
 
   # The registry has the real size for other drivers.
-  if ($vram -eq 0) {
+  if (-not $stub -and $vram -eq 0) {
     try {
       $class = "HKLM:\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}"
       Get-ChildItem $class -ErrorAction Stop | ForEach-Object {
@@ -87,7 +110,7 @@ function Get-GpuInfo {
       }
     } catch { }
   }
-  if ($vram -eq 0) {
+  if (-not $stub -and $vram -eq 0) {
     try {
       Get-ChildItem "HKLM:\SYSTEM\CurrentControlSet\Control\Video" -Recurse -ErrorAction SilentlyContinue |
         ForEach-Object {
@@ -117,7 +140,7 @@ function Test-Applies($p, $os, $vendor, $vram) {
   return $true
 }
 
-$gpu = Get-GpuInfo
+$gpu = Get-GpuInfo -StubPath $GpuJson
 
 if ($List) {
   $Matrix.profiles | ForEach-Object {
