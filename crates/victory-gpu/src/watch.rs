@@ -430,6 +430,12 @@ impl<const N: usize> PartialEq<[(usize, u64); N]> for Pages {
     }
 }
 
+/// The askings made so far (tests: how many a refresh makes).
+#[cfg(test)]
+pub(crate) fn askings() -> u64 {
+    JOURNAL.lock().unwrap_or_else(|e| e.into_inner()).asked
+}
+
 /// What [`writes`] would say of `[start, end)` from the journal alone, if
 /// the range lies in one asked ahead ([`ask_ahead`], [`ask_once`]): the
 /// pages written since tracking began and the asking that last found each

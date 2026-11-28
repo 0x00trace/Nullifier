@@ -2470,15 +2470,28 @@ impl Shadow {
         }
         let base = start / PAGE;
         let mut title = vec![0u8; PAGE];
+        // As the refresh itself asks (`update_free`): the journal if the
+        // submission's asking covered the range, else the kernel, else the
+        // guards. The journal alone said nothing for copies of view memory,
+        // which is guarded and not write-watched, and those were all of
+        // run 99's cases: the flights were settled 4-5 times a frame for
+        // "0 pages looked at".
+        //
+        // Once, about everything from the first range to the last, and
+        // each range takes its pages of the answer: a copy can have
+        // hundreds of small ranges, and an asking for each was 12,000
+        // askings a frame.
+        let mut busy = busy;
+        busy.sort_unstable();
+        let last = busy.iter().map(|r| r.1).max().unwrap_or(busy[0].0);
+        let Some((now, written)) = crate::watch::writes(busy[0].0, last, true) else {
+            return true;
+        };
         for (a, e) in busy {
-            // As the refresh itself asks (`update_free`): the journal if
-            // the submission's asking covered the range, else the kernel,
-            // else the guards. The journal alone said nothing for copies
-            // of view memory, which is guarded and not write-watched, and
-            // those were all of run 99's cases: the flights were settled
-            // 4-5 times a frame for "0 pages looked at".
-            let Some((now, written)) = crate::watch::writes(a, e, true) else {
-                return true;
+            let written = {
+                let first = written.partition_point(|&(page, _)| page < a / PAGE);
+                let end = written.partition_point(|&(page, _)| page <= (e - 1) / PAGE);
+                &written[first..end]
             };
             let stale: Vec<usize> = {
                 let copied = self.copied.lock().unwrap_or_else(|e| e.into_inner());
@@ -2586,50 +2599,70 @@ impl Shadow {
             .filter(|&(a, e)| a < to && e > from)
             .collect();
         if !busy.is_empty() {
-            // Around ranges shaders are writing: the gaps, each as below
-            // (in the world most submissions have such ranges; copying the
-            // gaps whole cost ~1 s per frame).
+            // Around ranges shaders are writing: the gaps between them (in
+            // the world most submissions have such ranges; copying the gaps
+            // whole cost ~1 s per frame).
             busy.sort_unstable();
-            let (mut at, mut bytes) = (from, 0);
+            let mut gaps = Vec::with_capacity(busy.len() + 1);
+            let mut at = from;
             for (a, e) in busy {
                 if a > at {
-                    bytes += self.update_free(at, a);
+                    gaps.push((at, a));
                 }
                 at = at.max(e);
             }
             if at < to {
-                bytes += self.update_free(at, to);
+                gaps.push((at, to));
             }
-            return bytes;
+            return self.update_free(&gaps);
         }
-        self.update_free(from, to)
+        self.update_free(&[(from, to)])
     }
 
-    /// [`Shadow::update`] of `[from, to)` (inside the buffer) where no
-    /// shader writes.
-    fn update_free(&self, from: usize, to: usize) -> usize {
+    /// [`Shadow::update`] of `gaps`: ranges inside the buffer, in order and
+    /// apart, in none of which a shader writes.
+    ///
+    /// The journal is asked once, about everything from the first gap to
+    /// the last, and each gap takes its pages of the answer. Asked gap by
+    /// gap, a copy in which shaders write many small ranges made an asking
+    /// for each gap at each refresh: with a few dozen such ranges in the
+    /// title's largest buffer, ten times the askings of a frame.
+    fn update_free(&self, gaps: &[(usize, usize)]) -> usize {
+        let (Some(&(from, _)), Some(&(_, to))) = (gaps.first(), gaps.last()) else {
+            return 0;
+        };
         if self.watched.load(Ordering::Relaxed) != NOT_WATCHED {
             if let Some((now, written)) = crate::watch::writes(from, to, true) {
                 self.watched.store(1, Ordering::Relaxed);
-                let copied = self.copy_stale(from, to, now, &written);
+                let mut copied = 0;
+                for &(a, e) in gaps {
+                    let first = written.partition_point(|&(page, _)| page < a / PAGE);
+                    let end = written.partition_point(|&(page, _)| page <= (e - 1) / PAGE);
+                    copied += self.copy_stale(a, e, now, &written[first..end]);
+                }
                 #[cfg(feature = "diagnostics")]
                 {
                     use crate::copystat::{C, add};
-                    add(C::Checked, (to - from) as u64);
-                    add(C::Unchanged, (to - from).saturating_sub(copied) as u64);
+                    let checked: usize = gaps.iter().map(|&(a, e)| e - a).sum();
+                    add(C::Checked, checked as u64);
+                    add(C::Unchanged, checked.saturating_sub(copied) as u64);
                 }
                 return copied;
             }
             self.watched.store(NOT_WATCHED, Ordering::Relaxed);
         }
-        #[cfg(feature = "diagnostics")]
-        crate::copystat::add(crate::copystat::C::WholeBytes, (to - from) as u64);
-        #[cfg(feature = "diagnostics")]
-        let started = crate::clock::Stamp::now();
-        self.copy(from, to);
-        #[cfg(feature = "diagnostics")]
-        crate::copystat::whole(from, to - from, started.elapsed().as_micros() as u64);
-        to - from
+        let mut bytes = 0;
+        for &(a, e) in gaps {
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::add(crate::copystat::C::WholeBytes, (e - a) as u64);
+            #[cfg(feature = "diagnostics")]
+            let started = crate::clock::Stamp::now();
+            self.copy(a, e);
+            #[cfg(feature = "diagnostics")]
+            crate::copystat::whole(a, e - a, started.elapsed().as_micros() as u64);
+            bytes += e - a;
+        }
+        bytes
     }
 
     /// Copies the pages of `[from, to)` written after their last copy
@@ -3358,6 +3391,88 @@ mod card_changed_tests {
         assert_eq!(CARD_COPIES.load(Ordering::Relaxed), before - 1);
         c.card_changed(0, 8);
         assert_eq!(taken(&c), Some(vec![(0, 8)]));
+    }
+}
+
+#[cfg(test)]
+mod gap_tests {
+    use super::{PAGE, Shadow};
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Memory as mem;
+
+    /// A refresh of a copy around two ranges that shaders write asks the
+    /// journal once, takes what the title wrote in the gaps, and leaves the
+    /// two ranges as they are.
+    #[test]
+    fn a_refresh_around_ranges_shaders_write_asks_once() {
+        let Some(host) = crate::host::host() else {
+            return; // no host GPU
+        };
+        const SIZE: usize = 4 * PAGE;
+        // SAFETY: a section and a view of the test's own, and plain reads
+        // and writes inside the view and the copy's mapping.
+        unsafe {
+            let section = mem::CreateFileMappingW(
+                INVALID_HANDLE_VALUE,
+                std::ptr::null(),
+                mem::PAGE_READWRITE | mem::SEC_RESERVE,
+                0,
+                SIZE as u32,
+                std::ptr::null(),
+            );
+            assert!(!section.is_null());
+            let view = mem::MapViewOfFile(section, mem::FILE_MAP_WRITE, 0, 0, SIZE).Value as usize;
+            assert!(view != 0);
+            assert!(
+                !mem::VirtualAlloc(view as *const _, SIZE, mem::MEM_COMMIT, mem::PAGE_READWRITE)
+                    .is_null()
+            );
+            std::ptr::write_bytes(view as *mut u8, 0x11, SIZE);
+            let (buffer, data) = host.shared_buffer(SIZE as u64).expect("a buffer");
+            let gpu = buffer.GetGPUVirtualAddress();
+            let copy = Shadow::new(buffer, data, gpu, view as u64, SIZE as u64);
+            assert_eq!(copy.update(view, SIZE), SIZE);
+            // Shaders write 32 bytes in the second page and in the fourth.
+            let ranges = [
+                (view + PAGE + 64, view + PAGE + 96),
+                (view + 3 * PAGE + 64, view + 3 * PAGE + 96),
+            ];
+            for &(from, to) in &ranges {
+                copy.writing(from, to - from);
+            }
+            // The title writes the first three pages: beside the first
+            // range, and inside it.
+            for (at, byte) in [(8, 1u8), (PAGE + 8, 2), (PAGE + 70, 3), (2 * PAGE + 8, 4)] {
+                ((view + at) as *mut u8).write_volatile(byte);
+            }
+            let asked = crate::watch::askings();
+            let bytes = copy.update(view, SIZE);
+            assert_eq!(
+                crate::watch::askings() - asked,
+                1,
+                "one asking for the three gaps"
+            );
+            // The first page and the second up to the range; the rest of
+            // the second and the third; nothing of the fourth.
+            assert_eq!(bytes, (PAGE + 64) + (PAGE - 96 + PAGE));
+            let held = |at: usize| data.add(at).read();
+            assert_eq!((held(8), held(PAGE + 8), held(2 * PAGE + 8)), (1, 2, 4));
+            assert_eq!(
+                held(PAGE + 70),
+                0x11,
+                "the range shaders write is left alone"
+            );
+            // Nothing written since: nothing of the whole pages is taken
+            // again (the page cut by a range is, until it is taken whole).
+            assert_eq!(copy.update(view, SIZE), PAGE - 32);
+            copy.copy_back_done(&ranges);
+            drop(copy);
+            crate::watch::title_memory_remapped(view, SIZE);
+            mem::UnmapViewOfFile(mem::MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: view as *mut _,
+            });
+            CloseHandle(section);
+        }
     }
 }
 
