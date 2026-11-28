@@ -35,6 +35,9 @@ pub(crate) fn readable_value(key: &str, value: &str) -> String {
     if key.ends_with("_KB") {
         return format!("{value} KB");
     }
+    if key.ends_with("_MS") {
+        return format!("{value} ms");
+    }
     value.to_string()
 }
 
@@ -84,6 +87,8 @@ pub(crate) struct Desc {
 pub(crate) fn example(key: &str) -> Option<&'static str> {
     match key {
         "VICTORY_TEXTURE_BUDGET_MB" => Some("2048, 3072 or 4096 (MB)"),
+        "VICTORY_TEXTURE_QUEUE_MB" => Some("192, 512 or 1024 (MB)"),
+        "VICTORY_TEXTURE_QUEUE_MS" => Some("250, 750 or 1000 (ms)"),
         "VICTORY_CARD_BUFFERS_MB" => Some("256, 512, 1024 or 2048 (MB)"),
         "VICTORY_CARD_BUFFERS_MIN_MB" => Some("1 (MB)"),
         "VICTORY_CARD_BUFFERS_MIN_KB" => Some("64 (KiB): every buffer"),
@@ -142,6 +147,8 @@ pub(crate) const KNOWN_SWITCHES: &[(&str, &str)] = &[
     ("VICTORY_VSYNC", "0"),
     ("VICTORY_FPS_CAP", "0"),
     ("VICTORY_TEXTURE_BUDGET_MB", "4096"),
+    ("VICTORY_TEXTURE_QUEUE_MB", "512"),
+    ("VICTORY_TEXTURE_QUEUE_MS", "750"),
     ("VICTORY_CARD_BUFFERS_MB", "1024"),
     ("VICTORY_CARD_BUFFERS_MIN_MB", "1"),
     ("VICTORY_CARD_BUFFERS_MIN_KB", "64"),
@@ -179,6 +186,16 @@ pub(crate) fn describe(key: &str) -> Option<Desc> {
             "Texture memory budget",
             "Texture data kept on the card. Higher looks sharper in motion; lower leaves room for other apps.",
             "2048–4096 MB on a 16 GB card. Never more than your card's VRAM.",
+        ),
+        "VICTORY_TEXTURE_QUEUE_MB" => d(
+            "Texture data per frame",
+            "How much texture data one frame may bring in. More fills a new scene's textures sooner; a frame that brings in more takes longer.",
+            "Unset is 192 MB. 1024 with a 16 GB AMD card on Linux (linux-amd-16gb), 512 with a smaller one (linux-amd-8gb).",
+        ),
+        "VICTORY_TEXTURE_QUEUE_MS" => d(
+            "Texture time per frame",
+            "How long one frame may spend bringing textures in. More fills a new scene's textures sooner; such a frame takes that much longer.",
+            "Unset is 250 ms. 1000 with a 16 GB AMD card on Linux (linux-amd-16gb), 750 with a smaller one (linux-amd-8gb).",
         ),
         "VICTORY_CARD_BUFFERS_MB" => d(
             "World memory kept on the card",

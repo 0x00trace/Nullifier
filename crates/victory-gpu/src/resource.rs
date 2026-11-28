@@ -2434,7 +2434,7 @@ mod room_tests {
         let gib = 1u64 << 30;
         assert!(within(Some(4 * gib), 4 * gib + 1, card(14_496 << 20, 7_056 << 20)));
         assert!(!within(Some(4 * gib), 4 * gib + 1, card(14_496 << 20, 14_200 << 20)));
-        assert!(within(None, 1 * gib, card(14_496 << 20, 14_200 << 20)));
+        assert!(within(None, gib, card(14_496 << 20, 14_200 << 20)));
         assert!(!within(Some(4 * gib), 4 * gib + 1, || None));
         assert!(within(Some(4 * gib), 3 * gib, || None));
     }
