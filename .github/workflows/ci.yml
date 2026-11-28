@@ -63,6 +63,9 @@ jobs:
           workspaces: tools/launcher
       - name: Formatting of the launcher
         run: cargo fmt --check --manifest-path tools/launcher/Cargo.toml
+      - name: Check of the launcher's detection
+        shell: pwsh
+        run: ./tools/check-detect.ps1
       - name: Build the launcher (Windows)
         run: cargo build --release --locked --manifest-path tools/launcher/Cargo.toml
       - name: Clippy, launcher

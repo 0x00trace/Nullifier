@@ -203,6 +203,13 @@ NVIDIA, whose driver has no `mem_info_vram_total`, and from that file under
 `/sys/class/drm` for the others. `./tools/check-detect.sh` checks this
 against stand-ins for both commands.
 
+On Windows the vendor is the first NVIDIA card WMI lists, then AMD, then
+Intel, so an integrated card does not decide it on a laptop; the memory comes
+from `nvidia-smi` for NVIDIA (WMI's `AdapterRAM` is a uint32 that caps) and
+from the driver key in the registry otherwise. `./tools/check-detect.ps1`
+checks this against a stand-in list (`-GpuJson`) on any machine, card or no
+card.
+
 ## Adding or changing a profile
 
 A profile is only allowed in if it has evidence:

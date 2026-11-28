@@ -206,6 +206,7 @@ measured run has ended.
 ./tools/check-bench.sh    # summarize generated log lines
 ./tools/check-scene.sh    # bench_scene.sh with a stand-in launcher
 ./tools/check-detect.sh   # Linux detection with stub hardware commands
+./tools/check-detect.ps1  # Windows detection with a stand-in GPU list
 ```
 
 Open one small PR per change. List the checks you ran and mark the game
