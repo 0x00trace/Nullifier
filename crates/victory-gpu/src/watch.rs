@@ -551,6 +551,11 @@ struct Guards {
     /// (those views' blocks are in it too): a write to one opens them all.
     /// A write range can be huge (`fread`), so only these are looked up.
     aliased: Blocks,
+    /// The placeholders the runtime reserved ([`title_memory_placeholder`]),
+    /// as runs of blocks `(first, end)` in address order that neither
+    /// overlap nor touch. A block in one holds memory only once the runtime
+    /// has mapped a view there, which it tells us.
+    placeholders: Vec<(usize, usize)>,
 }
 
 static GUARDS: Mutex<Guards> = Mutex::new(Guards {
@@ -558,7 +563,68 @@ static GUARDS: Mutex<Guards> = Mutex::new(Guards {
     clean: Blocks::new(),
     absent: Blocks::new(),
     aliased: Blocks::new(),
+    placeholders: Vec::new(),
 });
+
+impl Guards {
+    /// The end (exclusive) of the placeholder that holds `block`; `block`
+    /// itself if none does.
+    fn placeholder_end(&self, block: usize) -> usize {
+        let after = self.placeholders.partition_point(|p| p.0 <= block);
+        match after.checked_sub(1).map(|at| self.placeholders[at]) {
+            Some((_, end)) if block < end => end,
+            _ => block,
+        }
+    }
+
+    /// Blocks `[first, end)` are a placeholder of the runtime's.
+    fn placeholder(&mut self, first: usize, end: usize) {
+        if first >= end {
+            return;
+        }
+        // With the runs it overlaps or touches, as one.
+        let from = self.placeholders.partition_point(|p| p.1 < first);
+        let to = self.placeholders.partition_point(|p| p.0 <= end);
+        let (mut first, mut end) = (first, end);
+        if from < to {
+            first = first.min(self.placeholders[from].0);
+            end = end.max(self.placeholders[to - 1].1);
+        }
+        self.placeholders.splice(from..to, [(first, end)]);
+    }
+
+    /// Blocks `[first, end)` are no placeholder any more.
+    fn no_placeholder(&mut self, first: usize, end: usize) {
+        if first >= end {
+            return;
+        }
+        let from = self.placeholders.partition_point(|p| p.1 <= first);
+        let to = self.placeholders.partition_point(|p| p.0 < end);
+        if from >= to {
+            return;
+        }
+        let (before, after) = (self.placeholders[from].0, self.placeholders[to - 1].1);
+        let left = [(before, first), (end, after)]
+            .into_iter()
+            .filter(|p| p.0 < p.1);
+        self.placeholders.splice(from..to, left);
+    }
+}
+
+/// Every so many frames, each run of blocks noted absent is asked about
+/// again even inside a placeholder of the runtime's ([`guard`]).
+const ABSENT_ASKED_EVERY: u64 = 256;
+
+/// Whether this frame's askings ask Windows about every run of absent
+/// blocks: in every frame until the title waits for frames (no count), then
+/// in one frame of [`ABSENT_ASKED_EVERY`].
+fn absent_asked() -> bool {
+    #[cfg(test)]
+    if let Some(asked) = tests::ABSENT_ASKED.with(|a| a.get()) {
+        return asked;
+    }
+    crate::frame::current().is_multiple_of(ABSENT_ASKED_EVERY)
+}
 
 fn guards() -> std::sync::MutexGuard<'static, Guards> {
     GUARDS.lock().unwrap_or_else(|e| e.into_inner())
@@ -611,6 +677,21 @@ fn guard(start: usize, end: usize) -> Option<Vec<usize>> {
     }
     let mut uncommitted_until = first;
     let lazy = alias_lazy() && view_guard();
+    // An absent block in a placeholder of the runtime's stays absent until
+    // the runtime maps a view there, which it tells us
+    // ([`title_memory_remapped`] takes the block out of `absent`): Windows
+    // is not asked about it. It was, for every run of absent blocks at
+    // every asking: 10,300 to 11,700 questions a frame in the world, 2.7 ms
+    // of the thread that submits, each under Wine's one lock for virtual
+    // memory (docs/FINDINGS.md 2.25). The title's streamed textures lie in
+    // one placeholder of 48 GiB, mapped block by block, and every copy
+    // that reaches into an unmapped part has such runs.
+    //
+    // What the runtime is not told of: memory the title frees itself
+    // (`VirtualFree`, which the host serves) and that the host then gives
+    // to something else. One frame in [`ABSENT_ASKED_EVERY`] asks as
+    // before, so such a block is found within that many frames.
+    let asked = absent_asked();
     let mut block = first;
     while block <= last {
         if run.is_none() && block < last {
@@ -619,15 +700,32 @@ fn guard(start: usize, end: usize) -> Option<Vec<usize>> {
             block = g.clean.first_out(block, last);
         }
         let mut open = block < last && !g.clean.contains(&block);
+        let mut next = block + 1;
         if open && g.absent.contains(&block) {
-            // Ordinary commits need no runtime mapping notification. Reuse
-            // this asking's query for the following blocks in the same region.
-            if block >= uncommitted_until {
-                uncommitted_until = uncommitted_end(block);
-            }
-            open = block >= uncommitted_until;
-            if open {
-                g.absent.remove(&block);
+            let placeholder = if asked {
+                block
+            } else {
+                g.placeholder_end(block).min(last)
+            };
+            if block < placeholder {
+                // Absent still, and so are the absent blocks behind it in
+                // the placeholder: over them in one step.
+                open = false;
+                next = g.absent.first_out(block, placeholder);
+                #[cfg(feature = "diagnostics")]
+                crate::copystat::add(crate::copystat::C::AbsentKept, 1);
+            } else {
+                // Ordinary commits need no runtime mapping notification. Reuse
+                // this asking's query for the following blocks in the same region.
+                if block >= uncommitted_until {
+                    uncommitted_until = uncommitted_end(block);
+                    #[cfg(feature = "diagnostics")]
+                    crate::copystat::add(crate::copystat::C::AbsentAsked, 1);
+                }
+                open = block >= uncommitted_until;
+                if open {
+                    g.absent.remove(&block);
+                }
             }
         }
         if open {
@@ -651,7 +749,7 @@ fn guard(start: usize, end: usize) -> Option<Vec<usize>> {
         if let Some(from) = run.take() {
             protect(&mut g, from, block);
         }
-        block += 1;
+        block = next;
     }
     Some(written)
 }
@@ -839,6 +937,8 @@ fn uncommitted_end(block: usize) -> usize {
     use windows_sys::Win32::System::Memory::{
         MEM_FREE, MEM_RESERVE, MEMORY_BASIC_INFORMATION, VirtualQuery,
     };
+    #[cfg(test)]
+    tests::ASKED_WINDOWS.with(|n| n.set(n.get() + 1));
     // SAFETY: plain data filled in by the query.
     let mut info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
     // SAFETY: a valid out pointer of the right size.
@@ -1054,6 +1154,34 @@ pub fn title_memory_remapped(at: usize, len: usize) {
     }
 }
 
+/// The runtime reserved `[at, at + len)` as a placeholder (`victory-hle`
+/// xmem, for a reservation of 64 KiB pages): address space that holds
+/// memory only where the runtime maps a view of physical pages, and it
+/// tells us of each ([`title_memory_remapped`]). A block noted absent there
+/// is not asked about again until then ([`guard`]).
+pub fn title_memory_placeholder(at: usize, len: usize) {
+    guards().placeholder(at.div_ceil(BLOCK), at.saturating_add(len) / BLOCK);
+}
+
+/// The runtime made `[at, at + len)` ordinary memory, reserved or
+/// committed: no placeholder (if it was one), and what the guards noted of
+/// the addresses is of memory that was there before.
+pub fn title_memory_allocated(at: usize, len: usize) {
+    let (first, end) = (at / BLOCK, at.saturating_add(len).div_ceil(BLOCK));
+    let mut g = guards();
+    g.no_placeholder(first, end);
+    for block in g.absent.within(first..end) {
+        g.absent.remove(&block);
+    }
+    for block in g.protected.within(first..end) {
+        g.protected.remove(&block);
+        g.clean.remove(&block);
+    }
+    for block in g.aliased.within(first..end) {
+        g.aliased.remove(&block);
+    }
+}
+
 /// Handles a write access violation at `at` if the block belongs to our guards
 /// or became writable concurrently.
 pub(crate) fn handle_write_fault(at: usize) -> bool {
@@ -1124,6 +1252,19 @@ mod tests {
     thread_local! {
         /// The kernel askings this thread made ahead ([`ask_kernel`]).
         pub(super) static ASKED_AHEAD: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    thread_local! {
+        /// The questions about absent blocks this thread put to Windows
+        /// ([`uncommitted_end`]).
+        pub(super) static ASKED_WINDOWS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        /// What [`absent_asked`] says on this thread, if a test sets it.
+        pub(super) static ABSENT_ASKED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    }
+
+    /// [`ASKED_WINDOWS`], taken.
+    fn asked_windows() -> u64 {
+        ASKED_WINDOWS.with(|n| n.replace(0))
     }
 
     /// [`ASKED_AHEAD`], taken.
@@ -1728,6 +1869,203 @@ mod tests {
             UnmapViewOfFile2(GetCurrentProcess(), first, MEM_PRESERVE_PLACEHOLDER);
             UnmapViewOfFile2(GetCurrentProcess(), second, MEM_PRESERVE_PLACEHOLDER);
             for block in 0..3 {
+                VirtualFree((p + block * BLOCK) as *mut _, 0, MEM_RELEASE);
+            }
+            windows_sys::Win32::Foundation::CloseHandle(section);
+        }
+    }
+
+    /// The registered placeholders are runs that neither overlap nor touch,
+    /// whatever is added and taken out.
+    #[test]
+    fn placeholders_join_and_are_cut() {
+        let mut g = Guards {
+            protected: Blocks::new(),
+            clean: Blocks::new(),
+            absent: Blocks::new(),
+            aliased: Blocks::new(),
+            placeholders: Vec::new(),
+        };
+        g.placeholder(10, 20);
+        g.placeholder(40, 50);
+        g.placeholder(5, 5);
+        assert_eq!(g.placeholders, [(10, 20), (40, 50)]);
+        assert_eq!(
+            (
+                g.placeholder_end(9),
+                g.placeholder_end(10),
+                g.placeholder_end(19)
+            ),
+            (9, 20, 20)
+        );
+        assert_eq!(
+            (
+                g.placeholder_end(20),
+                g.placeholder_end(45),
+                g.placeholder_end(50)
+            ),
+            (20, 50, 50)
+        );
+        // Touching and overlapping runs become one.
+        g.placeholder(20, 25);
+        g.placeholder(30, 42);
+        assert_eq!(g.placeholders, [(10, 25), (30, 50)]);
+        g.placeholder(0, 100);
+        assert_eq!(g.placeholders, [(0, 100)]);
+        // Cut in the middle, at an end, and over several.
+        g.no_placeholder(10, 20);
+        assert_eq!(g.placeholders, [(0, 10), (20, 100)]);
+        g.no_placeholder(90, 120);
+        g.no_placeholder(30, 30);
+        assert_eq!(g.placeholders, [(0, 10), (20, 90)]);
+        g.placeholder(200, 300);
+        g.no_placeholder(5, 250);
+        assert_eq!(g.placeholders, [(0, 5), (250, 300)]);
+        g.no_placeholder(0, 1000);
+        assert!(g.placeholders.is_empty());
+        assert_eq!(g.placeholder_end(7), 7);
+    }
+
+    /// In a placeholder the runtime told us of, blocks noted absent are not
+    /// asked about again: a view mapped there is reported when the runtime
+    /// tells of it. Outside one, and in the frames that ask about every
+    /// absent run, Windows is asked as before.
+    #[test]
+    fn absent_blocks_in_a_placeholder_are_not_asked_about_again() {
+        use windows_sys::Win32::System::Memory::{
+            CreateFileMappingW, MEM_PRESERVE_PLACEHOLDER, MEM_REPLACE_PLACEHOLDER,
+            MEM_RESERVE_PLACEHOLDER, MapViewOfFile3, PAGE_NOACCESS, UnmapViewOfFile2,
+            VirtualAlloc2,
+        };
+        use windows_sys::Win32::System::Threading::GetCurrentProcess;
+        const BLOCKS: usize = 6;
+        // SAFETY: a fresh placeholder of six blocks and a pagefile section
+        // of as many.
+        let (p, section) = unsafe {
+            let p = VirtualAlloc2(
+                GetCurrentProcess(),
+                std::ptr::null(),
+                BLOCKS * BLOCK,
+                MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
+                PAGE_NOACCESS,
+                std::ptr::null_mut(),
+                0,
+            ) as usize;
+            assert_ne!(p, 0);
+            let section = CreateFileMappingW(
+                -1isize as _,
+                std::ptr::null(),
+                PAGE_READWRITE,
+                0,
+                (BLOCKS * BLOCK) as u32,
+                std::ptr::null(),
+            );
+            assert!(!section.is_null());
+            (p, section)
+        };
+        let map = |block: usize| {
+            // SAFETY: splits the placeholder at the block and maps the
+            // section's block there.
+            let view = unsafe {
+                VirtualFree(
+                    (p + block * BLOCK) as *mut _,
+                    BLOCK,
+                    MEM_RELEASE | MEM_PRESERVE_PLACEHOLDER,
+                );
+                MapViewOfFile3(
+                    section,
+                    GetCurrentProcess(),
+                    (p + block * BLOCK) as *const _,
+                    (block * BLOCK) as u64,
+                    BLOCK,
+                    MEM_REPLACE_PLACEHOLDER,
+                    PAGE_READWRITE,
+                    std::ptr::null_mut(),
+                    0,
+                )
+            };
+            assert_eq!(view.Value as usize, p + block * BLOCK);
+            view
+        };
+        let pages = |block: usize| (p + block * BLOCK) / PAGE..(p + (block + 1) * BLOCK) / PAGE;
+        let all: Vec<usize> = (0..BLOCKS).flat_map(pages).collect();
+        let (start, end) = (p, p + BLOCKS * BLOCK);
+        // As in a frame that does not ask about every absent run.
+        ABSENT_ASKED.with(|a| a.set(Some(false)));
+        // Block 0 is a view; blocks 1 to 5 are not there.
+        let first = map(0);
+        title_memory_remapped(p, BLOCK);
+        asked_windows();
+        assert_eq!(guard(start, end), Some(all));
+        assert!(
+            asked_windows() > 0,
+            "the blocks that could not be guarded are asked about once"
+        );
+        // Not told of the placeholder: every asking asks about the run.
+        assert_eq!(guard(start, end), Some(Vec::new()));
+        assert!(
+            asked_windows() >= 1,
+            "a run of absent blocks outside any placeholder we know is asked about"
+        );
+        // Told of it: nothing is asked.
+        title_memory_placeholder(start, BLOCKS * BLOCK);
+        for _ in 0..3 {
+            assert_eq!(guard(start, end), Some(Vec::new()));
+        }
+        assert_eq!(
+            asked_windows(),
+            0,
+            "absent blocks in a placeholder are left as they are"
+        );
+        // A view mapped in the middle of the absent run, and told: reported,
+        // and the absent blocks on both sides of it are still not asked about.
+        let third = map(3);
+        title_memory_remapped(p + 3 * BLOCK, BLOCK);
+        assert_eq!(guard(start, end), Some(pages(3).collect()));
+        assert_eq!(guard(start, end), Some(Vec::new()));
+        assert_eq!(asked_windows(), 0);
+        // A write to it faults into the guard as before.
+        // SAFETY: inside the mapped block.
+        unsafe { ((p + 3 * BLOCK + 8) as *mut u8).write_volatile(1) };
+        assert_eq!(guard(start, end), Some(pages(3).collect()));
+        // A view the runtime did not tell of is not seen...
+        let fifth = map(5);
+        assert_eq!(guard(start, end), Some(Vec::new()));
+        assert_eq!(asked_windows(), 0);
+        // ...until a frame that asks about every absent run.
+        ABSENT_ASKED.with(|a| a.set(Some(true)));
+        assert_eq!(guard(start, end), Some(pages(5).collect()));
+        assert!(asked_windows() > 0);
+        ABSENT_ASKED.with(|a| a.set(Some(false)));
+        assert_eq!(guard(start, end), Some(Vec::new()));
+        assert_eq!(asked_windows(), 0);
+        // Given out as ordinary memory: no placeholder any more, and what
+        // was noted of the addresses is forgotten, so the blocks are taken
+        // (and asked about) anew.
+        title_memory_allocated(p + BLOCK, 2 * BLOCK);
+        {
+            let g = guards();
+            assert_eq!(g.placeholder_end(p / BLOCK), p / BLOCK + 1);
+            assert_eq!(g.placeholder_end(p / BLOCK + 1), p / BLOCK + 1);
+            assert_eq!(g.placeholder_end(p / BLOCK + 3), p / BLOCK + BLOCKS);
+            assert!(!g.absent.contains(&(p / BLOCK + 1)) && !g.absent.contains(&(p / BLOCK + 2)));
+            assert!(g.absent.contains(&(p / BLOCK + 4)));
+        }
+        assert_eq!(guard(start, end), Some(pages(1).chain(pages(2)).collect()));
+        assert!(asked_windows() > 0);
+        // Still not there, and outside the placeholder now: asked at every asking.
+        assert_eq!(guard(start, end), Some(Vec::new()));
+        assert!(asked_windows() >= 1);
+        ABSENT_ASKED.with(|a| a.set(None));
+        // Told before the memory goes.
+        title_memory_remapped(start, BLOCKS * BLOCK);
+        title_memory_allocated(start, BLOCKS * BLOCK);
+        // SAFETY: our views and placeholder.
+        unsafe {
+            for view in [first, third, fifth] {
+                UnmapViewOfFile2(GetCurrentProcess(), view, MEM_PRESERVE_PLACEHOLDER);
+            }
+            for block in 0..BLOCKS {
                 VirtualFree((p + block * BLOCK) as *mut _, 0, MEM_RELEASE);
             }
             windows_sys::Win32::Foundation::CloseHandle(section);
