@@ -101,7 +101,9 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   in amber on Play because it changes how the picture looks.
 * **Warnings** — values that cannot work on this machine are called out in a
   yellow panel: a texture budget above the card's VRAM, world memory over half
-  of it, 2+ frames prepared ahead, joined copies, relay 2, an unknown switch.
+  of it, 2+ frames prepared ahead, joined copies, relay 2, an output wider than
+  16:9 (the title's HUD is laid out for 16:9; see `docs/FINDINGS.md` F.1), an
+  unknown switch.
 * **Graphics** — the title's own graphics settings, parsed from its
   `settings.xml` (88 values: HDR, gamma, anisotropic filtering, FSR
   quality/sharpen, LOD scales, shadows, motion blur, water reflections,

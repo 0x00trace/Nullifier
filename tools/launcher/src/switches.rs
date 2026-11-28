@@ -185,7 +185,7 @@ pub(crate) fn describe(key: &str) -> Option<Desc> {
         "VICTORY_TEXTURE_BUDGET_MB" => d(
             "Texture memory budget",
             "Texture data kept on the card. Higher looks sharper in motion; lower leaves room for other apps.",
-            "2048–4096 MB on a 16 GB card. Never more than your card's VRAM.",
+            "2048â€“4096 MB on a 16 GB card. Never more than your card's VRAM.",
         ),
         "VICTORY_TEXTURE_QUEUE_MB" => d(
             "Texture data per frame",
@@ -360,6 +360,9 @@ pub(crate) fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
     let sets = &settings.sets;
     let vram = hw.vram_mb;
     let mut out = Vec::new();
+    if let Some(warning) = ultrawide_warning(&settings.output) {
+        out.push(warning);
+    }
     if let Some(budget) = setting_value(sets, "VICTORY_TEXTURE_BUDGET_MB") {
         if budget == 0 {
             out.push(
@@ -413,10 +416,56 @@ pub(crate) fn warnings(settings: &Settings, hw: &Hardware) -> Vec<String> {
     out
 }
 
+/// The warning for an output wider than 16:9, if that is what is asked for.
+fn ultrawide_warning(output: &str) -> Option<String> {
+    is_ultrawide(output).then(|| {
+        format!(
+            "Output {} is wider than 16:9: the world fills the screen and the camera shows more sideways, but the title's HUD is laid out for 16:9, so some menu labels overlap (seen at 3440x1440). 16:9 keeps the authored framing; see docs/FINDINGS.md F.1.",
+            output.trim()
+        )
+    })
+}
+
+/// Whether `output` asks for a screen wider than 16:9. The title's own modes
+/// are all 16:9; the ultrawide sizes and any custom wider one are not.
+fn is_ultrawide(output: &str) -> bool {
+    let Some((w, h)) = output.trim().split_once(['x', 'X']) else {
+        return false;
+    };
+    let (Ok(w), Ok(h)) = (w.trim().parse::<u32>(), h.trim().parse::<u32>()) else {
+        return false;
+    };
+    h > 0 && u64::from(w) * 9 > u64::from(h) * 16
+}
+
 #[cfg(test)]
 mod tests {
-    use super::describe;
+    use super::{describe, is_ultrawide, ultrawide_warning};
     use std::path::Path;
+
+    #[test]
+    fn a_wider_than_16_9_output_is_ultrawide() {
+        assert!(is_ultrawide("3440x1440"));
+        assert!(is_ultrawide("2560x1080"));
+        assert!(is_ultrawide("3840x1080"));
+        assert!(is_ultrawide("5120x1440"));
+        assert!(is_ultrawide(" 3440X1440 "));
+        assert!(!is_ultrawide("2560x1440"));
+        assert!(!is_ultrawide("3840x2160"));
+        assert!(!is_ultrawide(""));
+        assert!(!is_ultrawide("custom"));
+        assert!(!is_ultrawide("3440x0"));
+        // Narrower than 16:9 is not what the warning is about.
+        assert!(!is_ultrawide("1920x1200"));
+    }
+
+    #[test]
+    fn the_ultrawide_warning_names_the_size() {
+        let w = ultrawide_warning("3440x1440").expect("a warning");
+        assert!(w.contains("3440x1440"), "{w}");
+        assert!(w.contains("HUD"), "{w}");
+        assert!(ultrawide_warning("2560x1440").is_none());
+    }
 
     /// Every `VICTORY_` switch that a profile of `launcher/profiles.json`
     /// sets has a description. One without is reported on the Play and
