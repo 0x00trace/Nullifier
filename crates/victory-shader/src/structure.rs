@@ -518,6 +518,11 @@ struct Lanes<'a> {
     /// For branches: SCC of a mask operation ("some lane is set") as the
     /// lane's own bit.
     scc_lane: Map<Value, Bool>,
+    /// A dword copied out of a mask pair (`s_mov_b32 d, s`): the mask and
+    /// which dword it is (true: lanes 32-63).
+    half: Map<Value, (Bool, bool)>,
+    /// Values whose half is being resolved.
+    half_busy: HashSet<Value>,
     /// Joins resolved to a constant, to check once all edges are known.
     joins: Vec<Join>,
     /// [`Atom::Phi`] joins created in the current pass, resolved in
@@ -608,6 +613,8 @@ impl<'a> Lanes<'a> {
             other: Map::default(),
             seen: Vec::new(),
             scc_lane: Map::default(),
+            half: Map::default(),
+            half_busy: HashSet::new(),
             joins: Vec::new(),
             phi_joins: Vec::new(),
             phi_join_ids: HashSet::new(),
@@ -626,6 +633,8 @@ impl<'a> Lanes<'a> {
         self.other.clear();
         self.seen.clear();
         self.scc_lane.clear();
+        self.half.clear();
+        self.half_busy.clear();
         self.scc_every.clear();
         self.wave_any.fill(None);
         self.joins.clear();
@@ -888,6 +897,62 @@ impl<'a> Lanes<'a> {
         }
     }
 
+    /// The mask a dword value is half of, when it was copied out of a mask
+    /// pair one dword at a time (`s_mov_b32 d, s`, as a parked mask comes
+    /// back when its halves move apart): the mask and whether it is the high
+    /// dword. Sound as it stands: a dword copy holds that dword of the mask.
+    fn half(&mut self, v: Value) -> Option<(Bool, bool)> {
+        if let Some(&h) = self.half.get(&v) {
+            return Some(h);
+        }
+        if !self.half_busy.insert(v) {
+            return None;
+        }
+        let r = self.half_uncached(v);
+        self.half_busy.remove(&v);
+        if let Some(h) = r {
+            self.half.insert(v, h);
+        }
+        r
+    }
+
+    fn half_uncached(&mut self, v: Value) -> Option<(Bool, bool)> {
+        let &(b, i) = self.defs.get(&v)?;
+        let inst = &self.p.blocks[b].insts[i];
+        let Fields::Sop { dst, src, .. } = &inst.fields else {
+            return None;
+        };
+        let Some(Operand::Scalar { code: d, .. }) = dst else {
+            return None;
+        };
+        // One dword, not a pair.
+        if self.p.wave64 && inst.write(Reg::S(d + 1)).is_some() {
+            return None;
+        }
+        let Some(&Operand::Scalar { code: s, .. }) = src.first() else {
+            return None;
+        };
+        if s == NULL {
+            return None;
+        }
+        // The half the source holds: a value copied out of a half keeps that
+        // half; a dword of a tracked pair is its low or high one.
+        let u = inst.read(Reg::S(s))?;
+        if let Some(h) = self.half(u) {
+            return Some(h);
+        }
+        // u is one dword of a tracked pair: the low one, or the high one.
+        let (m, high) = match self.masks.iter().find(|(k, _)| k.1 == u && k.0 != u) {
+            Some((&(lo, _), &m)) => (m, lo != u),
+            None => {
+                let (&(_, hi), &m) = self.masks.iter().find(|(k, _)| k.0 == u)?;
+                let _ = hi;
+                (m, false)
+            }
+        };
+        Some((m, high))
+    }
+
     /// The mask a value pair holds, and whether it derives from EXEC or a
     /// VALU result.
     fn mask(&mut self, k: Key) -> (Bool, bool) {
@@ -896,6 +961,15 @@ impl<'a> Lanes<'a> {
         }
         if let Some(&m) = self.other.get(&k) {
             return (m, false);
+        }
+        // Halves moved apart: both dwords of the same mask, one each.
+        if self.p.wave64
+            && let (Some((a, ha)), Some((c, hc))) = (self.half(k.0), self.half(k.1))
+            && a == c
+            && ha != hc
+        {
+            self.masks.insert(k, a);
+            return (a, true);
         }
         let p = self.p;
         let (m, derived) = match self.join(k) {
