@@ -41,7 +41,7 @@ page marking and texture refresh.
 | Linux + AMD | works, 0.7–0.9 fps | measured here (RX 9070 XT, Mesa 26.3.1) |
 | Linux + NVIDIA | works, 5.60–6.20 fps on a 16 GB card with the wineserver from `tools/build-wineserver.sh` and the `linux-nvidia-16gb` profile (4.30 with `linux-nvidia`), 0.6–1.4 with Proton's own | measured here (RTX 5080, below); 1.85–1.97 fps in issue #6 (RTX 5070 Ti); `linux-nvidia-16gb` is `measured`, `linux-nvidia` is `reported` |
 | Windows + AMD | works, ~1 fps | issue #3 (RX 9070 XT, needs skips) |
-| Windows + NVIDIA | works; 7.2–8.2 fps on a later save scene (RTX 4090, one run, `47d9a33`) | measured here (below); 2–4 fps in upstream README and issue #417 |
+| Windows + NVIDIA | works; 8.15–8.25 fps on a later save scene (RTX 4090, three runs, `47d9a33`) | measured here (below); 2–4 fps in upstream README and issue #417 |
 | Linux + Intel | untested | profile `untested` |
 | macOS / Apple silicon | not supported | needs a Metal path; see roadmap |
 
@@ -357,23 +357,28 @@ Perf switches that made no difference or hurt: `PIPELINE_WAIT_MS=24` (0.40),
 ### RTX 4090 (24 GB), Windows 10.0.26300, NVIDIA 32.0.16.1742,
 `windows-nvidia` profile, 3840×2160 output
 
-One run of `main` @ `47d9a33` from the save the previous session left, not the
-opening: the world runs 11,000–14,000 draws a frame, so these rows are not
-comparable with the ~4,850-draw opening rows above. The diag build
-(`target\diag\nullifier.exe`), `VICTORY_LOG=info`, Enter scripted at 20–140 s to
-get past the menus. Frame lines come every ~5 s, so a 90 s window is 17 frames.
-The picture is from a second run at the same commit and profile with
-`VICTORY_CAPTURE_WORLD=1`; captures cost frame rate, so that run is not in the
-median.
+Three runs of `main` @ `47d9a33`, each from the save the previous session left,
+not the opening. The 90 s window starts 10 s after the first world frame; the
+row is the frames in that window of 6,000–8,400 draws a frame, the stable scene
+all three enter (comparisons at equal draws, as §7 asks). Frame lines come every
+~5 s, so the window holds 17 frames and 12 of them are that scene. These rows
+are not comparable with the ~4,850-draw opening rows above.
+
+The diag build (`target\diag\nullifier.exe`), `VICTORY_LOG=info`, Enter scripted
+at 20–140 s to get past the menus. The picture is from another run at the same
+commit and profile with `VICTORY_CAPTURE_WORLD=1`; captures cost frame rate, so
+it is not in these medians.
 
 | Build | Settings | Median | n | Device removals | Picture |
 |---|---|---|---|---|---|
-| `main` @ `47d9a33` | profile | **7.40** (p10 6.40) | 17 | 0 | correct: a 4.2 MB capture of the world, with the character, props and their shadows; no black faces |
-| same run, before a scene change (6,506–8,331 draws) | profile | 8.20 (p10 6.40) | 17 | 0 | not captured |
+| `main` @ `47d9a33` | profile | **8.25 / 8.20 / 8.15** (p10 6.40 / 7.20 / 7.90) | 12 / 12 / 12 | 0 / 0 / 0 | correct: a 4.2 MB capture of the world, with the character, props and their shadows; no black faces |
 
-The later part of the run held 7.20 fps over 240 s (n=45) at 10,975–13,964
-draws. No `device removed` in the whole 8-minute run. This is one observation,
-not the three runs the protocol asks for, and there is no A/B.
+Over every world frame of 200 draws or more in the same windows the medians are
+8.00 / 7.90 / 8.00 (n=17 / 17 / 16). The later 10,000-draw scene was not stable
+in runs 2 and 3 (five or six frames, 1.4 s stalls, most likely pipelines being
+made), so it is not the row; run 1 held it at 7.20 over 240 s (n=45). No
+`device removed` and no unhandled exception in any of the three runs, nor in the
+whole 8-minute first run.
 
 ### The texture ask (P0 probe, 2026-11-25)
 
