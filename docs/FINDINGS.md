@@ -2921,3 +2921,23 @@ is 2.6 times the pixels of 2560x1440, so expect the GPU side to grow (the
 card is not the limit at 8 fps, so the effect may be small). The title's UI
 is laid out for 16:9 and looked right at 21:9 here; 32:9 has not been
 checked.
+
+**What a play test at 3440x1440 showed.** The framebuffer is native 21:9
+(no scaling), and the world fills it, but two things are the title's own and
+not the layer's:
+
+* **The picture is Vert-**: the camera keeps its horizontal framing, so a
+  21:9 screen shows *less* vertically, not more; the character sits slightly
+  larger in frame than at 16:9. The splash and story art (16:9) are cropped
+  top and bottom rather than stretched, which is the same choice.
+* **Some UI overlaps** at 1440 height: on the CONTROL SCHEME page the
+  `PAUSE PREVIEW` line sits on `RESTORE ALL`/`RESTORE DEFAULT`, and the tab
+  strip runs off the right edge at `ACCO`. Setting
+  `video/uiResolution` to 3440x1440 (from `0x0`) changed nothing, so the
+  title does not lay the HUD out from it; the layers it does use are
+  authored for 16:9.
+
+Fixing either means patching the title's camera and HUD code, not the mode
+table or the present path. Until then, 21:9 is correct as a *picture* and
+tight as a *view*, and a 16:9 output remains the way to get the intended
+framing and an untouched UI.
