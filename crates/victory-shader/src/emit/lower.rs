@@ -191,6 +191,10 @@ struct Lower<'a> {
     lane_fail: HashMap<Value, Why>,
     vals: HashMap<Value, Val>,
     floats: HashMap<Value, V>,
+    /// The program read descriptor bits from a table at a computed index
+    /// (`table_smem`): its traversal loops are capped hard (see
+    /// [`Self::count_iteration`]).
+    table_probe: bool,
     /// VGPRs and SGPRs holding an f64 value as an f32 in the low dword
     /// (the water programs' double accumulations; the high dword is 0).
     f64_shadow: [bool; 256],
@@ -1540,6 +1544,7 @@ impl<'a> Lower<'a> {
             lane_fail: HashMap::new(),
             vals: HashMap::new(),
             floats: HashMap::new(),
+            table_probe: false,
             f64_shadow: [false; 256],
             f64_shadow_s: [false; 256],
             block: vec![None; p.blocks.len()],
@@ -3073,6 +3078,63 @@ impl<'a> Lower<'a> {
         let was = self.end_guarded(at, &[(was, old)])[0];
         if let Some(reg) = back {
             self.write(inst, Reg::V(reg), was, None);
+        }
+        Ok(())
+    }
+
+    /// `s_load_dword*` of a descriptor's bits from the title's own table
+    /// (`USER_TABLE_ADDRESS`): the address is the table's first descriptor
+    /// plus the instruction's offset and offset register, read through the
+    /// memory directory as `memory_smem` reads any address.
+    fn table_smem(&mut self, inst: &Inst, site: Site, count: u32) -> Result<(), Why> {
+        use super::shader::USER_TABLE_ADDRESS;
+        self.table_probe = true;
+        let Fields::Smem {
+            data: Some(Operand::Scalar { code, .. }),
+            offset,
+            soffset,
+            ..
+        } = inst.fields
+        else {
+            return Err("a scalar load from a table");
+        };
+        let a = *self.scalar.get(&site).ok_or("an untracked descriptor load")?;
+        let rp = *self.x.native.layout.get(a.param).ok_or("a descriptor outside the heaps")?;
+        let c = self.cur;
+        let (mut lo, mut hi) = (
+            self.host_word(RootType::Other(USER_TABLE_ADDRESS), rp.slot, 0),
+            self.host_word(RootType::Other(USER_TABLE_ADDRESS + 1), rp.slot, 0),
+        );
+        let k = self.s.m.i32(offset as u32);
+        lo = self.s.m.bin(c, Bin::Add, lo, k);
+        if !matches!(soffset, Operand::Scalar { code: NULL, .. }) {
+            let so = self.operand(inst, &soffset)?;
+            let sum = self.s.m.bin(c, Bin::Add, lo, so);
+            let carry = self.s.m.cmp(c, pred::IULT, sum, lo);
+            let carry = self.s.m.cast(c, Cast::ZExt, carry, self.s.t.i32);
+            hi = self.s.m.bin(c, Bin::Add, hi, carry);
+            lo = sum;
+        }
+        let (i32t, res) = (self.s.t.i32, self.s.t.res_ret);
+        let (iu, align) = (self.s.m.undef(i32t), self.s.m.i32(4));
+        for first in (0..count).step_by(4) {
+            let n = (count - first).min(4);
+            let (lo, hi) = self.address_plus(lo, hi, 4 * first as i32);
+            let (h, byte) = self.memory(lo, hi, None);
+            let mask = self.s.m.i8((1u8 << n) - 1);
+            let r = self.s.op(
+                c,
+                "rawBufferLoad.f32",
+                Attr::ReadOnly,
+                res,
+                139,
+                &[h, byte, iu, mask, align],
+            );
+            for k in 0..n {
+                let x = self.s.m.extract(c, r, k);
+                let x = self.as_int(x);
+                self.write(inst, Reg::S(code + first as u8 + k as u8), x, None);
+            }
         }
         Ok(())
     }
@@ -5865,6 +5927,22 @@ impl<'a> Lower<'a> {
                         }
                     }
                 }
+                return Ok(());
+            }
+            // Descriptor bits the code reads at a computed table index as
+            // numbers (a buffer's address to walk it, a texture's size): the
+            // title's own descriptor is in memory, so read it there rather
+            // than stand a value in.
+            if count <= 4
+                && self
+                    .scalar
+                    .get(&site)
+                    .and_then(|a| self.x.native.layout.get(a.param))
+                    .is_some_and(|rp| {
+                        matches!(rp.root, RootType::Table | RootType::ResourceHeap)
+                    })
+                && self.table_smem(inst, site, count).is_ok()
+            {
                 return Ok(());
             }
             return Err("a descriptor read only as data");
@@ -11184,7 +11262,14 @@ impl<'a> Lower<'a> {
         // 14-25 frames in, in a minimap or shadow mesh draw; with every
         // loop cut at 64 it ran 90 frames. Raise them again once shaders
         // stop reading data that is not there yet.)
+        // A program that reads a table descriptor's bits walks the
+        // structure it names; with the structure not built yet, a node graph
+        // that loops would run to the per-loop limit in every lane, and the
+        // traversal's loops nest. Sixty-four iterations of each bound the
+        // whole walk (and the pass is only a shadow mask: a truncated walk
+        // shades as if there were no blocker).
         let limit = match super::loop_limit() {
+            _ if self.table_probe => 1 << 6,
             LOOP_LIMIT if self.s.pixel => 1 << 7,
             LOOP_LIMIT if self.s.mesh.is_some() || self.s.threads.is_none() => 1 << 8,
             LOOP_LIMIT => 1 << 12,

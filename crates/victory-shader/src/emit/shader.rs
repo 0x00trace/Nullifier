@@ -60,6 +60,12 @@ pub const USER_MEMORY_BASE: u32 = 0x100;
 /// its bits from 32 up. (Console code reads the address out of a buffer
 /// descriptor and uses it as a pointer.)
 pub const USER_VIEW_ADDRESS: u32 = 0x101;
+/// `RootType::Other` code of a user-data dword the host computes: the low
+/// 32 bits of the title address of the first descriptor of root parameter
+/// `slot`'s table; [`USER_TABLE_ADDRESS`] + 1: its bits from 32 up. (Console
+/// code reads a descriptor's bits at a computed index as numbers: a size, or
+/// the address of the buffer the descriptor names.)
+pub const USER_TABLE_ADDRESS: u32 = 0x105;
 /// `RootType::Other` code of a user-data dword the host computes: the
 /// bytes (0 to 15) by which the raw view the host binds for the root view
 /// of root parameter `slot` begins before the title's address. A raw view

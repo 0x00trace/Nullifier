@@ -823,7 +823,9 @@ impl State {
         dword: u32,
         memory: Option<&crate::memory::Ready>,
     ) -> u32 {
-        use victory_shader::emit::{USER_GROUP_BASE, USER_MEMORY_BASE, USER_VIEW_ADDRESS, USER_VIEW_BIAS};
+        use victory_shader::emit::{
+            USER_GROUP_BASE, USER_MEMORY_BASE, USER_TABLE_ADDRESS, USER_VIEW_ADDRESS, USER_VIEW_BIAS,
+        };
         // Set between the parts of a large dispatch (`group_base`).
         if kind == USER_GROUP_BASE {
             return 0;
@@ -842,6 +844,17 @@ impl State {
                     ((s.gpu(address) - base) & 15) as u32
                 }),
                 _ => 0,
+            };
+        }
+        if kind == USER_TABLE_ADDRESS || kind == USER_TABLE_ADDRESS + 1 {
+            let address = match self.roots_ref(compute).get(usize::from(slot)) {
+                Some(&Root::Table(table)) => table,
+                _ => 0,
+            };
+            return if kind == USER_TABLE_ADDRESS {
+                address as u32
+            } else {
+                (address >> 32) as u32
             };
         }
         if kind != USER_VIEW_ADDRESS && kind != USER_VIEW_ADDRESS + 1 {
@@ -876,7 +889,7 @@ impl State {
         let (mut addresses, mut constants) = (Vec::new(), Vec::new());
         for root in self.roots_ref(compute) {
             match root {
-                Root::View(address) => addresses.push(*address),
+                Root::View(address) | Root::Table(address) => addresses.push(*address),
                 Root::Constants(values) => constants.extend_from_slice(values),
                 _ => {}
             }
