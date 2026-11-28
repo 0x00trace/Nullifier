@@ -730,6 +730,17 @@ impl Staging {
             let unwritten = last.asked != 0 && written.iter().all(|&(_, w)| w <= last.asked);
             last.asked = now;
             let frame = crate::frame::current();
+            // A texture starts hot: one written behind the guard from its
+            // first frames on changes before the hash has ever caught it
+            // (`VICTORY_TEXTURE_HOT=0`: every eighth frame only).
+            static HOT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            if last.unguarded == 0
+                && *HOT.get_or_init(|| {
+                    std::env::var_os("VICTORY_TEXTURE_HOT").is_none_or(|v| v != "0")
+                })
+            {
+                last.unguarded = frame + 64;
+            }
             let turn = frame.wrapping_add((start >> 16) as u64).is_multiple_of(HASH_EVERY);
             // Linear pictures of one level are what the processor draws (the
             // planes of a movie), through a view of its own.

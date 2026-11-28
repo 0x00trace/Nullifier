@@ -2693,6 +2693,26 @@ entry where the title aliases, and the plain description is made only when the
 view has none and the host copy is typeless. Tested: victory-gpu 189, clippy
 clean, a 120 s world run with no fault or device removal.
 
+## 3.38 The mouths again: a preserved-lane rule that hid the face network's half view (2026-11-28)
+
+Issue #61's fix (d27fb82, #70) makes the face network read 16-bit values
+through integer views. `4639079` then taught `read_only_as_halves` to follow a
+value across a write that preserves lanes EXEC leaves alone. In
+`CS_BlendshapeTranslationsHSSGraphOutputExtract` (970c4fbb3b017c0e) that rule
+follows the loaded half into a value another path also uses as a whole f32,
+so the extract's place is no longer marked as halves: the load is emitted as
+a float load through an `R16_UINT` view, and the mouth data is garbage on a
+driver that shows it (AMD here; the NVIDIA runs that tested 785 looked right).
+The other 72 face programs are unchanged.
+
+The follow block is reverted, returning the extract to
+`half_views=[(0,16)]` and an integer load, the state #927 was tested in. A
+flow-sensitive rule (only values used as halves on every path) would allow
+following chosen lanes, but that analysis is not in this base. Verified by
+translating the container: the extract's `half_views` is `[(0, 16)]`; the
+whole pack still emits (14,247 pixel/vertex, 2,682 compute, 8,765 mesh), and
+the 120 s run has no fault.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |

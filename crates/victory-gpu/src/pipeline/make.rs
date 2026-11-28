@@ -40,7 +40,18 @@ pub(crate) struct Pending {
     /// How long draws have waited for it so far, in microseconds
     /// ([`wait_once`]).
     waited_us: AtomicU64,
+    /// The heads' blend-shape map ([`HEAD_MAP`]): the title dispatches it
+    /// once, so its first dispatch waits for the pipeline rather than being
+    /// dropped while it is made.
+    pub(crate) head_map: bool,
 }
+
+/// The compute program that builds the heads' blend-shape map, dispatched
+/// once at the world's start: a dropped dispatch leaves the faces without
+/// their lower face (eyes and teeth only).
+/// (TaynanGT/Vice-Tay #372 after avatarmanz/VIctory-7900XTX #166; the same
+/// finding in trustno1-coder/VIctory-NVIDIA #970/#703.)
+const HEAD_MAP: &str = "61e54e90adccaf6a";
 
 /// The light in water's volume, in tiles (water_shading:CS_TransmissionVolumetrics_Tiled
 /// and _Tiled_LocalLights, the title 1.0.2.1): one 64-lane wave a group, which
@@ -124,6 +135,7 @@ impl Pending {
         }
         key.update(graphics.as_ref().map(|g| g.describe()).unwrap_or_default().as_bytes());
         let left_out = left_out(&shaders);
+        let head_map = shaders.iter().any(|s| s.hash == HEAD_MAP);
         Pending {
             shaders,
             graphics,
@@ -134,6 +146,7 @@ impl Pending {
             key: key.finalize().to_hex()[..32].to_owned(),
             used: AtomicBool::new(false),
             waited_us: AtomicU64::new(0),
+            head_map,
         }
     }
 
@@ -244,6 +257,43 @@ pub(crate) fn ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
     if p.made.get().is_none() {
         start(p, REQUESTED);
         wait(p, crate::frame::current());
+    }
+    p.made.get()?.as_ref()
+}
+
+/// The host pipeline of the heads' blend-shape map ([`HEAD_MAP`]) for its
+/// first dispatch: if it is not made, waits up to two seconds for the
+/// worker, rather than the frame's budget, because the title dispatches it
+/// only once. `VICTORY_HEAD_MAP_WAIT=0`: the ordinary wait.
+pub(crate) fn head_ready(p: &Arc<Pending>) -> Option<&HostPipeline> {
+    static ON: OnceLock<bool> = OnceLock::new();
+    if !*ON.get_or_init(|| std::env::var_os("VICTORY_HEAD_MAP_WAIT").is_none_or(|v| v != "0")) {
+        return ready(p);
+    }
+    if p.left_out.is_some() {
+        return None;
+    }
+    if p.made.get().is_none() {
+        static SAID: std::sync::Once = std::sync::Once::new();
+        SAID.call_once(|| {
+            tracing::info!(
+                hash = HEAD_MAP,
+                "the heads' blend-shape map is dispatched: its pipeline is waited for once"
+            );
+        });
+        start(p, REQUESTED);
+        let (lock, done) = &DONE;
+        let mut held = lock.lock().unwrap_or_else(|e| e.into_inner());
+        let started = Instant::now();
+        while p.made.get().is_none()
+            && !slow(p)
+            && started.elapsed() < Duration::from_secs(2)
+        {
+            held = done
+                .wait_timeout(held, Duration::from_millis(50))
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
     }
     p.made.get()?.as_ref()
 }
@@ -390,6 +440,9 @@ const REQUESTED: u8 = 2;
 const MAKING: u8 = 3;
 
 struct Queue {
+    /// The heads' blend-shape map: a one-shot producer, made before
+    /// anything else.
+    head: VecDeque<Arc<Pending>>,
     early: VecDeque<Arc<Pending>>,
     requested: VecDeque<Arc<Pending>>,
 }
@@ -397,6 +450,7 @@ struct Queue {
 impl Queue {
     const fn new() -> Self {
         Self {
+            head: VecDeque::new(),
             early: VecDeque::new(),
             requested: VecDeque::new(),
         }
@@ -410,7 +464,9 @@ impl Queue {
             return None;
         }
         p.queue_state.store(priority, Ordering::Relaxed);
-        if priority == REQUESTED {
+        if p.head_map {
+            self.head.push_back(p.clone());
+        } else if priority == REQUESTED {
             self.requested.push_back(p.clone());
         } else {
             self.early.push_back(p.clone());
@@ -419,7 +475,7 @@ impl Queue {
     }
 
     fn pop(&mut self) -> Option<Arc<Pending>> {
-        let p = self.requested.pop_front().or_else(|| {
+        let p = self.head.pop_front().or_else(|| self.requested.pop_front()).or_else(|| {
             // An early entry can have been promoted and claimed already.
             std::iter::from_fn(|| self.early.pop_front())
                 .find(|p| p.queue_state.load(Ordering::Relaxed) == EARLY)
