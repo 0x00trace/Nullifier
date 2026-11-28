@@ -455,6 +455,27 @@ fn card_piece_of(start: usize, len: usize, span: &CardSpan, i: u32) -> (usize, u
     (lo.max(span.from as usize), hi.min(span.to as usize))
 }
 
+/// Of the offsets `[lo, hi)` of a copy of title memory from `start` on:
+/// those that lie in `parts`, ranges of title addresses in order and apart.
+fn parts_of(
+    start: usize,
+    lo: usize,
+    hi: usize,
+    parts: &[(usize, usize)],
+) -> impl Iterator<Item = (usize, usize)> + '_ {
+    let first = parts.partition_point(|&(_, end)| end.saturating_sub(start) <= lo);
+    parts[first..]
+        .iter()
+        .map(move |&(from, to)| {
+            (
+                from.saturating_sub(start).max(lo),
+                to.saturating_sub(start).min(hi),
+            )
+        })
+        .take_while(move |&(from, _)| from < hi)
+        .filter(|&(from, to)| from < to)
+}
+
 #[cfg(test)]
 mod card_least_tests {
     use super::card_least;
@@ -478,7 +499,9 @@ mod card_least_tests {
 
 #[cfg(test)]
 mod card_tests {
-    use super::{CardSpan, PIECE, card_piece_of, card_span_of, joined, joined_piece_runs};
+    use super::{
+        CardSpan, PIECE, card_piece_of, card_span_of, joined, joined_piece_runs, parts_of,
+    };
 
     /// Joined runs hold every piece of the runs given, once, and no other.
     #[test]
@@ -531,6 +554,38 @@ mod card_tests {
                 assert_eq!(at, to, "{start:#x} {from} {to}");
             }
         }
+    }
+
+    /// Of a piece of a span made of ranges that do not touch, only the
+    /// ranges are fetched and merged: the bytes between them were not
+    /// declared, and a refresh may be writing them.
+    #[test]
+    fn a_piece_of_a_span_of_several_ranges_is_cut_to_the_ranges() {
+        // The copy starts 0x100 bytes into a piece of title memory.
+        let (start, len) = (3 * PIECE + 0x100, 4 * PIECE);
+        let end = PIECE - 0x100;
+        // Two ranges in the copy's first piece, and one across its end.
+        let parts: Vec<(usize, usize)> = [(0x10, 0x30), (0x200, 0x240), (end - 8, end + 8)]
+            .iter()
+            .map(|&(a, b)| (start + a, start + b))
+            .collect();
+        let span = card_span_of(start, 0x10, end + 8);
+        assert_eq!(span.pieces, 2);
+        let cut = |i: u32, parts: &[(usize, usize)]| {
+            let (lo, hi) = card_piece_of(start, len, &span, i);
+            parts_of(start, lo, hi, parts).collect::<Vec<_>>()
+        };
+        assert_eq!(
+            cut(0, &parts),
+            [(0x10, 0x30), (0x200, 0x240), (end - 8, end)]
+        );
+        assert_eq!(cut(1, &parts), [(end, end + 8)]);
+        // A span of one range: each piece whole, as far as the span goes.
+        let whole = [(start + 0x10, start + end + 8)];
+        assert_eq!(cut(0, &whole), [(0x10, end)]);
+        assert_eq!(cut(1, &whole), [(end, end + 8)]);
+        // A piece that no range lies in gives nothing.
+        assert!(cut(1, &parts[..2]).is_empty());
     }
 
     /// Changed ranges are joined where they overlap or touch, and only there.
@@ -2789,9 +2844,79 @@ impl Shadow {
         card_span_of(self.start as usize, from.min(to.saturating_sub(1)), to)
     }
 
-    /// The offsets of piece `i` of `span` that lie in the span.
-    pub(crate) fn card_piece(&self, span: &CardSpan, i: u32) -> (usize, usize) {
-        card_piece_of(self.start as usize, self.len as usize, span, i)
+    /// Diagnostics, before [`Shadow::card_merge_relay`] of the same piece:
+    /// the bytes that merge will take for what shaders wrote (those that
+    /// differ from the CPU's side and are not title bytes still to go up
+    /// or sent up after the fetch), how many of them lie outside every
+    /// range `allowed` knows (title addresses), and the first such address.
+    #[cfg(feature = "diagnostics")]
+    pub(crate) fn card_changed_outside(
+        &self,
+        at: usize,
+        gpu: &[u8],
+        fetched_after: u64,
+        allowed: impl Fn(usize, usize) -> bool,
+    ) -> (usize, usize, Option<usize>) {
+        let start = self.start as usize;
+        let Some(card) = &self.card else {
+            return (0, 0, None);
+        };
+        if at + gpu.len() > self.len as usize {
+            return (0, 0, None);
+        }
+        let _side = self.before.lock().unwrap_or_else(|e| e.into_inner());
+        // SAFETY: inside the mapping (checked above); read only, under the
+        // lock that the merge writes it under.
+        let held = unsafe { std::slice::from_raw_parts(self.data.add(at), gpu.len()) };
+        let skip: Vec<(usize, usize)> = {
+            let dirty = card.dirty.lock().unwrap_or_else(|e| e.into_inner());
+            let sent = card.sent.lock().unwrap_or_else(|e| e.into_inner());
+            dirty
+                .iter()
+                .copied()
+                .chain(
+                    sent.iter()
+                        .filter(|s| s.2 > fetched_after)
+                        .map(|s| (s.0, s.1)),
+                )
+                .filter(|&(a, b)| a < at + gpu.len() && b > at)
+                .collect()
+        };
+        let (mut bytes, mut out, mut first) = (0, 0, None);
+        for (a, b) in outside(at, at + gpu.len(), skip) {
+            for (r, n) in changed_runs(&gpu[a - at..b - at], &held[a - at..b - at]) {
+                bytes += n;
+                let from = start + a + r;
+                if !allowed(from, from + n) {
+                    out += n;
+                    first.get_or_insert(from);
+                }
+            }
+        }
+        (bytes, out, first)
+    }
+
+    /// Whether this is no copy but a buffer placed on title memory itself,
+    /// which shaders write directly: nothing is declared for it.
+    pub(crate) fn in_place(&self) -> bool {
+        self.place.is_some()
+    }
+
+    /// The offsets of piece `i` of `span` that lie in `parts`: the declared
+    /// ranges the span was made of (title addresses, in order and apart).
+    /// This is what is fetched and merged of a piece the compare found
+    /// differing. A span of ranges that do not touch also holds the bytes
+    /// between them, which no submission declared: refreshes write those
+    /// before the submission has been copied back, so nothing of them is
+    /// taken back.
+    pub(crate) fn card_piece_parts<'a>(
+        &self,
+        span: &CardSpan,
+        i: u32,
+        parts: &'a [(usize, usize)],
+    ) -> impl Iterator<Item = (usize, usize)> + 'a {
+        let (lo, hi) = card_piece_of(self.start as usize, self.len as usize, span, i);
+        parts_of(self.start as usize, lo, hi, parts)
     }
 
     /// After a submission, for a copy in the card's memory: `gpu` is what

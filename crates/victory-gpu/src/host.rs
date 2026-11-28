@@ -2023,6 +2023,10 @@ struct CardRange {
     shadow: std::sync::Arc<crate::shadow::Shadow>,
     /// As declared (title addresses), for the statistics.
     declared: (usize, usize),
+    /// The declared ranges the span is made of (title addresses, in order
+    /// and apart): one, the span itself, unless ranges close to each other
+    /// were joined for the compare. Only these are fetched and merged.
+    parts: Vec<(usize, usize)>,
     span: crate::shadow::CardSpan,
     /// Its first piece's dword in the compare's results.
     at: u32,
@@ -2068,9 +2072,35 @@ enum Step {
     Host(Box<dyn Fn() + Send>),
     /// Shaders write a range (address, bytes) of a buffer's host copy.
     GpuWrite(std::sync::Arc<crate::shadow::Shadow>, usize, usize),
+    /// Shaders write a buffer's host copy through a view of all of it, and
+    /// where they store is bounded when the list is submitted
+    /// (`crate::cull`).
+    GpuWriteBounded(Box<crate::cull::Bounded>),
     /// Brings a texture's staging buffer up to date: once per submission,
     /// whichever lists sample it, until a `Copy` or `Run` intervenes.
     Texture(std::sync::Arc<crate::texture::Staging>),
+}
+
+impl Step {
+    /// The ranges (address, bytes) of host copies that the step declares
+    /// as written by shaders: for a bounded declaration, those found when
+    /// the list was last submitted (`HostList::run_deferred`).
+    fn declares(&self, mut each: impl FnMut(&std::sync::Arc<crate::shadow::Shadow>, usize, usize)) {
+        match self {
+            Step::GpuWrite(shadow, address, len) => each(shadow, *address, *len),
+            Step::GpuWriteBounded(bounded) if !bounded.check => {
+                for &(from, to) in bounded
+                    .found
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                {
+                    each(&bounded.shadow, from, to - from);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// What a list does on the CPU when it is submitted: copies between host
@@ -2625,7 +2655,10 @@ fn blocked_by(written: &[(usize, usize)], runs: &[&HostList], count: bool) -> Op
                     }
                 }
                 Step::Run(_) => return Some(WHY_RUN),
-                Step::Refresh(..) | Step::GpuWrite(..) | Step::Host(_) => {}
+                Step::Refresh(..)
+                | Step::GpuWrite(..)
+                | Step::GpuWriteBounded(_)
+                | Step::Host(_) => {}
             }
         }
     }
@@ -3394,8 +3427,8 @@ fn declared_writes(runs: &[&HostList]) -> Vec<Declared> {
     let mut back: Vec<Declared> = Vec::new();
     for list in runs {
         for step in &list.deferred().copies {
-            if let Step::GpuWrite(shadow, address, len) = step {
-                let range = (*address, *address + *len);
+            step.declares(|shadow, address, len| {
+                let range = (address, address + len);
                 match back.iter_mut().find(|(s, _)| std::sync::Arc::ptr_eq(s, shadow)) {
                     Some((_, ranges)) => {
                         if !ranges.contains(&range) {
@@ -3404,7 +3437,7 @@ fn declared_writes(runs: &[&HostList]) -> Vec<Declared> {
                     }
                     None => back.push((shadow.clone(), vec![range])),
                 }
-            }
+            });
         }
     }
     back
@@ -3773,10 +3806,11 @@ impl Host {
         let mut declared: Vec<(Arc<crate::shadow::Shadow>, Vec<(usize, usize)>)> = Vec::new();
         for list in runs {
             for step in &list.deferred().copies {
-                if let Step::GpuWrite(shadow, address, len) = step
-                    && shadow.carded()
-                {
-                    let range = (*address, *address + *len);
+                step.declares(|shadow, address, len| {
+                    if !shadow.carded() {
+                        return;
+                    }
+                    let range = (address, address + len);
                     match declared.iter_mut().find(|(s, _)| Arc::ptr_eq(s, shadow)) {
                         Some((_, ranges)) => {
                             if !ranges.contains(&range) {
@@ -3785,7 +3819,7 @@ impl Host {
                         }
                         None => declared.push((shadow.clone(), vec![range])),
                     }
-                }
+                });
             }
         }
         // With the relay: the order of the queue is held from here until
@@ -3909,18 +3943,39 @@ impl Host {
         // Each byte once, as the copy-back joins the declared ranges. The
         // results go behind those of plans still in the air.
         let mut at = work.taken;
+        // With the culling programs' bounds (`crate::cull`) a copy has
+        // dozens of small ranges in a few 64 KiB pieces, and a compare pass
+        // for each was 1,260 passes a frame for 435: ranges less than a
+        // piece apart are compared as one span. The compare is by piece,
+        // so it reads the same pieces either way. What is fetched and
+        // merged stays the declared ranges (`parts`): refreshes may write
+        // the bytes between them, and no shader does.
+        let near = if crate::cull::mode() == 2 {
+            crate::watch::PAGE
+        } else {
+            0
+        };
         for (shadow, ranges) in &declared {
             let mut sorted = ranges.clone();
             sorted.sort_unstable();
-            let mut spans: Vec<(usize, usize)> = Vec::new();
+            let mut spans: Vec<(usize, usize, Vec<(usize, usize)>)> = Vec::new();
             for (from, to) in sorted {
                 match spans.last_mut() {
-                    Some(last) if from <= last.1 => last.1 = last.1.max(to),
-                    _ => spans.push((from, to)),
+                    Some(last) if from <= last.1 => {
+                        last.1 = last.1.max(to);
+                        if let Some(part) = last.2.last_mut() {
+                            part.1 = part.1.max(to);
+                        }
+                    }
+                    Some(last) if from < last.1 + near => {
+                        last.1 = to;
+                        last.2.push((from, to));
+                    }
+                    _ => spans.push((from, to, vec![(from, to)])),
                 }
             }
             let twin = shadow.card_sides().is_some_and(|(_, before, _)| before.is_some());
-            for (from, to) in spans {
+            for (from, to, parts) in spans {
                 let Some(span) = shadow.card_span(from, to) else {
                     continue;
                 };
@@ -3940,6 +3995,7 @@ impl Host {
                 plan.ranges.push(CardRange {
                     shadow: shadow.clone(),
                     declared: (from, to),
+                    parts,
                     span,
                     at,
                     compared,
@@ -4114,10 +4170,11 @@ impl Host {
                         if !fetched.contains(&(copy, r.span.first + p)) {
                             continue;
                         }
-                        let (lo, hi) = r.shadow.card_piece(&r.span, p);
-                        if lo < hi && seen.insert((copy, lo, hi)) {
-                            pieces.push((r.shadow.clone(), lo, hi, total));
-                            total += (hi - lo) as u64;
+                        for (lo, hi) in r.shadow.card_piece_parts(&r.span, p, &r.parts) {
+                            if seen.insert((copy, lo, hi)) {
+                                pieces.push((r.shadow.clone(), lo, hi, total));
+                                total += (hi - lo) as u64;
+                            }
                         }
                     }
                     crate::shadow::CARD_STATS[2].fetch_add(u64::from(r.span.pieces), Ordering::Relaxed);
@@ -4212,6 +4269,12 @@ impl Host {
             // SAFETY: the mapping of the fetched bytes, `total` of them;
             // the copy into it has run.
             let gpu = unsafe { std::slice::from_raw_parts((data + *at as usize) as *const u8, hi - lo) };
+            #[cfg(feature = "diagnostics")]
+            if crate::cull::mode() == 1 {
+                let (bytes, outside, first) =
+                    shadow.card_changed_outside(*lo, gpu, after, crate::cull::check::allowed);
+                crate::cull::check::changed(bytes, outside, first);
+            }
             written += shadow.card_merge_relay(*lo, gpu, after, &mut title);
         }
         COPY_BACK[1].fetch_add(written as u64, Ordering::Relaxed);
@@ -4373,10 +4436,11 @@ impl Host {
                 if r.compared && differs[(r.at + p) as usize] == 0 {
                     continue;
                 }
-                let (lo, hi) = r.shadow.card_piece(&r.span, p);
-                if lo < hi && seen.insert((std::sync::Arc::as_ptr(&r.shadow) as usize, lo, hi)) {
-                    pieces.push((i, lo, hi, total));
-                    total += (hi - lo) as u64;
+                for (lo, hi) in r.shadow.card_piece_parts(&r.span, p, &r.parts) {
+                    if seen.insert((std::sync::Arc::as_ptr(&r.shadow) as usize, lo, hi)) {
+                        pieces.push((i, lo, hi, total));
+                        total += (hi - lo) as u64;
+                    }
                 }
             }
             crate::shadow::CARD_STATS[2].fetch_add(u64::from(r.span.pieces), Ordering::Relaxed);
@@ -4459,6 +4523,18 @@ impl Host {
                     // SAFETY: the mapping of the fetched bytes, `total` of
                     // them; the copy into it has run.
                     let gpu = unsafe { std::slice::from_raw_parts((*data + at as usize) as *const u8, hi - lo) };
+                    #[cfg(feature = "diagnostics")]
+                    if crate::cull::mode() == 1 {
+                        // Nothing of the title's is still to go up here:
+                        // every byte that differs is a shader's.
+                        let (bytes, outside, first) = plan.ranges[i].shadow.card_changed_outside(
+                            lo,
+                            gpu,
+                            u64::MAX,
+                            crate::cull::check::allowed,
+                        );
+                        crate::cull::check::changed(bytes, outside, first);
+                    }
                     written[i] += plan.ranges[i].shadow.card_merge(lo, gpu, &mut title);
                 }
             }
@@ -5848,6 +5924,14 @@ impl HostList {
             .push(Step::GpuWrite(shadow.clone(), address, len));
     }
 
+    /// Shaders of the list write a buffer's host copy through a view of
+    /// all of it, within a bound that is found when the list is submitted.
+    pub(crate) fn defer_gpu_write_bounded(&self, bounded: crate::cull::Bounded) {
+        self.deferred()
+            .copies
+            .push(Step::GpuWriteBounded(Box::new(bounded)));
+    }
+
     /// A read back: once the list has run, `rows` rows of `row` bytes go
     /// from `buffer` (rows 256-byte pitched, see `PlacedFootprint::host_rows`)
     /// to title memory at `dst`, pitched `pitch`. The buffer lives until
@@ -6204,7 +6288,41 @@ impl HostList {
                     }
                     continue;
                 }
+                Step::GpuWriteBounded(bounded) => {
+                    // The records are the title's, read from its memory as
+                    // it is now: the steps before this one have run.
+                    let found = crate::cull::bound(&bounded.batches, |at, out| {
+                        read_into(at as *const u8, out)
+                    });
+                    #[cfg(feature = "diagnostics")]
+                    crate::cull::check::bound_made(
+                        (
+                            bounded.batches.heap,
+                            bounded.batches.heap + bounded.batches.heap_len,
+                        ),
+                        found.as_deref(),
+                    );
+                    let mut ranges = bounded.found.lock().unwrap_or_else(|e| e.into_inner());
+                    ranges.clear();
+                    if bounded.check {
+                        continue;
+                    }
+                    // No bound: the whole view, as without the switch.
+                    *ranges = found
+                        .unwrap_or_else(|| vec![(bounded.address, bounded.address + bounded.len)]);
+                    batch.flush_one(&bounded.shadow);
+                    for &(from, to) in ranges.iter() {
+                        bounded.shadow.writing(from, to - from);
+                        #[cfg(feature = "diagnostics")]
+                        add(C::GpuWrites, 1);
+                    }
+                    continue;
+                }
                 Step::GpuWrite(shadow, address, len) => {
+                    #[cfg(feature = "diagnostics")]
+                    if crate::cull::mode() == 1 && (*len as u64) < crate::cull::WHOLE {
+                        crate::cull::check::allow(&[(*address, *address + *len)]);
+                    }
                     // The shaders start from the title's data: this copy's
                     // pending refresh first. The other copies' wait for
                     // the next flush of all (flushing all of them at every
@@ -6990,6 +7108,8 @@ impl Meter {
         late_line(frames);
         back_probe::line(frames);
         fill_ahead::line(frames);
+        #[cfg(feature = "diagnostics")]
+        crate::cull::check::line(frames);
         #[cfg(feature = "diagnostics")]
         crate::draw::clamp_line(frames);
         card_clock_line(frames, ms);

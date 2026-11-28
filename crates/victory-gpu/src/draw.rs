@@ -1906,7 +1906,20 @@ impl State {
             once!("a dispatch with a graphics pipeline");
             return;
         }
-        if !self.bind(list, p, true) {
+        // The title's culling programs store through a view of its whole
+        // heap: what they can store to is bounded when the list is
+        // submitted (`crate::cull`, `VICTORY_CULL_RANGES`).
+        let culling = crate::cull::mode() != 0 && crate::cull::is_culling(&p.name);
+        if culling && crate::cull::mode() == 2 {
+            crate::cull::binding();
+        }
+        let bound = self.bind(list, p, true);
+        let withheld = if culling {
+            crate::cull::bound_views()
+        } else {
+            Vec::new()
+        };
+        if !bound {
             DROPPED.fetch_add(1, Ordering::Relaxed);
             // A stage of the structure builder that cannot be bound is a
             // dropped stage: the others stop too.
@@ -1914,6 +1927,9 @@ impl State {
                 crate::pipeline::builder_off("one of its dispatches could not be bound");
             }
             return;
+        }
+        if culling {
+            self.cull_bound(list, x, withheld);
         }
         #[cfg(feature = "diagnostics")]
         list.note_op(|| self.op_text(format!("dispatch {x}x{y}x{z}"), true));
@@ -1936,6 +1952,62 @@ impl State {
             _ => unsafe { list.list.Dispatch(x, y, z) },
         }
         DISPATCHED.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// For a dispatch of `groups` work groups of one of the title's
+    /// culling programs, after its views are bound: declares what its
+    /// shaders write through the view of the whole heap as a bound found
+    /// at submission. `withheld`: the view's own declaration was left out
+    /// for it (`crate::cull::mode` 2); else the bound is only checked.
+    /// Where the views are not as the programs have them, the whole view
+    /// is declared, as without the switch.
+    fn cull_bound(&self, list: &HostList, groups: u32, withheld: Vec<crate::cull::Declared>) {
+        // A buffer view's copy and range: the view of the heap in the first
+        // table, the table of batch records in the second.
+        let buffer = |slot: usize, dword: u32| {
+            let Some(&Root::Table(table)) = self.roots_ref(true).get(slot) else {
+                return None;
+            };
+            let view = crate::descriptor::view(table + u64::from(dword) * 4)?;
+            let placed = crate::descriptor::host::placed_texture(&view);
+            crate::descriptor::host::buffer_copy(placed.as_ref().unwrap_or(&view))
+        };
+        let check = crate::cull::mode() == 1;
+        let whole = buffer(0, crate::cull::WHOLE_AT).filter(|w| w.2 >= crate::cull::WHOLE);
+        let batches = buffer(1, crate::cull::BATCHES_AT).filter(|b| b.2 >= 4 * u64::from(groups));
+        // With the declaration withheld: a bound only if what was withheld
+        // is that one view, the programs' view of the heap.
+        let fits = check
+            || matches!((&withheld[..], &whole), ([w], Some(v)) if std::sync::Arc::ptr_eq(&w.0, &v.0) && (w.1, w.2) == (v.1, v.2));
+        match (whole, batches) {
+            (Some((shadow, address, len)), Some((_, table, _))) if fits && groups > 0 => {
+                // In place the shaders write title memory itself.
+                if shadow.in_place() {
+                    return;
+                }
+                let len = len.min(shadow.left(address));
+                list.defer_gpu_write_bounded(crate::cull::Bounded {
+                    address: address as usize,
+                    len: len as usize,
+                    batches: crate::cull::Batches {
+                        heap: address as usize,
+                        heap_len: len as usize,
+                        table: table as usize,
+                        groups,
+                    },
+                    check,
+                    found: std::sync::Mutex::new(Vec::new()),
+                    shadow,
+                });
+            }
+            // Not as the programs have their views: declared whole, as
+            // without the switch.
+            _ => {
+                for (shadow, address, len) in withheld {
+                    shadow.gpu_writes(list, address, len);
+                }
+            }
+        }
     }
 
     /// What a draw or dispatch runs, for the device-removed report
@@ -2981,7 +3053,11 @@ fn readable(list: &HostList, kind: ResourceType, view: &View) {
             // A shader that cannot store to buffers leaves the range as
             // the title has it: nothing to find afterwards.
             if STORES.get() || !write_skip() {
-                shadow.gpu_writes(list, address, len);
+                // A culling dispatch declares its view of the whole buffer
+                // itself, as a bound (`State::cull_bound`).
+                if !crate::cull::withhold(&shadow, address, len) {
+                    shadow.gpu_writes(list, address, len);
+                }
             } else {
                 #[cfg(feature = "diagnostics")]
                 {
