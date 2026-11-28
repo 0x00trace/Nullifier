@@ -1185,7 +1185,7 @@ fn textures() -> std::sync::MutexGuard<'static, std::collections::BTreeSet<usize
 /// title places in that memory in another format shows ([`alias_of`]). A
 /// texture leaves the table before it is freed.
 #[cfg(windows)]
-static TARGETS_AT: std::sync::Mutex<std::collections::BTreeMap<u64, usize>> =
+static TARGETS_AT: std::sync::Mutex<std::collections::BTreeMap<u64, Vec<usize>>> =
     std::sync::Mutex::new(std::collections::BTreeMap::new());
 
 /// For `this`, a texture made for a view the title placed in memory
@@ -1233,20 +1233,27 @@ pub(crate) fn alias_of(this: This) -> Option<This> {
         return None;
     }
     // Under the table's lock: a texture leaves it before it is freed.
+    // Two targets may lie at one address (aliasing in a heap): the view
+    // finds the one of its size and format, whichever was made last.
     let targets = TARGETS_AT.lock().unwrap_or_else(|e| e.into_inner());
-    let other = *targets.get(&(r.data() as u64))? as This;
-    let o = resource(other);
     const DEPTH: u32 = 0x2;
-    let same = one(&o.desc)
-        && o.desc.dimension == r.desc.dimension
-        && o.desc.width == r.desc.width
-        && o.desc.height == r.desc.height
-        && o.desc.mip_levels == r.desc.mip_levels
-        && o.desc.depth_or_array_size == r.desc.depth_or_array_size
-        && o.desc.flags & DEPTH == 0
-        && target_format(o.desc.format) == o.desc.format
-        && element(o.desc.format).is_some_and(|e| e.1 == 1 && Some(e) == element(r.desc.format));
-    same.then_some(other)
+    for &other in targets.get(&(r.data() as u64))? {
+        let other = other as This;
+        let o = resource(other);
+        let same = one(&o.desc)
+            && o.desc.dimension == r.desc.dimension
+            && o.desc.width == r.desc.width
+            && o.desc.height == r.desc.height
+            && o.desc.mip_levels == r.desc.mip_levels
+            && o.desc.depth_or_array_size == r.desc.depth_or_array_size
+            && o.desc.flags & DEPTH == 0
+            && target_format(o.desc.format) == o.desc.format
+            && element(o.desc.format).is_some_and(|e| e.1 == 1 && Some(e) == element(r.desc.format));
+        if same {
+            return Some(other);
+        }
+    }
+    None
 }
 
 /// Whether host copies are made on first use. On by default;
@@ -1810,7 +1817,9 @@ fn hand_out_resource(
             TARGETS_AT
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .insert(resource.data() as u64, at);
+                .entry(resource.data() as u64)
+                .or_default()
+                .push(at);
         }
         if !lazy() {
             let _ = hosted(at as This, true);
@@ -1834,8 +1843,12 @@ impl Drop for Resource {
             if !fills(&self.desc) {
                 let mut targets = TARGETS_AT.lock().unwrap_or_else(|e| e.into_inner());
                 let at = self.data() as u64;
-                if targets.get(&at) == Some(&(std::ptr::from_ref::<Resource>(self) as usize)) {
-                    targets.remove(&at);
+                let me = std::ptr::from_ref::<Resource>(self) as usize;
+                if let Some(list) = targets.get_mut(&at) {
+                    list.retain(|&x| x != me);
+                    if list.is_empty() {
+                        targets.remove(&at);
+                    }
                 }
             }
         }

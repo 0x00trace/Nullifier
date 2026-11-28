@@ -2360,6 +2360,103 @@ fn twin_uav(
     Some(desc)
 }
 
+/// A shader-resource view of `texture` as the title's view with no
+/// description means it: the resource's own format and its whole chain, for
+/// a host copy that is typeless (the console's format is named instead, or
+/// D3D12 leaves such a view null and the texture reads black).
+fn plain_srv(texture: &ID3D12Resource, format: u32) -> D3D12_SHADER_RESOURCE_VIEW_DESC {
+    // SAFETY: a live resource.
+    let d = unsafe { texture.GetDesc() };
+    let mut desc = D3D12_SHADER_RESOURCE_VIEW_DESC {
+        Format: DXGI_FORMAT(format as i32),
+        ..Default::default()
+    };
+    match d.Dimension {
+        D3D12_RESOURCE_DIMENSION_TEXTURE1D => {
+            desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE1D;
+            desc.Anonymous.Texture1D = D3D12_TEX1D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: u32::from(d.MipLevels),
+                ResourceMinLODClamp: 0.0,
+            };
+        }
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D if d.DepthOrArraySize > 1 => {
+            desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+            desc.Anonymous.Texture2DArray = D3D12_TEX2D_ARRAY_SRV {
+                MostDetailedMip: 0,
+                MipLevels: u32::from(d.MipLevels),
+                FirstArraySlice: 0,
+                ArraySize: u32::from(d.DepthOrArraySize),
+                PlaneSlice: 0,
+                ResourceMinLODClamp: 0.0,
+            };
+        }
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
+            desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+            desc.Anonymous.Texture2D = D3D12_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: u32::from(d.MipLevels),
+                PlaneSlice: 0,
+                ResourceMinLODClamp: 0.0,
+            };
+        }
+        D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
+            desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+            desc.Anonymous.Texture3D = D3D12_TEX3D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: u32::from(d.MipLevels),
+                ResourceMinLODClamp: 0.0,
+            };
+        }
+        _ => return desc,
+    }
+    desc
+}
+
+/// The same for unordered access (`View::Unordered`).
+fn plain_uav(texture: &ID3D12Resource, format: u32) -> D3D12_UNORDERED_ACCESS_VIEW_DESC {
+    // SAFETY: a live resource.
+    let d = unsafe { texture.GetDesc() };
+    let mut desc = D3D12_UNORDERED_ACCESS_VIEW_DESC {
+        Format: DXGI_FORMAT(format as i32),
+        ..Default::default()
+    };
+    match d.Dimension {
+        D3D12_RESOURCE_DIMENSION_TEXTURE1D => {
+            desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE1D;
+            desc.Anonymous.Texture1D = D3D12_TEX1D_UAV {
+                MipSlice: 0,
+            };
+        }
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D if d.DepthOrArraySize > 1 => {
+            desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+            desc.Anonymous.Texture2DArray = D3D12_TEX2D_ARRAY_UAV {
+                MipSlice: 0,
+                FirstArraySlice: 0,
+                ArraySize: u32::from(d.DepthOrArraySize),
+                PlaneSlice: 0,
+            };
+        }
+        D3D12_RESOURCE_DIMENSION_TEXTURE2D => {
+            desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+            desc.Anonymous.Texture2D = D3D12_TEX2D_UAV {
+                MipSlice: 0,
+                PlaneSlice: 0,
+            };
+        }
+        D3D12_RESOURCE_DIMENSION_TEXTURE3D => {
+            desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+            desc.Anonymous.Texture3D = D3D12_TEX3D_UAV {
+                MipSlice: 0,
+                FirstWSlice: 0,
+                WSize: u32::from(d.DepthOrArraySize),
+            };
+        }
+        _ => return desc,
+    }
+    desc
+}
+
 /// Makes the host descriptor for `view` at `at`: the host resource it
 /// views, or `None` if it cannot.
 fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
@@ -2412,6 +2509,11 @@ fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
                     }
                 }
                 let mut desc = desc.as_ref().map(srv_desc);
+                if desc.is_none()
+                    && let Some(format) = crate::resource::view_format(resource)
+                {
+                    desc = Some(plain_srv(texture, format));
+                }
                 if let Some(desc) = desc.as_mut() {
                     held_view(desc, crate::resource::held_from(resource));
                 }
@@ -2476,6 +2578,11 @@ fn make(view: &View, at: D3D12_CPU_DESCRIPTOR_HANDLE) -> Option<Kept> {
                 }
                 None => texture,
             };
+            if desc.is_none()
+                && let Some(format) = crate::resource::view_format(resource)
+            {
+                desc = Some(plain_uav(texture, format));
+            }
             if !fits(texture, desc.as_mut().map(|d| &mut d.Format), true) {
                 return None;
             }
