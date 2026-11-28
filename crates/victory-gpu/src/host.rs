@@ -3325,6 +3325,23 @@ fn late_line(frames: f64) {
              {runs:.0} changed runs, {:.2} MB",
             bytes / (1 << 20) as f64
         );
+        let unmerged = crate::shadow::unmerged_stats();
+        if !unmerged.is_empty() {
+            let copies: Vec<String> = unmerged
+                .iter()
+                .map(|(start, len, why, runs)| {
+                    let [not_watched, no_answer, over, no_snapshot] = why.map(|n| n as f64 / frames);
+                    format!(
+                        "{start:#x}+{len:#x}: not write-watched {not_watched:.2}, no answer from the journal {no_answer:.2}, \
+                         more changed runs than were left {over:.2} (up to {runs} on a page), no snapshot {no_snapshot:.2}"
+                    )
+                })
+                .collect();
+            tracing::info!(
+                "settles left due by it per frame, by copy and cause: {}",
+                copies.join("; ")
+            );
+        }
     }
 }
 

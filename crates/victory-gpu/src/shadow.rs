@@ -1468,6 +1468,29 @@ pub(crate) fn merged_stats() -> [u64; 3] {
     [0, 1, 2].map(|i| MERGED[i].swap(0, Ordering::Relaxed))
 }
 
+/// Why [`Shadow::merge_under_writes`] left a settle due.
+#[derive(Clone, Copy)]
+enum Unmerged {
+    /// The copy's memory is not write-watched.
+    NotWatched,
+    /// The journal could not say what was written.
+    NoAnswer,
+    /// A page had more changed runs than the submission had left.
+    Runs,
+    /// The copy has no snapshot.
+    NoSnapshot,
+}
+
+/// Since the last frame-rate line, by copy (title address and bytes): the
+/// times a settle was left due for each cause of [`Unmerged`], and the
+/// most changed runs a page had when they were too many.
+static UNMERGED: Mutex<Vec<(u64, u64, [u64; 4], u64)>> = Mutex::new(Vec::new());
+
+/// [`UNMERGED`], taken.
+pub(crate) fn unmerged_stats() -> Vec<(u64, u64, [u64; 4], u64)> {
+    std::mem::take(&mut *UNMERGED.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
 /// The runs of bytes where `now` differs from `was` (of one length), as
 /// (offset, bytes) in order: every differing byte is in a run and no equal
 /// byte is.
@@ -2487,6 +2510,25 @@ impl Shadow {
             })
     }
 
+    /// Notes that [`Shadow::merge_under_writes`] leaves a settle due (`runs`:
+    /// the changed runs of the page that were too many). Always true.
+    fn unmerged(&self, why: Unmerged, runs: usize) -> bool {
+        let mut all = UNMERGED.lock().unwrap_or_else(|e| e.into_inner());
+        let at = match all
+            .iter()
+            .position(|c| (c.0, c.1) == (self.start, self.len))
+        {
+            Some(at) => at,
+            None => {
+                all.push((self.start, self.len, [0; 4], 0));
+                all.len() - 1
+            }
+        };
+        all[at].2[why as usize] += 1;
+        all[at].3 = all[at].3.max(runs as u64);
+        true
+    }
+
     /// Where [`Shadow::stale_under_writes`] says yes: puts the bytes the
     /// title changed into the copy, in the ranges shaders may be writing,
     /// and only those bytes, so that what the shaders write beside them
@@ -2521,7 +2563,7 @@ impl Shadow {
             return false;
         }
         if self.watched.load(Ordering::Relaxed) == NOT_WATCHED {
-            return true;
+            return self.unmerged(Unmerged::NotWatched, 0);
         }
         let base = start / PAGE;
         let mut title = vec![0u8; PAGE];
@@ -2540,7 +2582,7 @@ impl Shadow {
         busy.sort_unstable();
         let last = busy.iter().map(|r| r.1).max().unwrap_or(busy[0].0);
         let Some((now, written)) = crate::watch::writes(busy[0].0, last, true) else {
-            return true;
+            return self.unmerged(Unmerged::NoAnswer, 0);
         };
         for (a, e) in busy {
             let written = {
@@ -2590,7 +2632,7 @@ impl Shadow {
                     let held = unsafe { std::slice::from_raw_parts_mut(self.data.add(at), n) };
                     let runs = changed_runs(title, held);
                     if runs.len() > *runs_left {
-                        return true;
+                        return self.unmerged(Unmerged::Runs, runs.len());
                     }
                     *runs_left -= runs.len();
                     for (r, m) in runs {
@@ -2601,7 +2643,7 @@ impl Shadow {
                     }
                 } else {
                     let Some(snapshot) = before.as_mut() else {
-                        return true;
+                        return self.unmerged(Unmerged::NoSnapshot, 0);
                     };
                     // SAFETY: the snapshot's allocation holds the copy's
                     // bytes at the copy's offsets (`writing`), and these

@@ -915,15 +915,19 @@ impl State {
             0 => None,
             h => crate::descriptor::heap(h as This).host(),
         }?;
-        let (mut addresses, mut constants) = (Vec::new(), Vec::new());
+        let (mut addresses, mut tables, mut constants) = (Vec::new(), Vec::new(), Vec::new());
         for root in self.roots_ref(compute) {
             match root {
-                Root::View(address) | Root::Table(address) => addresses.push(*address),
+                Root::View(address) => addresses.push(*address),
+                // For the shaders that read a table descriptor's dwords
+                // (`USER_TABLE_ADDRESS`): the table's pages, not the copy
+                // around them.
+                Root::Table(address) => tables.push(*address),
                 Root::Constants(values) => constants.extend_from_slice(values),
                 _ => {}
             }
         }
-        crate::memory::ready(list, heap, &addresses, &constants, writes)
+        crate::memory::ready(list, heap, &addresses, &tables, &constants, writes)
     }
 
     /// The bound heap holding `handle`.
