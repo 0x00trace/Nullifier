@@ -5777,11 +5777,43 @@ impl<'a> Lower<'a> {
             if count <= 4
                 && let Some((lo, hi)) = self.view_address(site)
             {
+                // The record count (dword 2) too, where the view is a
+                // buffer the code reads it from: the host view knows it.
+                let used = self.used_kind(&Source::Loaded { load: site, first: 0 });
+                let count_dword = used.filter(|u| {
+                    u.dwords == 4 && matches!(u.kind, ResourceType::Srv | ResourceType::Uav)
+                });
+                let n = count_dword.and_then(|used| {
+                    let props = if used.stride >= 4 && used.stride.is_multiple_of(4) {
+                        (12, used.stride)
+                    } else {
+                        (11, 0)
+                    };
+                    let src = Source::Loaded { load: site, first: 0 };
+                    self.handle(site, &src, false, props).ok().map(|h| {
+                        let c = self.cur;
+                        let i32t = self.s.t.i32;
+                        let dims =
+                            self.s.m.named_struct("dx.types.Dimensions", vec![i32t; 4]);
+                        let mip = self.s.m.undef(i32t);
+                        let d = self.s.op(c, "getDimensions", Attr::ReadOnly, dims, 72, &[h, mip]);
+                        self.s.m.extract(c, d, 0)
+                    })
+                });
                 for k in 0..count {
                     let reg = Reg::S(code + k as u8);
                     match k {
                         0 => self.write(inst, reg, lo, None),
                         1 => self.write(inst, reg, hi, None),
+                        2 => match n {
+                            Some(x) => self.write(inst, reg, x, None),
+                            None => {
+                                if let Some(v) = inst.write(reg) {
+                                    self.vals.insert(v, Val::Missing(OTHER));
+                                    self.stale.insert(v);
+                                }
+                            }
+                        },
                         _ => {
                             if let Some(v) = inst.write(reg) {
                                 self.vals.insert(v, Val::Missing(OTHER));
