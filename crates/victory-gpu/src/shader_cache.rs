@@ -147,9 +147,16 @@ fn cached(
         ran: AtomicBool::new(false),
     };
     for _ in 0..2 {
-        let path = cache
-            .get_or_convert(&converter, &input)
-            .map_err(|e| format!("{e:#}"))?;
+        // A cache that cannot be written (a full disk, a read-only folder)
+        // is no reason to drop a shader that translates: fall through to the
+        // translation without the cache (#113).
+        let path = match cache.get_or_convert(&converter, &input) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::debug!(error = %e, "shader cache could not be used; translating without it");
+                break;
+            }
+        };
         if let Some(shader) = std::fs::read(&path).ok().and_then(|b| decode(&b)) {
             let (counter, what) = if converter.ran.load(Ordering::Relaxed) {
                 (&MISSES, "translated and cached")
@@ -416,6 +423,26 @@ mod tests {
         // Failures are not stored.
         let fail = |_: &[u8]| Err::<HostShader, _>("unsupported".to_owned());
         assert!(cached(&cache, &build, b"other", fail).is_err());
+    }
+
+    /// A cache that cannot be written still gives the translation: a failed
+    /// store is not a failed translation (#113).
+    #[test]
+    fn a_cache_that_cannot_be_written_still_gives_the_translation() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path()).unwrap();
+        let build = [7u8; 32];
+        let container = b"a console container".as_slice();
+        let input = [&build[..], container].concat();
+        // A file where the entry's folder goes makes create_dir_all fail.
+        let probe = Translate {
+            translate: |_: &[u8]| Ok(shader()),
+            ran: AtomicBool::new(false),
+        };
+        let key = victory_pipeline::CacheKey::new(&probe, &input);
+        let path = cache.path_for(&key);
+        std::fs::write(path.parent().unwrap(), b"not a folder").unwrap();
+        assert_eq!(cached(&cache, &build, container, |_: &[u8]| Ok(shader())), Ok(shader()));
     }
 
     fn walk(dir: &std::path::Path) -> Vec<PathBuf> {
