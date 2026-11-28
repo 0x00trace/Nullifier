@@ -2747,6 +2747,25 @@ and the 120 s AMD run has no fault. The 4 KiB rule and the grace are the two
 that address black slots directly; the flicker they remove is the one from
 slots nulled or re-made beside a stream.
 
+## 3.40 The AMD texture flicker: a hard 4 GB cap with 7 GB of VRAM free (2026-11-28)
+
+The AMD profile set `VICTORY_TEXTURE_BUDGET_MB=4096`, and `resource::room`
+refused every new host copy of an index-picked texture at that many bytes,
+whatever the card had free. Measured on the RX 9070 XT here with the same
+binary and scene (330 s): at 4,148 MB of title-filled copies the layer refused
+(8-15 passes a frame "made none for lack of room") with 7.4 GB of VRAM free,
+then shed 2.2 GB of copies in one 5 s window and refilled — the black then
+textured then black cycle. At 12,288 MB: no refusal, 4,776 MB peak, index-
+picked uploads 3,181 -> 6,255 MB, waiting 5,551 -> 2,111.
+
+The cap is now a trigger: past it the card's own free memory decides (nine
+tenths of its budget in use), and only without a card to ask does a reached
+cap refuse. `linux-amd-16gb` sets 10,240 MB and `linux-amd-8gb` 6,144 MB; the
+texture pass may also spend `VICTORY_TEXTURE_QUEUE_MB` (1,024 on 16 GB) and
+`_MS` (1,000) a frame instead of 192 MB / 250 ms, which at a few frames a
+second had left thousands of slots due (fxceless #106). A 200 s world run is
+stable at 11.4-11.6 fps; the unit test has the card-free and card-full cases.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
