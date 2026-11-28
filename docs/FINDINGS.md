@@ -2713,6 +2713,40 @@ translating the container: the extract's `half_views` is `[(0, 16)]`; the
 whole pack still emits (14,247 pixel/vertex, 2,682 compute, 8,765 mesh), and
 the 120 s run has no fault.
 
+## 3.39 Textures that flicker or stay black: the 4 KiB span rule and a grace (2026-11-28)
+
+Three rules from VIctory-NVIDIA/demiurge, ported for the AMD path where the
+flicker shows:
+
+- **Spans (#310c6eb there).** A streamed texture keeps only its smallest
+  levels, and the next texture is placed where the larger levels would be,
+  so their descriptions overlap. Our rule made any overlapping view stale;
+  NVIDIA's makes an older view stale only when the newer one starts in its
+  first 4 KiB (or at its start). Packed neighbours now stay, and a view the
+  title writes no longer nulls the slots of the textures beside it.
+  `VICTORY_STALE_TEXTURES=overlap` restores the old rule; `=0` never stales.
+- **Away grace (#b9672fd there).** When a texture's memory is unmapped, its
+  slot is kept as it was for `VICTORY_TEXTURE_AWAY_MS` (3 s) instead of going
+  null at once; a title that unmaps and remaps a streamed texture showed
+  black faces, books and posters for 0.3 to 2 s. A remap clears the note.
+- **Hot textures (#c5b12f1 there).** A guarded texture is hashed at every
+  check for its first 64 frames and 64 frames after a change the guard did
+  not see, instead of every eighth frame: the intro's three-picture ring and
+  the six-star screen changed behind the guard and flickered.
+  `VICTORY_TEXTURE_HOT=0` leaves it as before.
+- A draw now also keeps the old view of the same placed texture while its
+  next mip view is being made (a mip blurrier for a frame beats black).
+
+The heads' blend-shape map pipeline is queued at creation and its first
+dispatch waits up to 2 s for it (`VICTORY_HEAD_MAP_WAIT=0` off): the title
+dispatches that program once, and a dropped dispatch leaves the faces without
+their lower face (TaynanGT/Vice-Tay #372; VIctory-NVIDIA #970/#703).
+
+Span, hot and never-stale rules have unit tests; the whole pack still emits
+and the 120 s AMD run has no fault. The 4 KiB rule and the grace are the two
+that address black slots directly; the flicker they remove is the one from
+slots nulled or re-made beside a stream.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
