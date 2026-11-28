@@ -2915,12 +2915,21 @@ left and right edge columns average 180-330 of 765, so no pillarbox, and the
 character, trees and dock are not stretched. The HUD (top right) is inside
 the frame. `VICTORY_OUTPUT=3440x1440` was the only variable set.
 
-**Caveats.** One size on one machine; 2560x1080, 3840x1080 and 5120x1440 use
-the same path but were not run. The frame rate was not measured: 3440x1440
-is 2.6 times the pixels of 2560x1440, so expect the GPU side to grow (the
-card is not the limit at 8 fps, so the effect may be small). The title's UI
-is laid out for 16:9 and looked right at 21:9 here; 32:9 has not been
-checked.
+**Caveats.** A second set, by the reviewer on Linux/NVIDIA (RTX 5080,
+`linux-nvidia-16gb`, 110 s of the opening, n = 14) checked all four sizes and
+all presented at the size asked, with no device removed:
+
+| `VICTORY_OUTPUT` | presented at | median |
+|---|---|---|
+| 2560x1080 | 2560x1080 | 14.00 fps |
+| 3440x1440 | 3440x1440 | 11.10 fps |
+| 3840x1080 | 3840x1080 | 12.00 fps |
+| 5120x1440 | 5120x1440 | 9.45 fps |
+
+The Windows frame rate at 21:9 was not measured: 3440x1440 is 2.6 times the
+pixels of 2560x1440, and the card here is not the limit at 8 fps, so the
+effect may be small. The title's UI is laid out for 16:9 and looked right at
+21:9 here; 32:9 has not been looked at.
 
 **What a play test at 3440x1440 showed.** The framebuffer is native 21:9
 (no scaling), and the world fills it. Three things were reported, and the

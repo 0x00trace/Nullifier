@@ -185,7 +185,7 @@ pub(crate) fn describe(key: &str) -> Option<Desc> {
         "VICTORY_TEXTURE_BUDGET_MB" => d(
             "Texture memory budget",
             "Texture data kept on the card. Higher looks sharper in motion; lower leaves room for other apps.",
-            "2048â€“4096 MB on a 16 GB card. Never more than your card's VRAM.",
+            "2048–4096 MB on a 16 GB card. Never more than your card's VRAM.",
         ),
         "VICTORY_TEXTURE_QUEUE_MB" => d(
             "Texture data per frame",
