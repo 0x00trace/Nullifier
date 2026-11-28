@@ -169,6 +169,16 @@ pub(crate) fn sections(p: &Program, block: usize) -> HashMap<usize, Section> {
         let Some(end) = end else {
             break;
         };
+        // A section that computes a 64-bit (double) sum is lowered
+        // instruction by instruction instead: the simulation follows 32-bit
+        // values, and the f64 path lowers the pair as an f32 shadow.
+        if insts[i + 1..end]
+            .iter()
+            .any(|x| matches!(x.name(), "v_add_f64" | "v_cvt_f32_f64"))
+        {
+            i = end + 1;
+            continue;
+        }
         let shapes = simulate(&insts[i + 1..end], wave, saved);
         out.insert(i, Section { end, shapes });
         i = end + 1;

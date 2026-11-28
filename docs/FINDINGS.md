@@ -2574,6 +2574,30 @@ its dword 2 rebuilt too, the record count, from `getDimensions` of the host
 view: `ShallowWaterSim:CS_MinTimestepReduce` compares it with 0 to leave an
 empty grid alone and read it as Missing before.
 
+## 3.33 Water volumetrics: a double-precision wave sum, translated in f32 (2026-11-28)
+
+The five `water_shading:CS_TransmissionVolumetrics*` programs sum a per-lane
+double across the wave: a DPP butterfly of `v_add_f64` inside a whole-wave
+section (`s_or_saveexec -1`), then `v_readlane`/`v_cvt_f32_f64` on the result.
+The section simulation follows 32-bit values and left the f64 steps unknown,
+so the programs stopped at the first use of the sum ("v_cvt_f32_f64").
+`v_add_f64` and `v_cvt_f32_f64` are the pack's only f64 instructions: they are
+now lowered as f32, keeping an `f64_shadow` bit on the pair's low dword and
+propagating it through `v_mov_b32`/`v_readlane_b32`/`s_mov_b32`, and a value
+loaded as a real double is converted from its high dword (sign, exponent and
+top mantissa bits). Sections that contain f64 steps are lowered instruction by
+instruction instead of simulated, which needs the host's lanes to be the
+console's: a ballot of a mask value is then always exact (the lanes outside
+EXEC do not execute the ballot), so the `mask_dword` refusal is relaxed where
+`console_lanes` holds.
+
+All five programs translate; the pack's emit failures are down to six (five
+`shadowmask:CS_TraceShadowRays` address walks and `PS_VoxelizeVisiblity`'s
+opaque mask). A 120 s world run is stable, 9.6-10.3 fps. The double
+accumulation is an f32 one now: water transmission may show a little less
+precision in very long paths, which the f32 alternative to dropping the pass
+accepts.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |

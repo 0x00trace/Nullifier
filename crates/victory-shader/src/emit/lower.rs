@@ -191,6 +191,10 @@ struct Lower<'a> {
     lane_fail: HashMap<Value, Why>,
     vals: HashMap<Value, Val>,
     floats: HashMap<Value, V>,
+    /// VGPRs and SGPRs holding an f64 value as an f32 in the low dword
+    /// (the water programs' double accumulations; the high dword is 0).
+    f64_shadow: [bool; 256],
+    f64_shadow_s: [bool; 256],
     /// DXIL block per IR block (unreachable: none).
     block: Vec<Option<usize>>,
     cur: usize,
@@ -1536,6 +1540,8 @@ impl<'a> Lower<'a> {
             lane_fail: HashMap::new(),
             vals: HashMap::new(),
             floats: HashMap::new(),
+            f64_shadow: [false; 256],
+            f64_shadow_s: [false; 256],
             block: vec![None; p.blocks.len()],
             cur: 0,
             bools: HashMap::new(),
@@ -3143,7 +3149,11 @@ impl<'a> Lower<'a> {
         // say) is the ballot of the lanes that are there: all of them, where two exchanging
         // host waves know every lane runs that block.
         let made = self.def_block.get(&lo).copied();
-        let whole = self.exchange.is_some() && !self.local && made.is_none_or(|b| self.all_lanes(b));
+        // The host's lanes are the console's: a ballot counts just the
+        // lanes that run, so a mask value's bits outside them are never
+        // seen (they belong to lanes that do not execute the ballot).
+        let whole = self.console_lanes
+            || self.exchange.is_some() && !self.local && made.is_none_or(|b| self.all_lanes(b));
         if !self.x.st.active.contains(&lo) && !whole {
             if self.exchange.is_some() && !self.local {
                 need(made.unwrap_or(0));
@@ -3985,6 +3995,23 @@ impl<'a> Lower<'a> {
     /// [`Self::write`] of a dword already placed (SDWA applied).
     fn write_placed(&mut self, inst: &Inst, reg: Reg, x: V, guard: Option<V>) {
         let Some(new) = inst.write(reg) else { return };
+        // A move of a pair's low dword: the copy holds an f32 shadow too.
+        if let Fields::Valu(v) = &inst.fields
+            && let Some(Operand::Vector { reg: src, .. }) = v.src.first()
+            && inst.name() == "v_mov_b32"
+            && self.f64_shadow[usize::from(*src)]
+            && let Reg::V(dst) = reg
+        {
+            self.f64_shadow[usize::from(dst)] = true;
+        }
+        if let Fields::Valu(v) = &inst.fields
+            && let Some(Operand::Vector { reg: src, .. }) = v.src.first()
+            && inst.name() == "v_readlane_b32"
+            && self.f64_shadow[usize::from(*src)]
+            && let Reg::S(dst) = reg
+        {
+            self.f64_shadow_s[usize::from(dst)] = true;
+        }
         let x = match (guard, reg) {
             (Some(g), Reg::V(_)) => {
                 let old = match inst.read(reg).map(|o| self.i32_of(o)) {
@@ -5234,6 +5261,13 @@ impl<'a> Lower<'a> {
                     Ok(())
                 }
                 "s_mov_b64" => {
+                    if let Some(&Operand::Scalar { code: from, .. }) = src.first()
+                        && from != NULL
+                        && self.f64_shadow_s[usize::from(from)]
+                        && let Some(dst) = dst_code
+                    {
+                        self.f64_shadow_s[usize::from(dst)] = true;
+                    }
                     // Each half by itself: two numbers that travel as a pair (two scalars
                     // parked in neighbouring VGPR lanes, say) need not both have a value.
                     for (h, v) in [(0, lo), (1, hi)] {
@@ -5260,7 +5294,16 @@ impl<'a> Lower<'a> {
         let m = &mut self.s.m;
         let _ = m;
         let (r, carry): (V, Option<V>) = match name {
-            "s_mov_b32" => (src32(self, 0)?, None),
+            "s_mov_b32" => {
+                if let Some(&Operand::Scalar { code: from, .. }) = src.first()
+                    && from != NULL
+                    && self.f64_shadow_s[usize::from(from)]
+                    && let Some(dst) = dst_code
+                {
+                    self.f64_shadow_s[usize::from(dst)] = true;
+                }
+                (src32(self, 0)?, None)
+            }
             "s_movk_i32" => (sext16(self), None),
             "s_cselect_b32" => {
                 let cond = self.scc_in(inst)?;
@@ -6712,6 +6755,10 @@ impl<'a> Lower<'a> {
             let guard = self.guard(b, i)?;
             return self.permlanex16(inst, guard);
         }
+        if name == "v_add_f64" || name == "v_cvt_f32_f64" {
+            let guard = self.guard(b, i)?;
+            return self.f64_op(inst, guard);
+        }
         if self.x.res.waterfall.compares.contains(&(b, i)) {
             // The first lane's dwords of a waterfall loop are each lane's
             // own (see `resource::Waterfall`).
@@ -6743,6 +6790,98 @@ impl<'a> Lower<'a> {
         let r = self.valu_op(inst, guard);
         self.src0 = None;
         r
+    }
+
+    /// The water shaders' double arithmetic, as f32: `v_add_f64` and
+    /// `v_cvt_f32_f64` are the only f64 instructions in the pack. A value a
+    /// `v_add_f64` produces is kept as an f32 in the low dword of its pair
+    /// (`f64_shadow`), which the next f64 instruction reads directly; a value
+    /// loaded as a real double is converted from its high dword (the low 29
+    /// mantissa bits are dropped: f32 has none of them). The double
+    /// accumulation is a long sum of small terms; f32 is enough for the
+    /// visible result and the alternative is dropping the pass.
+    fn f64_op(&mut self, inst: &Inst, guard: Option<V>) -> Result<(), Why> {
+        let Fields::Valu(v) = &inst.fields else {
+            unreachable!()
+        };
+        let Some(Operand::Vector { reg: dreg, .. }) = v.dst else {
+            return Err("an f64 destination");
+        };
+        match inst.name() {
+            "v_cvt_f32_f64" => {
+                let src = v.src.first().ok_or("an f64 operand")?;
+                let x = self.f64_f32(inst, src)?;
+                self.write(inst, Reg::V(dreg), x, guard);
+            }
+            "v_add_f64" => {
+                let a = *v.src.first().ok_or("an f64 operand")?;
+                let b = *v.src.get(1).ok_or("an f64 operand")?;
+                let a = self.f64_f32(inst, &a)?;
+                let b = self.f64_f32(inst, &b)?;
+                let af = self.as_float(a);
+                let bf = self.as_float(b);
+                let c = self.cur;
+                let sum = self.s.m.bin(c, Bin::Add, af, bf);
+                let bits = self.as_int(sum);
+                self.write(inst, Reg::V(dreg), bits, guard);
+                let zero = self.s.m.i32(0);
+                self.write(inst, Reg::V(dreg + 1), zero, guard);
+                self.f64_shadow[usize::from(dreg)] = true;
+            }
+            _ => unreachable!(),
+        }
+        Ok(())
+    }
+
+    /// The f32 bits of the 64-bit source `op`: its low dword when an
+    /// `f64_shadow` value, else the high dword's sign, exponent and top
+    /// mantissa bits placed as f32.
+    fn f64_f32(&mut self, inst: &Inst, op: &Operand) -> Result<V, Why> {
+        let (lo, hi) = match *op {
+            Operand::Vector { reg, .. } => {
+                if self.f64_shadow[usize::from(reg)] {
+                    let x = inst.read(Reg::V(reg)).ok_or("an f64 operand")?;
+                    return self.i32_of(x);
+                }
+                let lo = inst.read(Reg::V(reg)).ok_or("an f64 operand")?;
+                let hi = inst.read(Reg::V(reg + 1)).ok_or("an f64 operand")?;
+                (self.i32_of(lo)?, self.i32_of(hi)?)
+            }
+            Operand::Scalar { code, .. } if code != NULL => {
+                if self.f64_shadow_s[usize::from(code)] {
+                    let x = inst.read(Reg::S(code)).ok_or("an f64 operand")?;
+                    return self.i32_of(x);
+                }
+                let lo = inst.read(Reg::S(code)).ok_or("an f64 operand")?;
+                let hi = inst.read(Reg::S(code + 1)).ok_or("an f64 operand")?;
+                (self.i32_of(lo)?, self.i32_of(hi)?)
+            }
+            _ => return Err("an f64 operand"),
+        };
+        let c = self.cur;
+        let k = |l: &mut Self, n: u32| l.s.m.i32(n);
+        let (sign_m, exp_m, man_m, bias, sh20, sh23, sh3) =
+            (0x8000_0000, 0x7ff, 0xfffff, 896, 20, 23, 3);
+        let (sign_m, exp_m, man_m, bias, sh20, sh23, sh3) = (
+            k(self, sign_m),
+            k(self, exp_m),
+            k(self, man_m),
+            k(self, bias),
+            k(self, sh20),
+            k(self, sh23),
+            k(self, sh3),
+        );
+        let sign = self.s.m.bin(c, Bin::And, hi, sign_m);
+        let exp = self.s.m.bin(c, Bin::LShr, hi, sh20);
+        let exp = self.s.m.bin(c, Bin::And, exp, exp_m);
+        let exp = self.s.m.bin(c, Bin::Sub, exp, bias);
+        let exp = self.s.m.bin(c, Bin::Shl, exp, sh23);
+        let man = self.s.m.bin(c, Bin::And, hi, man_m);
+        let man = self.s.m.bin(c, Bin::Shl, man, sh3);
+        let bits = self.s.m.bin(c, Bin::Or, sign, exp);
+        let bits = self.s.m.bin(c, Bin::Or, bits, man);
+        let _ = lo;
+        Ok(bits)
     }
 
     /// `v_permlanex16_b32`: lane `l` reads the other 16-lane row of its
