@@ -109,6 +109,11 @@ cargo build --release --manifest-path tools/launcher/Cargo.toml
   by Nullifier**, not by the title, because the title ignores its own values:
   they set `VICTORY_OUTPUT`, `VICTORY_VSYNC` and `VICTORY_FPS_CAP` immediately
   (V-Sync Adaptive behaves as On; the layer has no adaptive present mode).
+  `VICTORY_OUTPUT` takes the title's own sizes (720p, 1664×936, 1080p, 1440p,
+  2160p) and the 21:9 and 32:9 sizes it has no mode for (2560×1080, 3440×1440,
+  3840×1080, 5120×1440); the host presents at whatever size the title's own
+  setter is given. The title's HUD and menus are designed for 16:9 — see
+  `docs/FINDINGS.md` F.1 for what an ultrawide size was checked to do.
   The rest are the title's settings. Values with a small named set are
   drop-downs (anisotropic 4×/8×/16×, FSR quality, quality presets, water
   reflection sizes), whole-number ranges are sliders, and 0–1 values show

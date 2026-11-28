@@ -160,6 +160,10 @@ impl App {
                             "1280x720" => "720p".to_string(),
                             "1920x1080" => "1080p".to_string(),
                             "2560x1440" => "1440p".to_string(),
+                            "2560x1080" => "Ultrawide 1080p (21:9)".to_string(),
+                            "3440x1440" => "Ultrawide 1440p (21:9)".to_string(),
+                            "3840x1080" => "Super ultrawide 1080p (32:9)".to_string(),
+                            "5120x1440" => "Super ultrawide 1440p (32:9)".to_string(),
                             "" => "4K (default)".to_string(),
                             other => format!("Custom ({other})"),
                         };
@@ -172,6 +176,10 @@ impl App {
                                     ("720p", "1280x720"),
                                     ("1080p", "1920x1080"),
                                     ("1440p", "2560x1440"),
+                                    ("Ultrawide 1080p (21:9)", "2560x1080"),
+                                    ("Ultrawide 1440p (21:9)", "3440x1440"),
+                                    ("Super ultrawide 1080p (32:9)", "3840x1080"),
+                                    ("Super ultrawide 1440p (32:9)", "5120x1440"),
                                     ("4K (default)", ""),
                                 ] {
                                     if ui

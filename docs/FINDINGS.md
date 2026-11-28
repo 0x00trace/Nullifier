@@ -2877,3 +2877,47 @@ Two-run variance of one config is ±30 %. Do not chase 10 %.
 * `VICTORY_KEYS` (diagnostics builds) presses keys at given seconds; it is the
   only way to drive the game headless. `VICTORY_CAPTURE` + `VICTORY_CAPTURE_FRAMES`
   write PNGs of presented frames.
+
+## F.1 `VICTORY_OUTPUT` on a 21:9 display (2026-11-28)
+
+The title's own mode table (`+0x615c0c0`) has five entries, all 16:9:
+1280x720, 1664x936, 1920x1080, 2560x1440, 3840x2160, each
+`(width, height, 60, 1)` in 16-byte records. The patch of 2.17 writes the
+asked size into the live settings and calls the title's setter, but on a
+3440x1440 desktop it still built a **2560x1440** swap chain: 3840x2160 does
+not fit the display, and 3440x1440 was not in the list to be chosen. The
+run's log made that plain:
+
+```
+resolution: settings' output size applied (3440x1440) at title+0x224352b: Done
+display mode reported to the title width=3440 height=1440
+presenting to a window width=2560 height=1440
+```
+
+**The change.** For a size that is not one of the five, the last mode record
+(3840x2160@60) is rewritten to the asked size, so the title's own selection
+can pick it, and the display size reported to the title falls back to
+`VICTORY_OUTPUT` when `VICTORY_DISPLAY_MODE` is unset. With
+`VICTORY_OUTPUT=3440x1440` alone, one 200 s run (RTX 4090, Windows
+10.0.26300, driver 32.0.16.1742, `windows-nvidia`, diag build, `main` @
+`47d9a33` plus this change):
+
+```
+resolution: the title's largest display mode (3440x1440) at title+0x615c100: Done
+resolution: settings' output size applied (3440x1440) at title+0x224352b: Done
+resolution: back buffer pool's left-over check (3440x1440) at title+0x247af25: Done
+display mode reported to the title width=3440 height=1440
+presenting to a window width=3440 height=1440 format=28
+```
+
+The captured frame (half size, 1720x720, aspect 2.389) fills the width: the
+left and right edge columns average 180-330 of 765, so no pillarbox, and the
+character, trees and dock are not stretched. The HUD (top right) is inside
+the frame. `VICTORY_OUTPUT=3440x1440` was the only variable set.
+
+**Caveats.** One size on one machine; 2560x1080, 3840x1080 and 5120x1440 use
+the same path but were not run. The frame rate was not measured: 3440x1440
+is 2.6 times the pixels of 2560x1440, so expect the GPU side to grow (the
+card is not the limit at 8 fps, so the effect may be small). The title's UI
+is laid out for 16:9 and looked right at 21:9 here; 32:9 has not been
+checked.
