@@ -6600,6 +6600,10 @@ impl<'a> Lower<'a> {
             unreachable!()
         };
         let name = inst.name();
+        if name == "v_permlanex16_b32" {
+            let guard = self.guard(b, i)?;
+            return self.permlanex16(inst, guard);
+        }
         if self.x.res.waterfall.compares.contains(&(b, i)) {
             // The first lane's dwords of a waterfall loop are each lane's
             // own (see `resource::Waterfall`).
@@ -6631,6 +6635,56 @@ impl<'a> Lower<'a> {
         let r = self.valu_op(inst, guard);
         self.src0 = None;
         r
+    }
+
+    /// `v_permlanex16_b32`: lane `l` reads the other 16-lane row of its
+    /// 32-lane half, at nibble `l & 15` of `{src2:src1}`. The console has
+    /// 64-lane waves; a host of 32-lane halves cannot reach the other half
+    /// with one shuffle, so that form is left unsupported (the wave64
+    /// exchange path handles other cross-half code).
+    fn permlanex16(&mut self, inst: &Inst, guard: Option<V>) -> Result<(), Why> {
+        if self.exchange.is_some() {
+            return Err("v_permlanex16 across host halves");
+        }
+        let Fields::Valu(v) = &inst.fields else {
+            unreachable!()
+        };
+        let Some(Operand::Vector { reg: dreg, .. }) = v.dst else {
+            return Err("a permlanex16 destination");
+        };
+        let src = |l: &mut Self, k: usize| -> Result<V, Why> {
+            let op = v.src.get(k).ok_or("a permlanex16 operand")?;
+            l.operand(inst, op)
+        };
+        let (a, b, c) = (src(self, 0)?, src(self, 1)?, src(self, 2)?);
+        let c0 = self.cur;
+        let (not31, sixteen, fifteen, four, thirtytwo, thirtyone) =
+            (!31, 16, 15, 4, 32, 31);
+        let (k_not31, k16, k15, k4, k32, k31) = (
+            self.s.m.i32(not31),
+            self.s.m.i32(sixteen),
+            self.s.m.i32(fifteen),
+            self.s.m.i32(four),
+            self.s.m.i32(thirtytwo),
+            self.s.m.i32(thirtyone),
+        );
+        self.s.flags |= flags::WAVE_OPS;
+        let lane = self.console_lane();
+        let base = self.s.m.bin(c0, Bin::And, lane, k_not31);
+        let row = self.s.m.bin(c0, Bin::And, lane, k16);
+        let other = self.s.m.bin(c0, Bin::Xor, row, k16);
+        let nib = self.s.m.bin(c0, Bin::And, lane, k15);
+        let shift = self.s.m.bin(c0, Bin::Mul, nib, k4);
+        let low = self.s.m.cmp(c0, pred::ULT, shift, k32);
+        let word = self.s.m.select(c0, low, b, c);
+        let sh = self.s.m.bin(c0, Bin::And, shift, k31);
+        let pick = self.s.m.bin(c0, Bin::LShr, word, sh);
+        let pick = self.s.m.bin(c0, Bin::And, pick, k15);
+        let at = self.s.m.bin(c0, Bin::Or, base, other);
+        let at = self.s.m.bin(c0, Bin::Or, at, pick);
+        let r = self.read_lane(a, at);
+        self.write(inst, Reg::V(dreg), r, guard);
+        Ok(())
     }
 
     /// DPP: src0 as read from another lane, and which lanes write their
