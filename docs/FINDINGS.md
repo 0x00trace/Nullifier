@@ -2624,6 +2624,26 @@ still off, so the walk normally finds a root pointer of 0 and the ray work is
 skipped for that dispatch; the pass now runs without stopping the translation,
 and its picture is only meaningful once the builder is on.
 
+## 3.35 A lane mask parked through VGPR lanes and restored a dword at a time (2026-11-28)
+
+`PS_VoxelizeVisiblity` saved a lane mask with `s_cselect_b64 s[34:35], exec, 0`,
+parked its two dwords in VGPR lanes (`v_writelane_b32 v56, s34, 3` /
+`v_writelane_b32 v56, s35, 4`) and restored it with two `v_readlane_b32`s.
+`ir::unspill` pairs such a restore back into one `s_mov_b64` only when every
+parked slot appears as often as its partner; lane 3 was reused for another
+mask, so it restored the halves as two separate `s_mov_b32`s. `structure.rs`
+recovers a mask pair only when one instruction writes both dwords, so the pair
+became `Atom::Opaque` and the mask phi at its join failed with "an opaque lane
+mask".
+
+A dword copy is exact: `structure.rs` now remembers the mask a dword was
+copied out of (`s_mov_b32 d, s`, one dword only) and which half it is, cached
+per value, and a pair whose two halves name the same mask with opposite
+polarity is that mask again. No instruction is added to the shader (the join
+is a plain `i1` phi). The program translates (50,438 B of DXIL); the whole
+pixel stage of the pack now emits (14,247 of 14,247). A 240 s world run is
+stable, 8.3-12 fps.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
