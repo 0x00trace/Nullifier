@@ -11,12 +11,29 @@
 //! 3840x2160.
 
 /// Sizes the title has a display mode for (its own list, +0x615c0c0).
-pub const MODES: [(u32, u32); 5] = [
+pub const TITLE_MODES: [(u32, u32); 5] = [
     (1280, 720),
     (1664, 936),
     (1920, 1080),
     (2560, 1440),
     (3840, 2160),
+];
+
+/// Sizes `VICTORY_OUTPUT` accepts: the title's own five modes, then the 21:9
+/// and 32:9 sizes it has no mode for but whose setter takes them (the same
+/// one the modes go through). The render and the host swap chain use whatever
+/// this says; the title's UI is designed for 16:9, which is what the captures
+/// at 3440x1440 are checked for.
+pub const MODES: [(u32, u32); 9] = [
+    (1280, 720),
+    (1664, 936),
+    (1920, 1080),
+    (2560, 1440),
+    (3840, 2160),
+    (2560, 1080),
+    (3440, 1440),
+    (3840, 1080),
+    (5120, 1440),
 ];
 
 /// What happened to a site.
@@ -34,7 +51,7 @@ pub fn asked_output() -> Option<(u32, u32)> {
     let size = parse_output(&spec);
     if size.is_none() {
         eprintln!(
-            "Nullifier: VICTORY_OUTPUT={spec}: expected one of the title's modes: 1920x1080, 2560x1440, 1280x720, 1664x936, 3840x2160"
+            "Nullifier: VICTORY_OUTPUT={spec}: expected 1920x1080, 2560x1440, 1280x720, 1664x936, 3840x2160, 2560x1080, 3440x1440, 3840x1080 or 5120x1440"
         );
     }
     size
@@ -107,6 +124,30 @@ pub const OWN_SCALE: Site = Site {
     what: "the title's own upscaler's render scale",
     bytes: &[0xc7, 0x81, 0x90, 0x00, 0x00, 0x00, 0xab, 0xaa, 0x2a, 0x3f],
 };
+
+/// The last of the title's five modes (3840x2160@60), at +0x615c0c0 + 4 * 16:
+/// `(width, height, refresh numerator, denominator)` per entry. A size the
+/// title has no mode for replaces this one, so its own selection can pick it:
+/// on a display narrower than 3840 it otherwise clamps to 2560x1440.
+pub const LARGEST_MODE: Site = Site {
+    at: 0x615c100,
+    what: "the title's largest display mode",
+    bytes: &[
+        0x00, 0x0f, 0x00, 0x00, // 3840
+        0x70, 0x08, 0x00, 0x00, // 2160
+        0x3c, 0x00, 0x00, 0x00, // 60
+        0x01, 0x00, 0x00, 0x00, // 1
+    ],
+};
+
+/// What goes at [`LARGEST_MODE`] for `width` x `height`.
+pub fn largest_mode_code(width: u32, height: u32) -> Vec<u8> {
+    let mut c = Vec::with_capacity(LARGEST_MODE.bytes.len());
+    c.extend(width.to_le_bytes());
+    c.extend(height.to_le_bytes());
+    c.extend([0x3c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]);
+    c
+}
 
 /// What goes at [`OWN_SCALE`] for `scale`.
 pub fn own_scale_code(scale: f32) -> Vec<u8> {
@@ -213,6 +254,9 @@ pub unsafe fn write(base: usize, size: usize, site: &Site, code: &[u8]) -> Patch
 pub unsafe fn apply_asked(base: usize, size: usize) {
     let mut sites: Vec<(&Site, Vec<u8>, String)> = Vec::new();
     if let Some((w, h)) = asked_output() {
+        if !TITLE_MODES.contains(&(w, h)) {
+            sites.push((&LARGEST_MODE, largest_mode_code(w, h), format!("{w}x{h}")));
+        }
         sites.push((&OUTPUT, output_code(w, h), format!("{w}x{h}")));
         if (w, h) != (3840, 2160) {
             sites.push((&POOL_CHECK, pool_check_code(), format!("{w}x{h}")));
@@ -250,6 +294,20 @@ mod tests {
     }
 
     #[test]
+    fn the_ultrawide_sizes_parse() {
+        for size in [(2560, 1080), (3440, 1440), (3840, 1080), (5120, 1440)] {
+            let spec = format!("{}x{}", size.0, size.1);
+            assert_eq!(parse_output(&spec), Some(size), "{spec}");
+            assert!(MODES.contains(&size));
+        }
+        assert!(
+            MODES
+                .iter()
+                .all(|s| TITLE_MODES.contains(s) || s.0 * 9 != s.1 * 16)
+        );
+    }
+
+    #[test]
     fn the_output_code_keeps_the_titles_else_path() {
         let c = output_code(1920, 1080);
         assert_eq!(c.len(), OUTPUT.bytes.len());
@@ -266,5 +324,24 @@ mod tests {
         assert_eq!(target(48), HEIGHT_CHANGED as i64);
         assert_eq!(50 + c[49] as usize, 61, "jmp lands at the end");
         assert!(c[50..].iter().all(|&x| x == 0xcc));
+    }
+}
+
+#[cfg(test)]
+mod largest_mode_tests {
+    use super::*;
+
+    #[test]
+    fn the_largest_mode_code_writes_the_size_at_sixty() {
+        let c = largest_mode_code(3440, 1440);
+        assert_eq!(c.len(), LARGEST_MODE.bytes.len());
+        assert_eq!(&c[0..4], &3440u32.to_le_bytes());
+        assert_eq!(&c[4..8], &1440u32.to_le_bytes());
+        assert_eq!(&c[8..], &[0x3c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]);
+        let stock = largest_mode_code(3840, 2160);
+        assert_eq!(
+            stock, LARGEST_MODE.bytes,
+            "3840x2160 is the bytes already there"
+        );
     }
 }

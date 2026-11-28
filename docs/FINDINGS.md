@@ -2877,3 +2877,83 @@ Two-run variance of one config is ±30 %. Do not chase 10 %.
 * `VICTORY_KEYS` (diagnostics builds) presses keys at given seconds; it is the
   only way to drive the game headless. `VICTORY_CAPTURE` + `VICTORY_CAPTURE_FRAMES`
   write PNGs of presented frames.
+
+## F.1 `VICTORY_OUTPUT` on a 21:9 display (2026-11-28)
+
+The title's own mode table (`+0x615c0c0`) has five entries, all 16:9:
+1280x720, 1664x936, 1920x1080, 2560x1440, 3840x2160, each
+`(width, height, 60, 1)` in 16-byte records. The patch of 2.17 writes the
+asked size into the live settings and calls the title's setter, but on a
+3440x1440 desktop it still built a **2560x1440** swap chain: 3840x2160 does
+not fit the display, and 3440x1440 was not in the list to be chosen. The
+run's log made that plain:
+
+```
+resolution: settings' output size applied (3440x1440) at title+0x224352b: Done
+display mode reported to the title width=3440 height=1440
+presenting to a window width=2560 height=1440
+```
+
+**The change.** For a size that is not one of the five, the last mode record
+(3840x2160@60) is rewritten to the asked size, so the title's own selection
+can pick it, and the display size reported to the title falls back to
+`VICTORY_OUTPUT` when `VICTORY_DISPLAY_MODE` is unset. With
+`VICTORY_OUTPUT=3440x1440` alone, one 200 s run (RTX 4090, Windows
+10.0.26300, driver 32.0.16.1742, `windows-nvidia`, diag build, `main` @
+`47d9a33` plus this change):
+
+```
+resolution: the title's largest display mode (3440x1440) at title+0x615c100: Done
+resolution: settings' output size applied (3440x1440) at title+0x224352b: Done
+resolution: back buffer pool's left-over check (3440x1440) at title+0x247af25: Done
+display mode reported to the title width=3440 height=1440
+presenting to a window width=3440 height=1440 format=28
+```
+
+The captured frame (half size, 1720x720, aspect 2.389) fills the width: the
+left and right edge columns average 180-330 of 765, so no pillarbox, and the
+character, trees and dock are not stretched. The HUD (top right) is inside
+the frame. `VICTORY_OUTPUT=3440x1440` was the only variable set.
+
+**Caveats.** A second set, by the reviewer on Linux/NVIDIA (RTX 5080,
+`linux-nvidia-16gb`, 110 s of the opening, n = 14) checked all four sizes and
+all presented at the size asked, with no device removed:
+
+| `VICTORY_OUTPUT` | presented at | median |
+|---|---|---|
+| 2560x1080 | 2560x1080 | 14.00 fps |
+| 3440x1440 | 3440x1440 | 11.10 fps |
+| 3840x1080 | 3840x1080 | 12.00 fps |
+| 5120x1440 | 5120x1440 | 9.45 fps |
+
+The Windows frame rate at 21:9 was not measured: 3440x1440 is 2.6 times the
+pixels of 2560x1440, and the card here is not the limit at 8 fps, so the
+effect may be small. The title's UI is laid out for 16:9 and looked right at
+21:9 here; 32:9 has not been looked at.
+
+**What a play test at 3440x1440 showed.** The framebuffer is native 21:9
+(no scaling), and the world fills it. Three things were reported, and the
+layer is only responsible for the first:
+
+* **The picture fills the screen** with no black bars and no stretch; the
+  3440x1440 present is a 1:1 copy of the title's own 3440x1440 texture
+  (`Presenter::present` creates the swap chain from that texture's size and
+  `CopyResource`s it), so nothing downstream crops or scales.
+* **The camera was reported as Vert-** in the play test (less vertical view,
+  character slightly closer). Measurements do not reproduce that. At the
+  same frame number the character measured 215 px across the shoulders in a
+  1280x720 16:9 capture and 220 px in a 1720x720 21:9 capture; then, with the
+  pose matched by hand at the jet ski, both windows 1390 px tall, the
+  shoulders measured about 300 px at 16:9 and 290 px at 21:9, while the 21:9
+  frame showed the stairs and the truck at the right that the 16:9 frame did
+  not. Same vertical scale, more world sideways: the camera is **Hor+**
+  (Vert- would be about 390 px).
+* **Some UI overlaps** at 1440 height: on the CONTROL SCHEME page the
+  `PAUSE PREVIEW` line sits on `RESTORE ALL`/`RESTORE DEFAULT`, and the tab
+  strip runs off the right edge at `ACCO`. Setting
+  `video/uiResolution` to 3440x1440 (from `0x0`) changed nothing, so the
+  title does not lay the HUD out from it; the layout it does use is
+  authored for 16:9.
+
+The 16:9 splash and story art is cropped top and bottom rather than
+stretched, which is the same cover-fit choice and is expected.
