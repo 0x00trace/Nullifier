@@ -148,7 +148,7 @@
         "VICTORY_CARD_HASH_LANES": "1",
         "VICTORY_FRAME_INTERVAL_MS": "16.667"
       },
-      "note": "Windows + NVIDIA. Ported from the measured linux-nvidia-16gb set (INDIRECT_RUNS 4.30 -> 5.20 fps, CARD_HASH_LANES 4.40 -> 5.25, both RTX 5080; TEXTURE_NO_WAIT from every measured NVIDIA profile) and the Windows set from trustno1-coder/VIctory-NVIDIA. The title's own 30 fps cap is lifted to 60 (VICTORY_FRAME_INTERVAL_MS=16.667); it only shows where the card renders faster than 33 ms. Not yet measured on Windows: report the fps and any device removal. If a session loses the device, set VICTORY_RELAY=0, then VICTORY_LATE_WAIT=1."
+      "note": "Windows + NVIDIA. Ported from the measured linux-nvidia-16gb set (INDIRECT_RUNS 4.30 -> 5.20 fps, CARD_HASH_LANES 4.40 -> 5.25, both RTX 5080; TEXTURE_NO_WAIT from every measured NVIDIA profile) and the Windows set from trustno1-coder/VIctory-NVIDIA. The title's own 30 fps cap is lifted to 60 (VICTORY_FRAME_INTERVAL_MS=16.667); it only shows where the card renders faster than 33 ms. Not yet measured on Windows: report the fps and any device removal. If a session loses the device, set VICTORY_RELAY=0, then VICTORY_LATE_WAIT=1. A first Windows run is in docs/FORK.md (RTX 4090, main @ 47d9a33: 7.20-8.20 fps, no device removed, picture correct); one run only, so still reported."
     },
     {
       "name": "windows-other",
