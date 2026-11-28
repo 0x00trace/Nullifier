@@ -167,7 +167,10 @@ if (-not (Test-Path $Game)) { Write-Error "not a directory: $Game"; exit 2 }
 if (-not $Bin) {
   $native = Join-Path $Root "target\release\nullifier.exe"
   $diag   = Join-Path $Root "target\x86_64-pc-windows-msvc\diag\nullifier.exe"
-  if (Test-Path $native) { $Bin = $native } else { $Bin = $diag }
+  $diagHost = Join-Path $Root "target\diag\nullifier.exe"
+  if (Test-Path $native) { $Bin = $native }
+  elseif (Test-Path $diagHost) { $Bin = $diagHost }
+  else { $Bin = $diag }
 }
 if (-not (Test-Path $Bin)) { Write-Error "no nullifier.exe at $Bin; build it first (cargo build --release -p nullifier)"; exit 2 }
 

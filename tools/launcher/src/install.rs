@@ -43,16 +43,23 @@ pub(crate) fn settings_root_readiness(settings: &Settings) -> Readiness {
 
 /// The engine binary a run or a preload starts.
 pub(crate) fn engine_exe(root: &Path) -> Option<PathBuf> {
-    if cfg!(windows) {
-        [
-            root.join("target/release/nullifier.exe"),
-            root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe"),
-        ]
+    engine_candidates(root)
         .into_iter()
         .find(|path| path.is_file())
+}
+
+/// Where the engine can be, best first. A diag build on Windows lands in
+/// `target/diag`; the `target/<triple>/diag` path is the one a cross build from
+/// Linux makes (`tools/setup.sh`), so both are looked at.
+fn engine_candidates(root: &Path) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![
+            root.join("target/release/nullifier.exe"),
+            root.join("target/diag/nullifier.exe"),
+            root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe"),
+        ]
     } else {
-        let path = root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
-        path.is_file().then_some(path)
+        vec![root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe")]
     }
 }
 
@@ -119,4 +126,82 @@ pub(crate) fn title_exe(dir: &Path) -> Option<PathBuf> {
 pub(crate) struct Readiness {
     pub(crate) engine: bool,
     pub(crate) wineserver: bool,
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "nullifier-install-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::SeqCst)
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn build(&self, relative: &str) {
+            let path = self.0.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"stub").unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn no_engine_built_is_none() {
+        let tmp = TempDir::new();
+        assert_eq!(engine_exe(tmp.path()), None);
+    }
+
+    #[test]
+    fn a_native_diag_build_is_the_engine() {
+        let tmp = TempDir::new();
+        tmp.build("target/diag/nullifier.exe");
+        assert_eq!(
+            engine_exe(tmp.path()),
+            Some(tmp.path().join("target/diag/nullifier.exe"))
+        );
+    }
+
+    #[test]
+    fn a_cross_built_diag_is_the_engine_too() {
+        let tmp = TempDir::new();
+        tmp.build("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
+        assert_eq!(
+            engine_exe(tmp.path()),
+            Some(
+                tmp.path()
+                    .join("target/x86_64-pc-windows-msvc/diag/nullifier.exe")
+            )
+        );
+    }
+
+    #[test]
+    fn the_release_build_comes_first() {
+        let tmp = TempDir::new();
+        tmp.build("target/diag/nullifier.exe");
+        tmp.build("target/release/nullifier.exe");
+        assert_eq!(
+            engine_exe(tmp.path()),
+            Some(tmp.path().join("target/release/nullifier.exe"))
+        );
+    }
 }
