@@ -2550,6 +2550,25 @@ the draws dropped without a host pipeline fell from about 415 to 319-352 a
 frame, and no mirror/reflection warning appears. The picture of the reflective
 surfaces still needs a look; the pass now runs.
 
+## 3.32 Puddles and decals: a texture size read with no image using it (2026-11-28)
+
+Many `PS_PuddleDetect*` and decal programs load a texture descriptor only to
+compute sample levels from its width, height and level count; no image
+instruction uses it, so the translator found no view to rebuild those dwords
+from and dropped the program with "a descriptor read only as data" (40 of the
+pack). The load's heap index still names the host view: where an eight-dword
+descriptor load has no use at all, it is now taken as a 2D texture probe and
+its size dwords are built from `getDimensions` of that view, in the same
+GFX10 layout the used case builds.
+
+The pack went from 40 to 5 such failures; the five left are the
+`shadowmask:CS_TraceShadowRays_Quarter` programs, which read a buffer
+descriptor's *address* at a dynamic table index and walk it (a ray-tracing
+structure), not a size: faking that address would trace nothing. A 120 s world
+run has no panic or device removal, 9.6-10.9 fps. The puddle and decal passes
+now run; their level choice comes from the real bound texture's size (see 3.33
+for the remaining address case).
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |

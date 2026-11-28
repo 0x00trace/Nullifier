@@ -5762,6 +5762,15 @@ impl<'a> Lower<'a> {
                 self.stale.extend(inst.writes.iter().map(|w| w.1));
                 return Err("a sampler's descriptor read as data");
             }
+            // A texture descriptor the code only reads the size of: it
+            // computes sample levels from the image's width, height and level
+            // count, and no image instruction tells the view's kind (puddle
+            // and decal programs). The heap index the load names still finds
+            // the view, a 2D image; the size dwords are built from it as in
+            // the used case below.
+            if count == 8 && self.descriptor_size(inst, site).is_ok() {
+                return Ok(());
+            }
             // A buffer view the code only takes the address of, to walk
             // the memory behind it (a ray-tracing structure): the address
             // from the host, the other dwords have no value.
@@ -5929,6 +5938,61 @@ impl<'a> Lower<'a> {
                         self.stale.insert(v);
                     }
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// The size dwords of a texture descriptor no instruction uses as a
+    /// view, from the host view the load's heap index names: width and
+    /// height in dword 2 (as [`Self::descriptor_data`] builds them), the
+    /// level count in dword 3, and a 2D image's single layer in dword 4.
+    fn descriptor_size(&mut self, inst: &Inst, site: Site) -> Result<(), Why> {
+        const OTHER: Why = "a descriptor's address or format read as data";
+        let Fields::Smem {
+            data: Some(Operand::Scalar { code, .. }),
+            ..
+        } = inst.fields
+        else {
+            return Err("a descriptor probe");
+        };
+        let src = Source::Loaded { load: site, first: 0 };
+        let h = self.handle(site, &src, false, (2, 0x409))?;
+        let c = self.cur;
+        let i32t = self.s.t.i32;
+        let dims = self.s.m.named_struct("dx.types.Dimensions", vec![i32t; 4]);
+        let mip = self.s.m.i32(0);
+        let d = self
+            .s
+            .op(c, "getDimensions", Attr::ReadOnly, dims, 72, &[h, mip]);
+        let field = |l: &mut Self, k: u32| l.s.m.extract(c, d, k);
+        let one = self.s.m.i32(1);
+        let (w, height, levels) = (field(self, 0), field(self, 1), field(self, 3));
+        let less = |l: &mut Self, x: V| l.s.m.bin(c, Bin::Sub, x, one);
+        let (w, height, levels) = (less(self, w), less(self, height), less(self, levels));
+        let k = |l: &mut Self, v: u32| l.s.m.i32(v);
+        let (k30, k2, k14, k16, mask) = (
+            k(self, 30),
+            k(self, 2),
+            k(self, 14),
+            k(self, 16),
+            k(self, 0x3FFF),
+        );
+        let d1 = self.s.m.bin(c, Bin::Shl, w, k30);
+        let hi = self.s.m.bin(c, Bin::LShr, w, k2);
+        let hi = self.s.m.bin(c, Bin::And, hi, mask);
+        let ht = self.s.m.bin(c, Bin::Shl, height, k14);
+        let d2 = self.s.m.bin(c, Bin::Or, hi, ht);
+        let base = k(self, 0xFAC | 9 << 28);
+        let last = self.s.m.bin(c, Bin::Shl, levels, k16);
+        let d3 = self.s.m.bin(c, Bin::Or, base, last);
+        for (rel, x) in [(1u8, d1), (2, d2), (3, d3)] {
+            self.write(inst, Reg::S(code + rel), x, None);
+        }
+        for rel in [0u8, 4, 5, 6, 7] {
+            if let Some(v) = inst.write(Reg::S(code + rel)) {
+                self.vals.insert(v, Val::Missing(OTHER));
+                self.stale.insert(v);
             }
         }
         Ok(())
