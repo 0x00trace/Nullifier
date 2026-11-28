@@ -426,6 +426,31 @@ type RootSlot = (u32, Option<std::sync::Arc<crate::shadow::Shadow>>);
 /// Takes `more` from the time a run may spend bringing in a long queue of
 /// textures at more than the usual pace; whether some is left.
 /// `VICTORY_TEXTURE_GATE_S` sets it (0: none).
+/// The bytes a texture pass may spend in a frame: `VICTORY_TEXTURE_QUEUE_MB`
+/// (default 192 MB).
+fn queue_bytes() -> u64 {
+    static BYTES: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *BYTES.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_QUEUE_MB")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map_or(192 << 20, |mb| mb << 20)
+    })
+}
+
+/// The time a texture pass may spend in a frame: `VICTORY_TEXTURE_QUEUE_MS`
+/// (default `otherwise`).
+fn queue_span(otherwise: std::time::Duration) -> std::time::Duration {
+    static SPAN: std::sync::OnceLock<Option<std::time::Duration>> = std::sync::OnceLock::new();
+    SPAN.get_or_init(|| {
+        std::env::var("VICTORY_TEXTURE_QUEUE_MS")
+            .ok()
+            .and_then(|v| v.trim().parse::<u64>().ok())
+            .map(std::time::Duration::from_millis)
+    })
+    .unwrap_or(otherwise)
+}
+
 fn catching_up(more: std::time::Duration) -> bool {
     static SPENT: AtomicU64 = AtomicU64::new(0);
     static TOTAL: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
@@ -1624,7 +1649,6 @@ impl State {
         /// long (the world's first minutes: over 20,000 slots, which at the
         /// usual pace took three and a half minutes with the materials
         /// black) as much more as `CATCH_UP` in all allows.
-        const PER_FRAME: u64 = 192 << 20;
         const PER_FRAME_CATCHING_UP: u64 = 512 << 20;
         const LONG: u64 = 2_000;
         static FRAME: AtomicU64 = AtomicU64::new(u64::MAX);
@@ -1688,10 +1712,13 @@ impl State {
         // The rest waits for the next frames, as it does past the bytes.
         const SPAN: std::time::Duration = std::time::Duration::from_millis(250);
         const SPAN_CATCHING_UP: std::time::Duration = std::time::Duration::from_millis(1500);
+        // `VICTORY_TEXTURE_QUEUE_MB` and `_MS`: the bytes and the time one
+        // pass may spend (fxceless issue #106: on an RX 9070 XT, 1,024 MB and
+        // 1,000 ms left 200 slots due where the defaults left 4,860).
         let (per_frame, span) = if census[0] > LONG && catching_up(std::time::Duration::ZERO) {
             (PER_FRAME_CATCHING_UP, SPAN_CATCHING_UP)
         } else {
-            (PER_FRAME, SPAN)
+            (queue_bytes(), queue_span(SPAN))
         };
         let began = crate::clock::Stamp::now();
         for (index, write) in due {

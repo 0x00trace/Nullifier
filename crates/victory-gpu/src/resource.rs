@@ -1376,23 +1376,33 @@ pub(crate) fn host_made<'a>(
 #[cfg(windows)]
 pub(crate) fn room() -> bool {
     use std::sync::atomic::Ordering::Relaxed;
-    const FLOOR: u64 = 2 << 30;
-    const WITHOUT_BUDGET: u64 = 4 << 30;
     static LIMIT: std::sync::OnceLock<Option<u64>> = std::sync::OnceLock::new();
     let limit = *LIMIT.get_or_init(|| {
         let mb = std::env::var("VICTORY_TEXTURE_BUDGET_MB").ok()?;
         mb.trim().parse::<u64>().ok().map(|mb| mb << 20)
     });
-    let filled = KINDS[1].load(Relaxed);
-    if let Some(limit) = limit {
-        return filled < limit;
-    }
-    if filled < FLOOR {
+    within(limit, KINDS[1].load(Relaxed), || {
+        crate::host::host().and_then(|h| h.video_memory())
+    })
+}
+
+/// [`room`]'s rule: always below the floor; past it while the card has room
+/// (nine tenths of its budget in use); and a byte cap is a *trigger* to ask
+/// the card, not a wall. A hard cap blacks index-picked surfaces while the
+/// card has gigabytes free (the AMD profile's 4 GB on a 16 GB card: 4,148 MB
+/// of copies, a refusal with 7.4 GB free, then 2.2 GB shed and refilled — the
+/// black/textured flicker). Without a card to ask, a reached cap still
+/// refuses.
+fn within(limit: Option<u64>, filled: u64, memory: impl FnOnce() -> Option<[u64; 4]>) -> bool {
+    const FLOOR: u64 = 2 << 30;
+    const WITHOUT_BUDGET: u64 = 4 << 30;
+    let over = limit.is_some_and(|limit| filled >= limit);
+    if filled < FLOOR && !over {
         return true;
     }
-    match crate::host::host().and_then(|h| h.video_memory()) {
+    match memory() {
         Some([budget, used, ..]) => used < budget / 10 * 9,
-        None => filled < WITHOUT_BUDGET,
+        None => !over && filled < WITHOUT_BUDGET,
     }
 }
 
@@ -2410,6 +2420,25 @@ static RESOURCE_FUNCTIONS: Table<32> = {
     f[14] = heap_properties as *const (); // 0x70
     Table(f)
 };
+
+#[cfg(test)]
+mod room_tests {
+    use super::within;
+
+    /// `VICTORY_TEXTURE_BUDGET_MB` is a trigger, not a wall: at 4 GiB of
+    /// copies on a 16 GB card with 7 GiB in use, room is still there; with
+    /// 14.2 of 14.5 GiB in use, it is not. Without a card, the cap refuses.
+    #[test]
+    fn a_cap_asks_the_card() {
+        let card = |budget, used| move || Some([budget, used, 0, 0]);
+        let gib = 1u64 << 30;
+        assert!(within(Some(4 * gib), 4 * gib + 1, card(14_496 << 20, 7_056 << 20)));
+        assert!(!within(Some(4 * gib), 4 * gib + 1, card(14_496 << 20, 14_200 << 20)));
+        assert!(within(None, 1 * gib, card(14_496 << 20, 14_200 << 20)));
+        assert!(!within(Some(4 * gib), 4 * gib + 1, || None));
+        assert!(within(Some(4 * gib), 3 * gib, || None));
+    }
+}
 
 #[cfg(test)]
 mod tests {
