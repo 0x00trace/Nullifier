@@ -92,8 +92,17 @@ pub(crate) fn now_ms() -> u64 {
 /// frames begun so far (high half, `crate::frame::current`) and tenths of a
 /// second since the start. Host copies of title memory, staging buffers and
 /// host textures note when they were last used with it.
+///
+/// The tenths come from the layer's stopwatch ([`now_us`]), which reads the
+/// processor's time-stamp counter where it can. Every use of a host texture
+/// or host copy notes this moment, on the threads that record: with the
+/// system's clock ([`now_ms`]) that was about 224,000 Wine system calls a
+/// frame on the five recording threads (docs/FINDINGS.md 2.25), and about
+/// 26,000 in a row on the thread that submits at each sweep. The frame
+/// count is read at every call: a count kept from an earlier call would let
+/// a sweep take a copy for idle that a recording thread has just asked for.
 pub(crate) fn moment() -> u64 {
-    (crate::frame::current() << 32) | ((now_ms() / 100) & 0xffff_ffff)
+    (crate::frame::current() << 32) | ((now_us() / 100_000) & 0xffff_ffff)
 }
 
 /// Whether `moment` lies at least `ms` milliseconds and `frames` frames
@@ -101,7 +110,11 @@ pub(crate) fn moment() -> u64 {
 /// for seconds, and at many frames per second not for many frames. (A title
 /// that never waits for frames has no frame count: nothing is then idle.)
 pub(crate) fn long_ago(moment: u64, ms: u64, frames: u64) -> bool {
-    let now = self::moment();
+    ago(self::moment(), moment, ms, frames)
+}
+
+/// [`long_ago`] with the present moment given.
+fn ago(now: u64, moment: u64, ms: u64, frames: u64) -> bool {
     let tenths = (now & 0xffff_ffff).saturating_sub(moment & 0xffff_ffff);
     (now >> 32).saturating_sub(moment >> 32) >= frames && tenths * 100 >= ms
 }
@@ -7476,6 +7489,44 @@ mod trail {
         assert!(text.contains("pipeline library: no call running"));
         assert!(text.contains(&format!("thing {} done", super::TRAIL_MOST + 4)));
         assert!(!text.contains("thing 4 done"), "the oldest entries are dropped");
+    }
+}
+
+#[cfg(test)]
+mod moments {
+    use super::{ago, long_ago, moment, now_us};
+
+    /// The tenths of a moment are the stopwatch's, so that noting a use
+    /// reads no system clock where the stopwatch reads the processor's
+    /// time-stamp counter.
+    #[test]
+    fn a_moment_holds_the_stopwatchs_tenths() {
+        // The stopwatch's first reading, then some tenths later: a clock
+        // with a start of its own would still be at its first tenth.
+        now_us();
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let (before, at, after) = (now_us() / 100_000, moment(), now_us() / 100_000);
+        let tenths = at & 0xffff_ffff;
+        assert!(before >= 2, "the stopwatch stood still: {before}");
+        assert!(
+            before <= tenths && tenths <= after,
+            "tenths {tenths}, the stopwatch's {before} to {after}"
+        );
+    }
+
+    /// A moment is long ago only when both the time and the frames have
+    /// gone by, and never when it was noted just now.
+    #[test]
+    fn a_moment_is_long_ago_by_time_and_frames_together() {
+        let at = |frame: u64, tenths: u64| (frame << 32) | tenths;
+        assert!(ago(at(10, 100), at(6, 50), 5000, 4));
+        assert!(!ago(at(9, 100), at(6, 50), 5000, 4), "three frames");
+        assert!(!ago(at(10, 99), at(6, 50), 5000, 4), "4.9 seconds");
+        // Noted by another thread after the present moment was read.
+        assert!(!ago(at(6, 50), at(10, 100), 5000, 4));
+        let now = moment();
+        assert!(!ago(now, now, 5000, 4));
+        assert!(!long_ago(moment(), 5000, 4));
     }
 }
 
