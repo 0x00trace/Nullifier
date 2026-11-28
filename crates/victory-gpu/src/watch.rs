@@ -251,6 +251,13 @@ pub(crate) fn wrote(at: usize, len: usize) {
     }
     j.asked += 1;
     let now = j.asked;
+    // The asking that stands for the submission moves with this write: a
+    // copy taking the page at the standing asking would otherwise find it
+    // written "later" at every refresh until that asking ends, and copy it
+    // again each time (#132).
+    if j.kept || !j.ahead.is_empty() {
+        j.ahead_asked = now;
+    }
     for page in at / PAGE..at.saturating_add(len).div_ceil(PAGE) {
         j.written.insert(page, now);
     }
