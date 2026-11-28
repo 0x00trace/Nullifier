@@ -488,6 +488,9 @@ fn ps_vgprs(addr: u32) -> Vec<(u8, Input)> {
 struct Pair {
     barycentric: Option<Barycentric>,
     first: Vec<Site>,
+    /// For each first half: whether it is read by anything but the second
+    /// half that completes it (a shared first half used on its own).
+    standalone: Vec<bool>,
 }
 
 impl Pair {
@@ -506,11 +509,19 @@ impl Pair {
 /// Records interpolation `pair` at `site`, and its first halves too when
 /// they evaluate on their own (computed barycentrics).
 fn push_pair(io: &mut Io, site: Site, pair: Pair, attribute: Attribute) {
-    if pair.barycentric.is_none() {
-        for &f in &pair.first {
-            if !io.interps.iter().any(|(s, _)| *s == f) {
-                io.interps.push((f, Interp::Weighted { attribute }));
-            }
+    // A first half is evaluated on its own where the shader reads it without
+    // the second half, or where the barycentrics are computed rather than
+    // loaded. The compiler shares one first half between paths, and one path
+    // may use it alone (PS_MirrorReflectionDeferredTextured: the mirror pass
+    // was dropped for it). It evaluates as the hardware does, P0 + i P10;
+    // where its result is only the second half's old dst, no entry is made,
+    // so a shader whose i and j only feed the interpolation declares no
+    // barycentrics.
+    for (k, &f) in pair.first.iter().enumerate() {
+        if (pair.barycentric.is_none() || pair.standalone[k])
+            && !io.interps.iter().any(|(s, _)| *s == f)
+        {
+            io.interps.push((f, Interp::Weighted { attribute }));
         }
     }
     io.interps.push((site, pair.with(attribute)));
@@ -567,10 +578,38 @@ impl Halves<'_> {
                 kind = None;
             }
         }
+        let standalone = first
+            .iter()
+            .map(|&(b, i)| {
+                let inst = &self.p.blocks[b].insts[i];
+                inst.writes.iter().any(|&(_, v)| self.used_alone(v))
+            })
+            .collect();
         Ok(Pair {
             barycentric: kind,
             first,
+            standalone,
         })
+    }
+
+    /// Whether `v` (a first half's result) is read by anything other than a
+    /// second half that completes it: an arithmetic use, an export, or a phi
+    /// (whose paths are followed for the pair, and may also use it alone).
+    fn used_alone(&self, v: Value) -> bool {
+        for block in &self.p.blocks {
+            for inst in &block.insts {
+                if !inst.reads.iter().any(|&(_, read)| read == v) {
+                    continue;
+                }
+                if inst.name() != "v_interp_p2_f32" && inst.name() != "v_interp_p2_f16" {
+                    return true;
+                }
+            }
+            if block.phis.iter().any(|phi| phi.args.contains(&v)) {
+                return true;
+            }
+        }
+        false
     }
 
     /// The instructions `v` comes from, through phis (`seen`: phis on the

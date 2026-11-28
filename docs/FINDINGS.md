@@ -2527,6 +2527,29 @@ behind it shows) points at the indirect budget or a dropped pipeline; a draw
 that is there and black points at the texture queue. `VICTORY_TEXTURE_SWEEP=0`
 and `VICTORY_KEEP_VIEWS=0` are the two texture-path comparisons.
 
+## 3.31 Mirror/reflection programs: a packed first half used alone (2026-11-28)
+
+The GDK's `__XBOX_ENABLE_SIGNATURE_PACKING` lets the console compiler pack two
+16-bit attributes into one interpolant, and it shares one `v_interp_p1` first
+half between paths that complete it with different second halves. `io::raise`
+recorded only the `v_interp_p2` site, so a path that read the shared first half
+without completing it found no interpolation and the whole program failed with
+"the first half of an interpolation".
+
+Eight pixel programs of the pack were dropped for this, all in the
+mirror/reflection family: `PS_MirrorReflectionDeferredTextured_d3b47178`,
+`PS_MirrorReflectionDeferredDecalTextured_38f9dc3e` and their wrappers. A
+first half is now recorded as `Interp::Weighted` (P0 + i P10, as the hardware
+computes it) when one of its results is read by anything other than a
+`v_interp_p2`, or when the barycentrics are computed. Where it is only the
+second half's old dst, no entry is made, so ordinary p1/p2 programs still
+declare no barycentrics.
+
+The whole pack translates with no "first half" failure. In a 120 s world run
+the draws dropped without a host pipeline fell from about 415 to 319-352 a
+frame, and no mirror/reflection warning appears. The picture of the reflective
+surfaces still needs a look; the pass now runs.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
