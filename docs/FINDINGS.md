@@ -2931,14 +2931,14 @@ layer is only responsible for the first:
   (`Presenter::present` creates the swap chain from that texture's size and
   `CopyResource`s it), so nothing downstream crops or scales.
 * **The camera was reported as Vert-** in the play test (less vertical view,
-  character slightly closer). A later measurement does not reproduce that:
-  at the same frame number, the character measured 215 px across the
-  shoulders in a 1280x720 16:9 capture and 220 px in a 1720x720 21:9
-  capture. Same height and the same follow-camera distance means the same
-  vertical scale, and the wider screen shows more world sideways. The two
-  captures were at different poses (the save advances between runs), so this
-  is suggestive, not proof; the definitive test needs one save at both
-  sizes.
+  character slightly closer). Measurements do not reproduce that. At the
+  same frame number the character measured 215 px across the shoulders in a
+  1280x720 16:9 capture and 220 px in a 1720x720 21:9 capture; then, with the
+  pose matched by hand at the jet ski, both windows 1390 px tall, the
+  shoulders measured about 300 px at 16:9 and 290 px at 21:9, while the 21:9
+  frame showed the stairs and the truck at the right that the 16:9 frame did
+  not. Same vertical scale, more world sideways: the camera is **Hor+**
+  (Vert- would be about 390 px).
 * **Some UI overlaps** at 1440 height: on the CONTROL SCHEME page the
   `PAUSE PREVIEW` line sits on `RESTORE ALL`/`RESTORE DEFAULT`, and the tab
   strip runs off the right edge at `ACCO`. Setting
