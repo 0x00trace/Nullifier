@@ -6295,9 +6295,13 @@ impl<'a> Lower<'a> {
                 }
             }
             Source::Phi { block, args } => {
-                let _ = site;
-                let phi = self.descriptor_phi(*block, args, sampler, 8)?;
-                Ok(self.s.heap_handle(self.cur, phi, sampler, false, props))
+                if let Ok(phi) = self.descriptor_phi(*block, args, sampler, 8) {
+                    return Ok(self.s.heap_handle(self.cur, phi, sampler, false, props));
+                }
+                // A choice that is not only heap indices: an immediate
+                // sampler (`Source::Constant`) on one path and a loaded
+                // descriptor on another. A phi of handles holds both.
+                self.handle_phi(site, *block, args, sampler, props)
             }
             Source::Select { scc, args } => {
                 // The heap index of each choice, picked by SCC (uniform).
@@ -6364,6 +6368,36 @@ impl<'a> Lower<'a> {
         }
         let join = self.block[block].ok_or(WHY)?;
         let phi = self.s.m.phi(join, self.s.t.i32);
+        self.s.m.set_phi(phi, incoming);
+        Ok(phi)
+    }
+
+    /// A phi of handles at `block`, one per predecessor: the sources of a
+    /// descriptor choice may be heap descriptors and immediate samplers.
+    fn handle_phi(
+        &mut self,
+        site: Site,
+        block: usize,
+        args: &[Source],
+        sampler: bool,
+        props: (u32, u32),
+    ) -> Result<V, Why> {
+        const WHY: Why = "a descriptor chosen by control flow";
+        let p = self.x.p;
+        let join = self.block[block].ok_or(WHY)?;
+        let phi = self.s.m.phi(join, self.s.t.handle);
+        let mut incoming = Vec::new();
+        for (&q, arg) in p.blocks[block].preds.iter().zip(args) {
+            if self.block[q].is_none() {
+                continue;
+            }
+            let tail = self.tail[q].ok_or(WHY)?;
+            let at = self.edges.get(&(q, block)).copied().unwrap_or(tail);
+            let here = std::mem::replace(&mut self.cur, at);
+            let h = self.handle(site, arg, sampler, props);
+            self.cur = here;
+            incoming.push((h?, at));
+        }
         self.s.m.set_phi(phi, incoming);
         Ok(phi)
     }
