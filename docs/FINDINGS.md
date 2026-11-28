@@ -2668,6 +2668,31 @@ run at `constant:0.5` is stable at 9.5-10 fps. This is the same known gap as
 3.35's packing and the geometry stage: the pass is opt-in, and the picture is
 an estimate, not traced light.
 
+## 3.37 Textures that read black: aliased targets and typeless views (2026-11-28)
+
+Two ways a placed texture could read black, from issues #117 and #116.
+
+**Aliased targets (#117).** `TARGETS_AT` kept one target per memory address, and
+`insert` replaced an earlier one. When the title places two targets at one
+address (aliasing in a heap), the second hid the first: a placed view the size
+of the first found nothing, and after the second was released the first was
+lost for good. Such a view then read the title's memory instead of the host's
+written target, which shows black where shaders wrote light. The table now
+holds every target at an address, and `alias_of` takes the one whose size,
+levels, layers and texel width match; a release removes its own entry.
+
+**Typeless views with no description (#116).** A shader-resource or unordered
+view created with a null description means "the resource's own format", but on
+a host copy that is typeless D3D12 leaves such a view null — the texture reads
+black. The view now gets a description in the title's own format (the format
+`view_format` names for a typeless copy), with the resource's dimension and
+full chain.
+
+Neither change touches the normal path: the alias table only has more than one
+entry where the title aliases, and the plain description is made only when the
+view has none and the host copy is typeless. Tested: victory-gpu 189, clippy
+clean, a 120 s world run with no fault or device removal.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
