@@ -20,6 +20,7 @@ pub(crate) fn readable_value(key: &str, value: &str) -> String {
             | "VICTORY_SYNC_GROUPED"
             | "VICTORY_BACK_OWN_VIEW"
             | "VICTORY_ALIAS_LAZY"
+            | "VICTORY_FILL_AHEAD"
     ) {
         return match value {
             "1" => "on".into(),
@@ -85,7 +86,7 @@ pub(crate) fn example(key: &str) -> Option<&'static str> {
         "VICTORY_CARD_BUFFERS_MB" => Some("256, 512, 1024 or 2048 (MB)"),
         "VICTORY_CARD_BUFFERS_MIN_MB" => Some("1 (MB)"),
         "VICTORY_CARD_BUFFERS_MIN_KB" => Some("64 (KiB): every buffer"),
-        "VICTORY_SYNC_GROUPED" => Some("1"),
+        "VICTORY_SYNC_GROUPED" | "VICTORY_FILL_AHEAD" => Some("1"),
         "VICTORY_LATE_WAIT" => Some("0 to 3"),
         "VICTORY_CARD_REHASH_RUNS" => Some("0, 1 or 2"),
         "VICTORY_INDIRECT_RUNS" | "VICTORY_INDIRECT_WINDOW" | "VICTORY_RELAY_QUEUE" => Some("1"),
@@ -154,6 +155,7 @@ pub(crate) const KNOWN_SWITCHES: &[(&str, &str)] = &[
     ("VICTORY_JOIN_COPIES", "1"),
     ("VICTORY_RELAY", "2"),
     ("VICTORY_RELAY_QUEUE", "1"),
+    ("VICTORY_FILL_AHEAD", "1"),
     ("VICTORY_LATE_WAIT", "1"),
     ("VICTORY_LOG", "info"),
     ("VICTORY_WATER_LIGHT", "1"),
@@ -289,6 +291,11 @@ pub(crate) fn describe(key: &str) -> Option<Desc> {
             "A queue of its own for handed-back results",
             "With Relay on, results are fetched on a copy queue of their own, so they do not wait behind the next frame's work.",
             "On with Relay 2 on a 16 GB NVIDIA card on Linux (linux-nvidia-16gb). It does nothing with Relay 0.",
+        ),
+        "VICTORY_FILL_AHEAD" => d(
+            "Constants read without waiting",
+            "With frames prepared ahead, the constants of a draw are read without waiting for the card to finish earlier work. A check compares afterwards; if it ever finds a difference it says so in the log and waits again for the rest of the run.",
+            "On with a 16 GB NVIDIA card on Linux (linux-nvidia-16gb). It does nothing with Frames prepared ahead at 0.",
         ),
         "VICTORY_VSYNC" => d(
             "V-Sync",

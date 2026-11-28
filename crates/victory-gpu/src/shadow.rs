@@ -2142,6 +2142,8 @@ impl Shadow {
     /// that is on and the memory allows it ([`Shadow::put_back_own`]), else
     /// at the title's address with its guards opened.
     fn put_back(&self, at: usize, bytes: &[u8]) {
+        // For the fills that read ahead of the flight that wrote this.
+        crate::host::shaders_write(at, bytes);
         if self.put_back_own(at, bytes) {
             return;
         }

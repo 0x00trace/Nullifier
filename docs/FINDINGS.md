@@ -1609,6 +1609,34 @@ Without captures (one 300 s profile run each): 15.90 fps against 14.75, frame 62
 
 Data: `~/.cache/victory-captures/101-prof2-main`, `105-prof2-stack6` and `103-proc-stack` on the machine of these runs.
 
+## 2.26 Fills of upload memory that do not wait, measured again (2026-11-27)
+
+2.9 tried fills that do not wait and left them out: the waits went and the frame rate did not follow, because the thread that submits then waited for the title. Since 2.23 that thread is what the frame follows (2.25), and its waits for fills are 13 to 15 a frame with 16 to 24 ms waited. The same change was put on top of the six of 2.25 and measured again.
+
+**Why the waits are there.** A submission declares every range its shaders can store to, and 16 to 18 culling lists a frame bind one unordered-access view of the whole 174 MiB heap; which bytes they store to is read from the heap when they run. Nearly every constant buffer of the title's draws lies in the same heap. So a fill of upload memory (a constant buffer that a descriptor table names, copied into the list's own memory when the list is submitted) reads memory that submissions sent ahead "may write", and waited until they had run and been copied back.
+
+**The change** (`VICTORY_FILL_AHEAD=1`, off by default, set in `linux-nvidia-16gb`; after fxceless/victory-fork `f85101b`): such a fill, and a title buffer copy that only reads such memory, does not wait. Each one is noted with the number of the last submission started. When what a submission's shaders wrote is put back into title memory, the bytes are compared with title memory wherever a noted fill read before that submission ran. The first fill found to have read bytes that changed afterwards is logged, and from then on fills wait as before for the rest of the run. Such a fill would have given the lists of one submission constants from before the write.
+
+**What the check found.** In nine runs of 200 s and one of 300 s, 1,600 to 1,900 fills a frame read without waiting (the runs' medians), and no put-back fell into a 64 KiB piece that such a fill had read: nothing had to be compared, and no fill was found to have read bytes that then changed.
+
+**Measured** (as in 2.25: 200 s runs in turn with captures, medians of world frames by 200 draws or more, n = 30 to 32):
+
+| | round 1 | round 2 | round 3 | frame | preparing | waiting for the card | card busy |
+|---|---|---|---|---|---|---|---|
+| the six changes of 2.25 | 12.80 fps | 12.40 fps | 12.30 fps | 77.9 / 80.5 / 81.5 ms | 38.2 / 38.1 / 38.0 ms | 26.9 / 28.2 / 28.2 ms | 60 to 61 % |
+| the same with `VICTORY_FILL_AHEAD=1` | **12.90 fps** | **13.40 fps** | **13.10 fps** | 77.3 / 74.5 / 76.1 ms | 35.5 / 36.7 / 36.6 ms | 25.4 / 23.8 / 24.6 ms | 62 to 63 % |
+| the same, three more rounds an hour later | 13.55 fps | 13.60 fps | 13.60 fps | 73.6 / 73.3 / 73.4 ms | 35.6 / 34.9 / 35.1 ms | 23.9 / 22.9 / 22.2 ms | 61 to 63 % |
+
+Without captures (one 300 s profile run each): 17.00 fps against 15.90 (and 14.75 for `main` before 2.25), frame 58.9 ms against 62.9, the card busy 71 % against 67. No device was removed and the driver logged no new errors. The presents are as evenly spaced as without the switch: in the lines of the world 45 to 91 ms apart against 49 to 88 (the pairs of 2.15 did not come back).
+
+**Other waits take the place of some.** The waits for fills go from 14.7 a frame to none. Waits for "title memory changed under shader writes" go from 0.1 a frame to about 5, with 13 to 16.5 ms waited: the title's new constants are now met by a refresh while the heap's range is still declared, as 84 to 110 pages a frame holding 1,900 to 2,600 changed runs of about 4 bytes each (0.01 MB in all), and a submission sends at most 512 changed runs up one by one before it waits for the card instead (2.9's stage 2). So the frame gains about 4 ms, not the 16 to 24 ms that the waits for fills held.
+
+**Tried and left out: a higher cap.** With 8,192 runs for a submission instead of 512 (three rounds in turn): 11.10 / 11.40 / 11.00 fps against 13.55 / 13.60 / 13.60. 24,000 to 28,000 changed runs a frame are then found, and 20,000 to 24,000 ranges a frame go up to the card as copies of their own. What is left of these waits needs another way to put a page's changed bytes on the card than one copy for each run.
+
+**The picture.** Matched by content as in 2.25: best matches between a run with the switch and a run of `main` differ by a median of 2.3 to 3.1 (of 255), between a run with it and a run of the six changes by 2.6, between two runs with it by 2.1 to 2.6. The man's top in the close shot with raised hands is black in all nine runs with the switch (0.6 to 1.6 % by the measure of 2.19).
+
+**Not measured:** AMD and Windows, and `VICTORY_LATE_WAIT` under 2 (the switch has nothing to do where no submission is sent ahead). Data: `~/.cache/victory-captures/103-proc-stack`, `104-merge-runs` and `106-prof2-fill` on the machine of these runs.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
