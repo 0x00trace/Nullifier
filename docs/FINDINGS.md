@@ -1571,6 +1571,44 @@ No device was removed in these 12 runs and the driver logged no new errors. In a
 
 **Not measured:** AMD, Windows, and the switch without every buffer's copy on the card (the 98 copies of before have fewer hash passes to group). Data: `~/.cache/victory-captures/98-sync-grouped`, `99-sync-grouped-profile` and `100-sync-grouped-rebased` on the machine of these runs.
 
+## 2.25 After 2.23 the thread that submits is on the frame's path again: six costs taken off it (2026-11-27)
+
+Same machine and settings as 2.23 and 2.24 (`main` at `af7fd94`, the `linux-nvidia-16gb` profile as the launcher picks it, `VICTORY_OUTPUT=2560x1440`). With every buffer's copy on the card, the card has nothing queued for 25 to 40 ms of a frame, most of it while the thread that submits is working. A profile taken as in 2.10 (no captures; a 10 s window of samples and scheduler events, then 8 s with every Wine system call counted) says where that thread's time goes now.
+
+**The thread that submits is the frame.** In the window it ran 53.1 ms of an 85.3 ms frame and slept 29.4 ms, 21.1 ms of that until the thread that copies back had put back what the shaders of submissions in the air wrote, which is the wait for the card. It never waited for the title. The five recording threads ran 29 to 32 ms each and slept until the title's main render thread gave them work.
+
+**Six costs on it, and what each change does.** Milliseconds are of that thread's running a frame under `perf`; calls are a frame, from the window that counts them.
+
+| what was found on `main` | cost | the change | after |
+|---|---|---|---|
+| `shadow::card_dirty` went through every copy in the card's memory at each submission, with two locks and a counted reference for each: 3,728 copies since 2.23 (98 before), about 60 times a frame, for the 15 of them that changed | 6.0 ms | a copy puts itself on a list when the first changed range is noted in it, and a submission looks at that list only | 0.1 ms |
+| every use of a host texture or host copy noted the moment with the system's clock, which is a system call under Wine (2.11 moved the accounting off it, not this) | 233,055 `NtQueryPerformanceCounter` a frame: 41,000 to 47,000 on each recording thread, 3,830 on the thread that submits | the tenths of a second in the stamp come from the layer's stopwatch (the processor's time-stamp counter); the frame count in it is still read at each use | 5,524 in all |
+| `watch::guard` asked Windows about every run of blocks noted absent, at every asking (2.10 named this) | 10,265 `NtQueryVirtualMemory`, about 2.7 ms | the runtime tells the GPU side of each placeholder it reserves; an absent block inside one is left as it is until the runtime maps a view there, which it tells of already. One frame in 256 asks as before | 441 |
+| `watch::writes` built a new vector of every page ever written in the range at each asking: up to 2,784 pairs for the 174 MiB heap, about 40 times a frame | about 2 ms of allocation and copying | the answer's room is kept by the thread that asked and used again | 0.3 ms; the walk of the journal's tree stays (1.5 ms) |
+| the memo of ranges the kernel refused an asking for was emptied after 4,096 askings, about 0.8 times a frame, and each time one submission made 1,300 to 1,700 refused askings again | 2,901 `NtGetWriteWatch` | the memo lasts 30 s; a range leaves it when the kernel answers for it in `writes` | 951 |
+| accounting that only the diagnostics build has, which is the build `tools/setup.sh` makes for players on Linux: the thread's processor time read twice a submission (a request to Wine's server and four reads under `/proc` each), a map behind a lock for the "copied from" lines, and allocation counters on one cache line for all threads | 118 `NtQueryInformationThread`; about 3 ms | the processor time is read once a frame (`VICTORY_THREAD_TIMES=1`: at every submission, as before); the map is kept with `VICTORY_COPY_RANGES=1` only; the counters are kept in 64 sets, a thread to a set | 0.5 ms |
+
+In all the thread ran 40.3 ms a frame instead of 53.1 under `perf`, the process made 34,793 Wine system calls a frame instead of 276,068, and each recording thread ran about 2 ms less.
+
+**Measured** (RTX 5080, NVIDIA 620.73.04, Proton Experimental 11.0-20261112, built wineserver; 200 s runs in turn with captures, medians of world frames by the rule of 200 draws or more, n = 31 each; the frame line's "preparing" is the thread's work):
+
+| | round 1 | round 2 | round 3 | frame | preparing | waiting for the card | card busy |
+|---|---|---|---|---|---|---|---|
+| `main` at `af7fd94` | 11.10 fps | 11.60 fps | 11.00 fps | 89.8 / 85.9 / 91.0 ms | 50.4 / 47.9 / 49.0 ms | 23.8 / 23.1 / 24.0 ms | 54 % |
+| the six changes | **12.80 fps** | **12.40 fps** | **12.30 fps** | 77.9 / 80.5 / 81.5 ms | 38.2 / 38.1 / 38.0 ms | 26.9 / 28.2 / 28.2 ms | 60 to 61 % |
+
+Without captures (one 300 s profile run each): 15.90 fps against 14.75, frame 62.9 ms against 67.8, preparing 32.8 ms against 41.6. No device was removed and the driver logged no new errors in any run.
+
+**The frame gains less than the thread saves.** The thread prepares 9 to 12 ms less a frame and then waits 3 to 5 ms longer for the card: 13 to 15 times a frame it still waits until the submissions in the air have run and been copied back, because a fill of upload memory reads title memory that their shaders may write (2.9), and at those points the card is what the frame waits for. 2.26 is about those waits.
+
+**The picture.** Captures matched by content as in 2.23: the best matches between a run of `main` and a run with the changes differ by a median of 2.2 to 2.6 (of 255), two runs of one arm by 2.2 to 3.4. The worst matches, looked at, are two different shots at the same point of the sequence. The measure of 2.19 for the man's top in the close shot with raised hands is 0.9 to 1.4 % in the six runs (grey from 2.5 % on).
+
+**Tests.** Each change has one: the stamp's tenths are the stopwatch's; an answer of the journal is in the room of the thread's last answer; a refused range is not asked about again while the memo stands, and its writes are still reported; only the card copies that changed are handed out; absent blocks in a placeholder are not asked about, a view the runtime did not tell of is found by the frame that asks, and memory given out as ordinary memory is asked about again; a thread reads its processor time once a frame.
+
+**Not measured:** AMD and Windows. The clock and the thread times are system calls on Windows too, but cheap ones; the walk over the card copies and the journal's vector cost the same there.
+
+Data: `~/.cache/victory-captures/101-prof2-main`, `105-prof2-stack6` and `103-proc-stack` on the machine of these runs.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
