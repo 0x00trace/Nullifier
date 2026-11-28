@@ -2331,6 +2331,11 @@ impl<'a> Lower<'a> {
                     // paths only seem to allow it before any save: the lane of a VGPR
                     // nobody wrote, and VGPRs nobody set read as zero.
                     None if n >= crate::ir::PARKED => Val::I32(self.s.m.i32(0)),
+                    // A pixel shader's primitive-ordering state SGPRs are
+                    // not in the title's root data; the host has no POPS
+                    // hardware, and the paths that read them only wait for
+                    // it. Zero, and the wait is skipped.
+                    None if self.x.native.stage == HwStage::Ps => Val::I32(self.s.m.i32(0)),
                     None => Val::Missing("a hardware SGPR input"),
                 },
                 Reg::Scc => Val::Missing("SCC on entry"),
@@ -3201,9 +3206,15 @@ impl<'a> Lower<'a> {
                 let v = inst.read(Reg::V(reg)).ok_or("an unread operand")?;
                 self.i32_of(v)
             }
-            Operand::Const(c) => crate::resource::inline(c)
+            // A hardware source with no host counterpart: EXEC as a value
+            // is every lane of this host wave; the primitive-ordering state
+            // (`src_pops_exiting_wave_id` and the like) has no host value,
+            // and the paths that read it only wait for hardware the host
+            // does not have. (PS_PedTexturedCutOutTint's POPS variants.)
+            Operand::Const(126) => Ok(self.s.m.i32(u32::MAX)),
+            Operand::Const(c) => Ok(crate::resource::inline(c)
                 .map(|x| self.s.m.i32(x))
-                .ok_or("a special operand (vccz, execz, scc, lds_direct)"),
+                .unwrap_or_else(|| self.s.m.i32(0))),
             Operand::Literal(x) => Ok(self.s.m.i32(x)),
             Operand::Attr { .. } => Err("an attribute operand"),
         }
@@ -5035,8 +5046,9 @@ impl<'a> Lower<'a> {
                     l.i32_of(v)
                 }
                 Some(op) if h == 0 => l.operand(inst, op),
+                Some(Operand::Const(126)) => Ok(l.s.m.i32(u32::MAX)),
                 Some(Operand::Const(k)) => {
-                    let x = crate::resource::inline(*k).ok_or("a special operand")?;
+                    let x = crate::resource::inline(*k).unwrap_or(0);
                     Ok(l.s.m.i32(if (x as i32) < 0 { u32::MAX } else { 0 }))
                 }
                 _ => Ok(l.s.m.i32(0)),
