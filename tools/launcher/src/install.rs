@@ -43,17 +43,42 @@ pub(crate) fn settings_root_readiness(settings: &Settings) -> Readiness {
 
 /// The engine binary a run or a preload starts.
 pub(crate) fn engine_exe(root: &Path) -> Option<PathBuf> {
-    if cfg!(windows) {
-        [
-            root.join("target/release/nullifier.exe"),
-            root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe"),
-        ]
+    engine_candidates(root)
         .into_iter()
         .find(|path| path.is_file())
-    } else {
-        let path = root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
-        path.is_file().then_some(path)
+}
+
+/// Where the engine can be, best first. A diag build on Windows lands in
+/// `target/diag`; the `target/<triple>/diag` path is the one a cross build from
+/// Linux makes (`tools/setup.sh`). A tree can hold both, so between them the
+/// file built last wins: an older diag binary would otherwise run unnoticed.
+fn engine_candidates(root: &Path) -> Vec<PathBuf> {
+    if !cfg!(windows) {
+        return vec![root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe")];
     }
+    let mut out = vec![root.join("target/release/nullifier.exe")];
+    let native = root.join("target/diag/nullifier.exe");
+    let cross = root.join("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
+    match (native.is_file(), cross.is_file()) {
+        (true, true) => {
+            let newer = if modified(&native) >= modified(&cross) {
+                native
+            } else {
+                cross
+            };
+            out.push(newer);
+        }
+        (true, false) => out.push(native),
+        (false, true) => out.push(cross),
+        (false, false) => {}
+    }
+    out
+}
+
+fn modified(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path)
+        .and_then(|meta| meta.modified())
+        .ok()
 }
 
 /// What still has to be built or installed before Play can work.
@@ -119,4 +144,145 @@ pub(crate) fn title_exe(dir: &Path) -> Option<PathBuf> {
 pub(crate) struct Readiness {
     pub(crate) engine: bool,
     pub(crate) wineserver: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    #[cfg(windows)]
+    use std::time::{Duration, SystemTime};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "nullifier-install-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::SeqCst)
+            ));
+            // A stopped run can leave a folder behind under a reused process id.
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn build(&self, relative: &str) {
+            let path = self.0.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"stub").unwrap();
+        }
+
+        #[cfg(windows)]
+        fn stamp(&self, relative: &str, at: SystemTime) {
+            let path = self.0.join(relative);
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .set_modified(at)
+                .unwrap();
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn no_engine_built_is_none() {
+        let tmp = TempDir::new();
+        assert_eq!(engine_exe(tmp.path()), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_native_diag_build_is_the_engine() {
+        let tmp = TempDir::new();
+        tmp.build("target/diag/nullifier.exe");
+        assert_eq!(
+            engine_exe(tmp.path()),
+            Some(tmp.path().join("target/diag/nullifier.exe"))
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_cross_built_diag_is_the_engine_too() {
+        let tmp = TempDir::new();
+        tmp.build("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
+        assert_eq!(
+            engine_exe(tmp.path()),
+            Some(
+                tmp.path()
+                    .join("target/x86_64-pc-windows-msvc/diag/nullifier.exe")
+            )
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_newer_of_two_diag_builds_wins() {
+        let tmp = TempDir::new();
+        tmp.build("target/diag/nullifier.exe");
+        tmp.build("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
+        let native = tmp.path().join("target/diag/nullifier.exe");
+        let cross = tmp
+            .path()
+            .join("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
+
+        tmp.stamp(
+            "target/diag/nullifier.exe",
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_000),
+        );
+        tmp.stamp(
+            "target/x86_64-pc-windows-msvc/diag/nullifier.exe",
+            SystemTime::UNIX_EPOCH + Duration::from_secs(2_000),
+        );
+        assert_eq!(engine_exe(tmp.path()), Some(cross));
+
+        tmp.stamp(
+            "target/diag/nullifier.exe",
+            SystemTime::UNIX_EPOCH + Duration::from_secs(3_000),
+        );
+        assert_eq!(engine_exe(tmp.path()), Some(native));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_release_build_comes_first() {
+        let tmp = TempDir::new();
+        tmp.build("target/diag/nullifier.exe");
+        tmp.build("target/release/nullifier.exe");
+        assert_eq!(
+            engine_exe(tmp.path()),
+            Some(tmp.path().join("target/release/nullifier.exe"))
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn other_platforms_only_look_at_the_cross_build() {
+        let tmp = TempDir::new();
+        tmp.build("target/release/nullifier.exe");
+        tmp.build("target/diag/nullifier.exe");
+        assert_eq!(engine_exe(tmp.path()), None);
+        tmp.build("target/x86_64-pc-windows-msvc/diag/nullifier.exe");
+        assert_eq!(
+            engine_exe(tmp.path()),
+            Some(
+                tmp.path()
+                    .join("target/x86_64-pc-windows-msvc/diag/nullifier.exe")
+            )
+        );
+    }
 }
