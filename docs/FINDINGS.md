@@ -2569,6 +2569,11 @@ run has no panic or device removal, 9.6-10.9 fps. The puddle and decal passes
 now run; their level choice comes from the real bound texture's size (see 3.33
 for the remaining address case).
 
+A buffer view read only as data (no image or buffer instruction uses it) has
+its dword 2 rebuilt too, the record count, from `getDimensions` of the host
+view: `ShallowWaterSim:CS_MinTimestepReduce` compares it with 0 to leave an
+empty grid alone and read it as Missing before.
+
 ## 4. Switch matrix (same build, same scene class)
 
 | Config | Median | n | Removals |
