@@ -163,21 +163,32 @@ if ($Detect) {
 }
 
 if (-not $Game)        { Write-Error "need -Game DIR (or VICTORY_GAME_DIR)"; exit 2 }
-if (-not (Test-Path $Game)) { Write-Error "not a directory: $Game"; exit 2 }
+if (-not (Test-Path -LiteralPath $Game -PathType Container)) { Write-Error "not a directory: $Game"; exit 2 }
 if (-not $Bin) {
-  $native = Join-Path $Root "target\release\nullifier.exe"
-  $diag   = Join-Path $Root "target\x86_64-pc-windows-msvc\diag\nullifier.exe"
+  $native   = Join-Path $Root "target\release\nullifier.exe"
   $diagHost = Join-Path $Root "target\diag\nullifier.exe"
-  if (Test-Path $native) { $Bin = $native }
-  elseif (Test-Path $diagHost) { $Bin = $diagHost }
-  else { $Bin = $diag }
+  $diag     = Join-Path $Root "target\x86_64-pc-windows-msvc\diag\nullifier.exe"
+  if (Test-Path -LiteralPath $native -PathType Leaf) { $Bin = $native }
+  else {
+    $hostBuilt  = Test-Path -LiteralPath $diagHost -PathType Leaf
+    $crossBuilt = Test-Path -LiteralPath $diag -PathType Leaf
+    if ($hostBuilt -and $crossBuilt) {
+      # A tree can hold both diag builds: the newer file is the current code,
+      # and an older binary would give captures and frame times for other code.
+      $Bin = if ((Get-Item -LiteralPath $diagHost).LastWriteTime -ge (Get-Item -LiteralPath $diag).LastWriteTime) { $diagHost } else { $diag }
+    } elseif ($hostBuilt) { $Bin = $diagHost }
+    else { $Bin = $diag }
+  }
 }
-if (-not (Test-Path $Bin)) { Write-Error "no nullifier.exe at $Bin; build it first (cargo build --release -p nullifier)"; exit 2 }
+if (-not (Test-Path -LiteralPath $Bin -PathType Leaf)) {
+  Write-Error ("no nullifier.exe at {0}, {1} or {2}; build it first (cargo build --release -p nullifier)" -f $native, $diagHost, $diag)
+  exit 2
+}
 
 $exe = Join-Path $Game $TitleExe
-if (-not (Test-Path $exe)) { Write-Error "title exe not found: $exe"; exit 2 }
+if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { Write-Error "title exe not found: $exe"; exit 2 }
 
-Write-Host ("profile {0}: running {1}" -f $chosen.name, $exe)
+Write-Host ("profile {0}: engine {1}, running {2}" -f $chosen.name, $Bin, $exe)
 $argv = @("run", $exe, "--execute") + $Passthru
 & $Bin @argv
 exit $LASTEXITCODE
