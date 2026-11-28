@@ -1671,6 +1671,42 @@ Three rounds with an earlier build of the change, which still fetched and merged
 
 **Not measured:** scenes beyond the opening and the first scene in the world (the check ran there), AMD and Windows, and copies that are not in the card's memory (the check reads what is fetched from the card; the bound itself does not depend on it). Data: `~/.cache/victory-captures/108-whole-view`, `109-cull`, `110-cull-bounds`, `111-cull-bounds`, `112-cull-rounds` and `113-prof2-cull` on the machine of these runs.
 
+## 2.28 A root table named to the memory directory brought the whole heap back (2026-11-28)
+
+`e6e73e8` (merged as `df06b2c`) lets the five shadow-ray programs read a table descriptor's dwords through the memory directory (`crate::memory`), and for that names each root table's address to the directory. The title's descriptor tables lie in its largest buffer, the 174 MiB heap. Naming an address numbers the copy around it and gives every page of that copy its entry. From then on every list with a dispatch of a shader that reads memory by address brings all of the copy up to date and, if the shader can store, declares all of it written. So such lists declared the whole heap again, which 2.27 had taken away from the culling programs.
+
+**Found by** a counter added for it (the frame line "settles left due by it per frame, by copy and cause"): on `df06b2c` the heap's copy left a settle due 2.3 to 2.9 times a frame because a page had more changed runs than the submission had left of its 512 (up to 10,000 on a page), a 50 MiB buffer did 0.3 times a frame for the same cause, and no copy did for another cause. Then by runs of each merge since #137 (110 s, in turn, RTX 5080, `VICTORY_OUTPUT=2560x1440`, the profile with `VICTORY_FILL_AHEAD=1` and `VICTORY_CULL_RANGES=1`, medians of world frames by 200 draws or more, n = 14):
+
+| merge | fps | settles for "title memory changed under shader writes" a frame | waited in them | fills a frame that read declared memory |
+|---|---|---|---|---|
+| `4250621` (#137) | 15.70 | 0.5 | 5.6 ms | 0 |
+| `a0bdf3d` reviewed local fixes | 15.55 | 0.25 | 3.2 ms | 0 |
+| `38905ed` v_permlanex16 lowering | 15.60 | 0.25 | 3.1 ms | 0 |
+| `3ae188e` texture size probe fallback | 15.30 | 0.35 | 4.3 ms | 0 |
+| `47d9a33` buffer record-count rebuild | 15.70 | 0.35 | 4.5 ms | 0 |
+| `ed91570` f64 water lowering | 15.35 | 0.3 | 3.0 ms | 0 |
+| `df06b2c` shadow-ray descriptor-address read | **13.65** | 2.15 | 18.0 ms | 1,970 |
+| `df06b2c` with root tables not named at all | 15.80 | 0.4 | 4.9 ms | 0 |
+
+On `df06b2c` 17 to 34 MB a frame are also compared back on the processor (none before), and the card is busy 56 % of the frame instead of 62.
+
+**The change.** A table is named by its own pages: the page it starts in and the next one get their directory entries. A copy that only tables name has no other entries, only those pages of it are brought up to date (once a list for each page), and nothing of it is declared written. A root view, a root constant or a shader's own pointer that names the copy makes it whole, as before. A descriptor further into a table than its second page reads zeros once and is noted as a fault; the copy is whole from the next frame on.
+
+**Measured** (200 s runs in turn with captures, as above; n = 32):
+
+| | round 1 | round 2 | round 3 | frame | waiting for the card | card busy |
+|---|---|---|---|---|---|---|
+| `df06b2c` | 13.70 fps | 13.10 fps | 13.05 fps | 73.2 / 76.3 / 76.7 ms | 23.4 / 24.9 / 25.1 ms | 56 % |
+| the same with tables named by their pages | **15.25 fps** | **15.00 fps** | **15.15 fps** | 65.5 / 66.5 / 66.2 ms | 15.7 / 15.2 / 15.4 ms | 62 % |
+| `438f8be` (two rounds) | 12.90 fps | 13.35 fps | | 77.4 / 75.0 ms | 22.7 / 25.0 ms | 55 to 57 % |
+| the same with tables named by their pages | **14.85 fps** | **15.15 fps** | | 67.4 / 66.2 ms | 15.5 / 16.1 ms | 61 % |
+
+No device was removed and the driver logged no new errors. With the change the settles for "title memory changed under shader writes" are 0.6 to 0.7 a frame again, no fill reads declared memory, and nothing is compared back on the processor.
+
+**The picture.** Matched by content as in 2.25: best matches between a run with the change and a run without differ by a median of 2.2 to 3.2 (of 255), two runs with it by 1.9 to 2.6, two runs without by 2.6. The man's top in the close shot with raised hands is black in all six runs of the first set (1.0 to 2.3 % by the measure of 2.19; the run at 2.3 % was looked at, and the top is black in its eight captures of the shot). No run logged a page that a shader touched and that had no copy.
+
+**Not measured:** the shadow rays with the structure builder on. It is off, so the walks find a root pointer of 0 and nothing in the picture shows whether a table's descriptor is read right. What the shaders can read of a table is the same as before the change: the entries of its two pages and their bytes as the title has them at submission. Also not measured: AMD and Windows. Data: `~/.cache/victory-captures/114-remaining-waits`, `115-bisect-waits`, `116-table-pages` and `117-table-pages-rebased` on the machine of these runs.
+
 ## 3. The ask throttle (P0 probe)
 
 ~10,000 textures are asked every frame whether they changed. At ~0.1 ms per ask
