@@ -345,13 +345,34 @@ pub(crate) fn number_info(
 }
 
 /// A switch with its plain name, a ? and a one-line reason.
+/// Whether `key` is on. A switch is on when its value is there and not 0;
+/// unset means off, except for `VICTORY_TEXTURE_NO_WAIT`, which the layer
+/// reads as on when unset (`is_none_or(|v| v != "0")`).
+fn switch_on(sets: &BTreeMap<String, String>, key: &str) -> bool {
+    let absent_on = matches!(key, "VICTORY_TEXTURE_NO_WAIT");
+    sets.get(key).map_or(absent_on, |v| v.trim() != "0")
+}
+
+/// Turns `key` on or off. `VICTORY_TEXTURE_NO_WAIT` writes 0 rather than
+/// removing the key: absent is on for it, so removing would turn it on.
+fn set_switch(sets: &mut BTreeMap<String, String>, key: &str, on: bool) {
+    let absent_on = matches!(key, "VICTORY_TEXTURE_NO_WAIT");
+    if on {
+        sets.insert(key.to_string(), "1".into());
+    } else if absent_on {
+        sets.insert(key.to_string(), "0".into());
+    } else {
+        sets.remove(key);
+    }
+}
+
 pub(crate) fn switch_info(
     ui: &mut egui::Ui,
     sets: &mut BTreeMap<String, String>,
     key: &str,
 ) -> Option<String> {
     let desc = describe(key);
-    let mut on = sets.contains_key(key);
+    let mut on = switch_on(sets, key);
     let mut asked = None;
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
@@ -360,11 +381,7 @@ pub(crate) fn switch_info(
                 .checkbox(&mut on, desc.as_ref().map(|d| d.name).unwrap_or(key))
                 .changed()
             {
-                if on {
-                    sets.insert(key.to_string(), "1".into());
-                } else {
-                    sets.remove(key);
-                }
+                set_switch(sets, key, on);
             }
             if desc.is_some() && help_button(ui).clicked() {
                 asked = Some(key.to_string());
@@ -396,5 +413,38 @@ pub(crate) fn capitalise(text: &str) -> String {
     match chars.next() {
         Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{set_switch, switch_on};
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn an_unset_texture_wait_switch_is_on_and_0_turns_it_off() {
+        let mut sets = BTreeMap::new();
+        assert!(switch_on(&sets, "VICTORY_TEXTURE_NO_WAIT"));
+        set_switch(&mut sets, "VICTORY_TEXTURE_NO_WAIT", false);
+        assert_eq!(
+            sets.get("VICTORY_TEXTURE_NO_WAIT").map(String::as_str),
+            Some("0")
+        );
+        assert!(!switch_on(&sets, "VICTORY_TEXTURE_NO_WAIT"));
+        set_switch(&mut sets, "VICTORY_TEXTURE_NO_WAIT", true);
+        assert_eq!(
+            sets.get("VICTORY_TEXTURE_NO_WAIT").map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn another_switch_is_on_only_when_set_and_off_removes_it() {
+        let mut sets = BTreeMap::new();
+        assert!(!switch_on(&sets, "VICTORY_CARD_HASH_LANES"));
+        set_switch(&mut sets, "VICTORY_CARD_HASH_LANES", true);
+        assert!(switch_on(&sets, "VICTORY_CARD_HASH_LANES"));
+        set_switch(&mut sets, "VICTORY_CARD_HASH_LANES", false);
+        assert!(!sets.contains_key("VICTORY_CARD_HASH_LANES"));
     }
 }
